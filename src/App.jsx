@@ -761,6 +761,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const allChecked = checklistTotal > 0 && checklistDone === checklistTotal;
 
   const handleClick = () => {
+    // Don't toggle if task was just reopened (status change closes detail)
     const opening = !isOpen;
     setIsOpen(opening);
     if (opening && isNew) onMarkSeen(task.id);
@@ -768,6 +769,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 
   const handleQuickComplete = (e) => {
     e.stopPropagation();
+    setIsOpen(false); // Close detail if open
     if (task.assignTo === "both") onStatusChange(task.id, "done_my");
     else onStatusChange(task.id, "done");
   };
@@ -849,7 +851,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {inProgress ? "◐" : "○"}
           </button>
         ) : (
-          <button onClick={(e) => { e.stopPropagation(); onStatusChange(task.id, "reopen"); }} style={{
+          <button onClick={(e) => {
+            e.stopPropagation();
+            onStatusChange(task.id, "reopen");
+          }} style={{
             width: "32px", height: "32px", minWidth: "32px",
             borderRadius: "8px",
             display: "flex", alignItems: "center", justifyContent: "center",
@@ -858,8 +863,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             color: task.status === "cancelled" ? theme.priority.low.text : theme.green,
             border: `2.5px solid ${task.status === "cancelled" ? theme.priority.low.text + "40" : theme.green + "50"}`,
             cursor: "pointer",
-          }} title="Vrátit zpět">
-            {task.status === "done" ? "✓" : "⊘"}
+            transition: "all 0.15s",
+          }} title="Vrátit zpět do aktivních">
+            {task.status === "done" ? "↩" : "⊘"}
           </button>
         )}
 
@@ -986,6 +992,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
   const [category, setCategory] = useState("other");
   const [initialChecklist, setInitialChecklist] = useState([]);
   const [checklistInput, setChecklistInput] = useState("");
+  const [quickCategory, setQuickCategory] = useState(null);
   const inputRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
 
@@ -1002,7 +1009,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
     priority,
     dueDate: dueDate || null,
     recDays: recurrence,
-    category: category === "other" ? autoDetectCategory(title) : category,
+    category: quickCategory || (category === "other" ? autoDetectCategory(title) : category),
     activeMo: [],
     status: "active",
     doneBy: [],
@@ -1018,6 +1025,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
     if (!text.trim()) return;
     onAdd(createTaskObject(text.trim()));
     setText("");
+    setQuickCategory(null);
     inputRef.current?.focus();
   };
 
@@ -1080,6 +1088,31 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
           {showFull ? "×" : "⚙"}
         </button>
       </div>
+
+      {/* Category quick-pick icons */}
+      {!showFull && (
+        <div style={{
+          display: "flex", gap: "2px", marginTop: "4px",
+          paddingLeft: "4px", overflowX: "auto",
+        }}>
+          {CATEGORIES.filter(c => c.id !== "other").map(cat => (
+            <button key={cat.id} onClick={() => setQuickCategory(quickCategory === cat.id ? null : cat.id)}
+              title={cat.label} style={{
+                ...buttonStyle(),
+                width: "30px", height: "28px",
+                fontSize: "14px",
+                background: quickCategory === cat.id ? theme.accentSoft : "transparent",
+                border: `1px solid ${quickCategory === cat.id ? theme.accentBorder : "transparent"}`,
+                borderRadius: "6px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: quickCategory && quickCategory !== cat.id ? 0.4 : 1,
+                transition: "all 0.12s",
+              }}>
+              {cat.icon}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Extended form */}
       {showFull && (
@@ -1909,62 +1942,45 @@ export default function App() {
           />
         </div>
 
-        {/* Filter tabs */}
-        <div style={{ display: "flex", gap: "3px", marginBottom: "6px", overflowX: "auto", paddingBottom: "2px" }}>
-          {[
-            { id: "my", label: "Moje", count: stats.my },
-            { id: "assigned", label: "Zadané", count: stats.assigned },
-            { id: "shared", label: "Společné", count: stats.shared },
-            { id: "unread", label: "Nové", count: unreadCounts[currentUser.name] },
-            { id: "all", label: "Vše" },
-          ].map(tab => (
-            <button key={tab.id} onClick={() => setFilter(tab.id)} style={{
-              ...buttonStyle(), padding: "6px 10px", fontSize: "11px",
-              background: filter === tab.id ? theme.accentSoft : "transparent",
-              color: filter === tab.id ? theme.accent : theme.textMid,
-              border: filter === tab.id ? `1px solid ${theme.accentBorder}` : "1px solid transparent",
-              display: "flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap",
-            }}>
-              {tab.label}
-              {tab.count > 0 && (
-                <span style={{
-                  background: filter === tab.id ? theme.accent : theme.buttonBg,
-                  color: filter === tab.id ? "#fff" : theme.textSub,
-                  borderRadius: "8px", padding: "0 5px", fontSize: "9px", fontWeight: 800,
-                }}>{tab.count}</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* Status + sort */}
+        {/* Compact filters — one row */}
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          marginBottom: "6px", gap: "6px",
+          display: "flex", alignItems: "center", gap: "4px",
+          marginBottom: "8px", flexWrap: "wrap",
         }}>
-          <div style={{ display: "flex", gap: "2px" }}>
-            {[
-              { id: "active", label: "Aktivní" },
-              { id: "done", label: "Splněné" },
-              { id: "cancelled", label: "Nerealizované" },
-            ].map(vs => (
-              <button key={vs.id} onClick={() => setViewStatus(vs.id)} style={{
-                ...buttonStyle(), padding: "4px 8px", fontSize: "10px",
-                background: viewStatus === vs.id ? theme.buttonBg : "transparent",
-                color: viewStatus === vs.id ? theme.text : theme.textDim,
-              }}>{vs.label}</button>
-            ))}
-          </div>
-          <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
-            ...inputStyle(theme), width: "auto", padding: "3px 6px", fontSize: "10px",
-            background: "transparent", border: `1px solid ${theme.inputBorder}`,
+          {/* Scope filter as compact pills */}
+          <select value={filter} onChange={e => setFilter(e.target.value)} style={{
+            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+            background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
+            color: theme.accent, fontWeight: 600,
           }}>
-            {[
-              { id: "smart", label: "↕ Chytré" },
-              { id: "priority", label: "↕ Priorita" },
-              { id: "date", label: "↕ Termín" },
-              { id: "created", label: "↕ Nejnovější" },
-            ].map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            <option value="my">Moje ({stats.my})</option>
+            <option value="assigned">Zadané ({stats.assigned})</option>
+            <option value="shared">Společné ({stats.shared})</option>
+            <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
+            <option value="all">Vše</option>
+          </select>
+
+          {/* Status */}
+          <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
+            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+            background: "transparent", border: `1px solid ${theme.inputBorder}`,
+            color: theme.textSub,
+          }}>
+            <option value="active">Aktivní</option>
+            <option value="done">Splněné</option>
+            <option value="cancelled">Nerealizované</option>
+          </select>
+
+          {/* Sort */}
+          <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
+            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+            background: "transparent", border: `1px solid ${theme.inputBorder}`,
+            color: theme.textSub,
+          }}>
+            <option value="smart">↕ Chytré</option>
+            <option value="priority">↕ Priorita</option>
+            <option value="date">↕ Termín</option>
+            <option value="created">↕ Nejnovější</option>
           </select>
         </div>
 
