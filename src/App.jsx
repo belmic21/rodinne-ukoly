@@ -481,10 +481,57 @@ function ActionButton({ label, onClick, theme, subtle, green, style: extraStyle 
 }
 
 /* ═══════════════════════════════════════════════════════
+   DELETE BUTTON WITH CONFIRMATION
+   ═══════════════════════════════════════════════════════ */
+
+function DeleteButton({ taskId, taskTitle, onDelete, theme }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (!confirming) {
+    return (
+      <button onClick={() => setConfirming(true)} style={{
+        ...buttonStyle(),
+        marginTop: "12px", padding: "5px 10px", fontSize: "11px",
+        background: "transparent", color: theme.textDim,
+        border: `1px solid ${theme.cardBorder}`,
+        display: "flex", alignItems: "center", gap: "4px",
+      }}>
+        🗑 Smazat úkol
+      </button>
+    );
+  }
+
+  const shortTitle = taskTitle.length > 25 ? taskTitle.slice(0, 25) + "…" : taskTitle;
+
+  return (
+    <div style={{
+      marginTop: "12px", padding: "10px",
+      background: `${theme.red}0a`, border: `1px solid ${theme.red}30`,
+      borderRadius: "8px",
+    }}>
+      <div style={{ fontSize: "12px", color: theme.text, marginBottom: "8px" }}>
+        Opravdu smazat <strong>"{shortTitle}"</strong>? Tato akce je nevratná.
+      </div>
+      <div style={{ display: "flex", gap: "6px" }}>
+        <button onClick={() => { onDelete(taskId); setConfirming(false); }} style={{
+          ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+          background: theme.red, color: "#fff",
+        }}>Ano, smazat</button>
+        <button onClick={() => setConfirming(false)} style={{
+          ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+          background: "transparent", color: theme.textSub,
+          border: `1px solid ${theme.cardBorder}`,
+        }}>Zrušit</button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, theme, showCompleteBanner }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, theme, showCompleteBanner }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -733,6 +780,9 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, theme,
         <ActionButton label="↩ Vrátit zpět" onClick={() => onStatusChange(task.id, "reopen")}
           theme={theme} subtle style={{ marginTop: "8px" }} />
       )}
+
+      {/* Delete button */}
+      <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onDelete} theme={theme} />
     </div>
   );
 }
@@ -741,7 +791,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, theme,
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, theme }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, theme }) {
   const [isOpen, setIsOpen] = useState(false);
 
   const isNew = !task.seenBy?.includes(currentUser.name) && task.createdBy !== currentUser.name;
@@ -968,6 +1018,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           users={users}
           onUpdate={onUpdate}
           onStatusChange={onStatusChange}
+          onDelete={onDelete}
           theme={theme}
           showCompleteBanner={allChecked}
         />
@@ -1755,6 +1806,11 @@ export default function App() {
     }, 50);
   }, []);
 
+  const deleteTask = useCallback(async (taskId) => {
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    await supabase.from("tasks").delete().eq("id", taskId);
+  }, []);
+
   // ── Computed values ──
 
   const unreadCounts = useMemo(() => {
@@ -1787,6 +1843,10 @@ export default function App() {
 
     // Scope filter
     if (filter === "my") result = result.filter(t => t.assignedTo?.includes(currentUser.name));
+    else if (filter.startsWith("person:")) {
+      const personName = filter.replace("person:", "");
+      result = result.filter(t => t.assignedTo?.includes(personName));
+    }
     else if (filter === "assigned") result = result.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name));
     else if (filter === "shared") result = result.filter(t => t.assignTo === "both");
     else if (filter === "unread") result = result.filter(t => !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name);
@@ -1947,13 +2007,16 @@ export default function App() {
           display: "flex", alignItems: "center", gap: "4px",
           marginBottom: "8px", flexWrap: "wrap",
         }}>
-          {/* Scope filter as compact pills */}
+          {/* Scope filter — includes per-person */}
           <select value={filter} onChange={e => setFilter(e.target.value)} style={{
             ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
             background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
             color: theme.accent, fontWeight: 600,
           }}>
             <option value="my">Moje ({stats.my})</option>
+            {users.filter(u => u.name !== currentUser.name).map(u => (
+              <option key={u.name} value={`person:${u.name}`}>{u.name}</option>
+            ))}
             <option value="assigned">Zadané ({stats.assigned})</option>
             <option value="shared">Společné ({stats.shared})</option>
             <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
@@ -2035,6 +2098,7 @@ export default function App() {
                       onStatusChange={changeStatus}
                       onMarkSeen={markSeen}
                       onUpdate={updateTask}
+                      onDelete={deleteTask}
                       theme={theme}
                     />
                   </div>
