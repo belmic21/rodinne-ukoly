@@ -1984,39 +1984,6 @@ export default function App() {
           </select>
         </div>
 
-        {/* Category pills */}
-        <div style={{
-          display: "flex", gap: "3px", marginBottom: "12px",
-          overflowX: "auto", paddingBottom: "2px",
-        }}>
-          <button onClick={() => setCategoryFilter("all")} style={{
-            ...buttonStyle(), padding: "4px 10px", fontSize: "10px",
-            background: categoryFilter === "all" ? theme.buttonBg : "transparent",
-            color: categoryFilter === "all" ? theme.text : theme.textDim,
-            whiteSpace: "nowrap", borderRadius: "16px",
-            border: `1px solid ${categoryFilter === "all" ? theme.cardBorder : "transparent"}`,
-          }}>Vše</button>
-          {CATEGORIES.map(cat => {
-            const count = categoryCounts[cat.id] || 0;
-            if (count === 0 && categoryFilter !== cat.id) return null;
-            return (
-              <button key={cat.id} onClick={() => setCategoryFilter(categoryFilter === cat.id ? "all" : cat.id)}
-                style={{
-                  ...buttonStyle(), padding: "4px 9px", fontSize: "10px",
-                  background: categoryFilter === cat.id ? theme.buttonBg : "transparent",
-                  color: categoryFilter === cat.id ? theme.text : theme.textDim,
-                  whiteSpace: "nowrap", borderRadius: "16px",
-                  border: `1px solid ${categoryFilter === cat.id ? theme.cardBorder : "transparent"}`,
-                  display: "flex", alignItems: "center", gap: "3px",
-                }}>
-                {cat.icon}
-                <span>{cat.label}</span>
-                <span style={{ fontSize: "9px", opacity: 0.6 }}>{count}</span>
-              </button>
-            );
-          })}
-        </div>
-
         {/* Task list */}
         {filteredTasks.length === 0 ? (
           <div style={{ textAlign: "center", color: theme.textDim, padding: "50px 20px" }}>
