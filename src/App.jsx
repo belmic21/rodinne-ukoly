@@ -1754,8 +1754,16 @@ export default function App() {
     if (!currentUser) return [];
     let result = tasks;
 
-    // Status filter
-    if (viewStatus === "active") result = result.filter(t => !isDone(t));
+    // Status filter — keep recently completed visible in active view
+    if (viewStatus === "active") {
+      const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
+      result = result.filter(t => {
+        if (!isDone(t)) return true; // active tasks always shown
+        // Show recently completed tasks (within 24h) crossed out
+        if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
+        return false;
+      });
+    }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "cancelled") result = result.filter(t => t.status === "cancelled");
 
@@ -1771,11 +1779,18 @@ export default function App() {
     // Search
     if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
 
-    // Sort
+    // Sort — completed tasks always at bottom in active view
     if (sortMode === "smart") result = [...result].sort(smartSort);
     else if (sortMode === "priority") result = [...result].sort((a, b) => getPriority(a.priority).weight - getPriority(b.priority).weight);
     else if (sortMode === "date") result = [...result].sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate));
     else if (sortMode === "created") result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // In active view, push completed to bottom
+    if (viewStatus === "active") {
+      const active = result.filter(t => !isDone(t));
+      const recentlyDone = result.filter(t => isDone(t));
+      result = [...active, ...recentlyDone];
+    }
 
     return result;
   }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, searchQuery]);
@@ -2021,73 +2036,44 @@ export default function App() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-            {filteredTasks.map(task => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                currentUser={currentUser}
-                users={users}
-                onStatusChange={changeStatus}
-                onMarkSeen={markSeen}
-                onUpdate={updateTask}
-                theme={theme}
-              />
-            ))}
+            {(() => {
+              let shownSeparator = false;
+              return filteredTasks.map(task => {
+                const showSep = viewStatus === "active" && isDone(task) && !shownSeparator;
+                if (showSep) shownSeparator = true;
+                return (
+                  <div key={task.id}>
+                    {showSep && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: "8px",
+                        margin: "12px 0 8px",
+                      }}>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                        <span style={{
+                          fontSize: "10px", color: theme.green, fontWeight: 700,
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          ✓ Dnes hotovo
+                        </span>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                      </div>
+                    )}
+                    <TaskCard
+                      task={task}
+                      currentUser={currentUser}
+                      users={users}
+                      onStatusChange={changeStatus}
+                      onMarkSeen={markSeen}
+                      onUpdate={updateTask}
+                      theme={theme}
+                    />
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
-
-        {/* ── Today completed section ── */}
-        {viewStatus === "active" && (() => {
-          const todayStr = new Date().toDateString();
-          const todayDone = tasks.filter(t =>
-            t.status === "done" &&
-            t.completedAt &&
-            new Date(t.completedAt).toDateString() === todayStr &&
-            t.assignedTo?.includes(currentUser.name)
-          );
-          if (todayDone.length === 0) return null;
-          return (
-            <div style={{ marginTop: "16px" }}>
-              <div style={{
-                fontSize: "11px", color: theme.textMid, fontWeight: 700,
-                textTransform: "uppercase", letterSpacing: "0.3px",
-                marginBottom: "6px", paddingLeft: "4px",
-                display: "flex", alignItems: "center", gap: "6px",
-              }}>
-                <span style={{
-                  width: "100%", height: "1px", background: theme.cardBorder, flex: 1,
-                }} />
-                <span style={{ whiteSpace: "nowrap" }}>✓ Dnes splněno ({todayDone.length})</span>
-                <span style={{
-                  width: "100%", height: "1px", background: theme.cardBorder, flex: 1,
-                }} />
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                {todayDone.map(task => (
-                  <div key={task.id} style={{
-                    ...cardStyle(theme),
-                    padding: "8px 12px",
-                    opacity: 0.5,
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}>
-                    <span style={{
-                      color: theme.green, fontSize: "14px", fontWeight: 700,
-                    }}>✓</span>
-                    <span style={{
-                      fontSize: "13px", color: theme.textSub,
-                      textDecoration: "line-through", flex: 1,
-                    }}>{task.title}</span>
-                    {task.completedByUser && (
-                      <span style={{ fontSize: "10px", color: theme.textDim }}>
-                        {task.completedByUser}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
 
         <Legend theme={theme} />
       </div>
