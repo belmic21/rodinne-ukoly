@@ -975,6 +975,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
   const [dueDate, setDueDate] = useState("");
   const [recurrence, setRecurrence] = useState(0);
   const [category, setCategory] = useState("other");
+  const [initialChecklist, setInitialChecklist] = useState([]);
+  const [checklistInput, setChecklistInput] = useState("");
   const inputRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
 
@@ -999,7 +1001,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
     createdAt: new Date().toISOString(),
     completedAt: null,
     completedByUser: null,
-    checklist: [],
+    checklist: type === "complex" ? initialChecklist : [],
     images: [],
   });
 
@@ -1020,6 +1022,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
     setText(""); setNote(""); setDueDate(""); setRecurrence(0);
     setPriority("important"); setAssign("self"); setCategory("other");
     setType("simple"); setShowFull(false);
+    setInitialChecklist([]); setChecklistInput("");
   };
 
   const labelStyle = {
@@ -1097,6 +1100,61 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
               resize: "vertical", lineHeight: 1.4,
             }}
           />
+
+          {/* Checklist builder for complex type */}
+          {type === "complex" && (
+            <div style={{
+              marginBottom: "10px", padding: "10px",
+              background: theme.inputBg, borderRadius: "8px",
+              border: `1px solid ${theme.inputBorder}`,
+            }}>
+              <div style={labelStyle}>Checklist — přidej položky</div>
+              {initialChecklist.map(item => (
+                <div key={item.id} style={{
+                  display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px",
+                }}>
+                  <span style={{ fontSize: "12px", color: theme.textSub }}>○</span>
+                  <span style={{ flex: 1, fontSize: "13px", color: theme.text }}>{item.text}</span>
+                  <button onClick={() => setInitialChecklist(prev => prev.filter(x => x.id !== item.id))}
+                    style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: "14px" }}>
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: "5px", marginTop: "4px" }}>
+                <input
+                  placeholder="Přidat položku..."
+                  value={checklistInput}
+                  onChange={e => setChecklistInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (checklistInput.trim()) {
+                        setInitialChecklist(prev => [...prev, {
+                          id: generateId(), text: checklistInput.trim(),
+                          done: false, doneBy: null, doneAt: null,
+                        }]);
+                        setChecklistInput("");
+                      }
+                    }
+                  }}
+                  style={{ ...inputStyle(theme), fontSize: "12px", padding: "7px 10px", flex: 1 }}
+                />
+                <button onClick={() => {
+                  if (checklistInput.trim()) {
+                    setInitialChecklist(prev => [...prev, {
+                      id: generateId(), text: checklistInput.trim(),
+                      done: false, doneBy: null, doneAt: null,
+                    }]);
+                    setChecklistInput("");
+                  }
+                }} style={{
+                  ...buttonStyle(), padding: "7px 14px",
+                  background: theme.accent, color: "#fff", fontSize: "14px",
+                }}>+</button>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
             <div>
