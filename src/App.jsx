@@ -836,30 +836,31 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         {/* Quick complete checkbox */}
         {!taskIsDone && canAct ? (
           <button onClick={handleQuickComplete} style={{
-            width: "24px", height: "24px", minWidth: "24px",
-            borderRadius: "6px",
-            border: `2px solid ${inProgress ? theme.yellow : priorityTheme.text + "60"}`,
-            background: inProgress ? `${theme.yellow}15` : "transparent",
+            width: "32px", height: "32px", minWidth: "32px",
+            borderRadius: "8px",
+            border: `2.5px solid ${inProgress ? theme.yellow : priorityTheme.text}`,
+            background: inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`,
             cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
             color: inProgress ? theme.yellow : priorityTheme.text,
-            fontSize: "10px", fontWeight: 700,
+            fontSize: "14px", fontWeight: 700,
             transition: "all 0.15s",
           }} title="Splnit">
             {inProgress ? "◐" : "○"}
           </button>
         ) : (
-          <div style={{
-            width: "24px", height: "24px", minWidth: "24px",
-            borderRadius: "6px",
+          <button onClick={(e) => { e.stopPropagation(); onStatusChange(task.id, "reopen"); }} style={{
+            width: "32px", height: "32px", minWidth: "32px",
+            borderRadius: "8px",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "12px", fontWeight: 700,
-            background: task.status === "cancelled" ? `${theme.priority.low.text}15` : `${theme.green}18`,
+            fontSize: "16px", fontWeight: 700,
+            background: task.status === "cancelled" ? `${theme.priority.low.text}15` : `${theme.green}20`,
             color: task.status === "cancelled" ? theme.priority.low.text : theme.green,
-            border: `2px solid ${task.status === "cancelled" ? theme.priority.low.text + "30" : theme.green + "35"}`,
-          }}>
+            border: `2.5px solid ${task.status === "cancelled" ? theme.priority.low.text + "40" : theme.green + "50"}`,
+            cursor: "pointer",
+          }} title="Vrátit zpět">
             {task.status === "done" ? "✓" : "⊘"}
-          </div>
+          </button>
         )}
 
         {/* Task content */}
@@ -947,26 +948,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           </div>
         </div>
 
-        {/* Right side: complete button + chevron */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", marginLeft: "4px" }}>
-          {!taskIsDone && canAct && (
-            <button onClick={handleQuickComplete} title="Splnit úkol" style={{
-              ...buttonStyle(),
-              width: "36px", height: "36px",
-              borderRadius: "10px",
-              background: `${theme.green}18`,
-              border: `2px solid ${theme.green}40`,
-              color: theme.green,
-              fontSize: "16px", fontWeight: 700,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              transition: "all 0.15s",
-              flexShrink: 0,
-            }}>✓</button>
-          )}
-          <span style={{ fontSize: "9px", color: theme.textDim }}>
-            {isOpen ? "▲" : "▼"}
-          </span>
-        </div>
+        {/* Right side: chevron only */}
+        <span style={{ fontSize: "10px", color: theme.textDim, marginTop: "5px", marginLeft: "4px" }}>
+          {isOpen ? "▲" : "▼"}
+        </span>
       </div>
 
       {/* Expanded detail */}
@@ -1785,10 +1770,11 @@ export default function App() {
     else if (sortMode === "date") result = [...result].sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate));
     else if (sortMode === "created") result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // In active view, push completed to bottom
+    // In active view, push completed to bottom, sorted newest first
     if (viewStatus === "active") {
       const active = result.filter(t => !isDone(t));
-      const recentlyDone = result.filter(t => isDone(t));
+      const recentlyDone = result.filter(t => isDone(t))
+        .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
       result = [...active, ...recentlyDone];
     }
 
