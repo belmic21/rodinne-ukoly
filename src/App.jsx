@@ -47,6 +47,7 @@ const generateId = () => crypto.randomUUID();
 const getPriority = (id) => PRIORITIES.find(p => p.id === id) || PRIORITIES[1];
 const getCategory = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[8];
 const isDone = (task) => task.status === "done" || task.status === "cancelled";
+const isDeleted = (task) => task.status === "deleted";
 
 function daysDiff(dateStr) {
   if (!dateStr) return Infinity;
@@ -279,33 +280,139 @@ const buttonStyle = () => ({
 });
 
 /* ═══════════════════════════════════════════════════════
-   API
+   OFFLINE CACHE & QUEUE
+   ═══════════════════════════════════════════════════════ */
+
+const CACHE_TASKS = "ft_cache_tasks";
+const CACHE_USERS = "ft_cache_users";
+const OFFLINE_QUEUE = "ft_offline_queue";
+
+function cacheSet(key, data) {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
+}
+
+function cacheGet(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function getOfflineQueue() {
+  return cacheGet(OFFLINE_QUEUE) || [];
+}
+
+function addToOfflineQueue(action) {
+  const queue = getOfflineQueue();
+  queue.push({ ...action, timestamp: Date.now() });
+  cacheSet(OFFLINE_QUEUE, queue);
+}
+
+function clearOfflineQueue() {
+  cacheSet(OFFLINE_QUEUE, []);
+}
+
+async function flushOfflineQueue() {
+  const queue = getOfflineQueue();
+  if (queue.length === 0) return 0;
+
+  let flushed = 0;
+  const remaining = [];
+
+  for (const action of queue) {
+    try {
+      if (action.type === "create_task") {
+        await supabase.from("tasks").insert(taskToDb(action.task));
+      } else if (action.type === "update_task") {
+        await supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
+      } else if (action.type === "create_user") {
+        await supabase.from("users").insert({ name: action.user.name, pin: action.user.pin, is_admin: action.user.admin });
+      }
+      flushed++;
+    } catch (e) {
+      // Keep failed actions in queue for next attempt
+      remaining.push(action);
+    }
+  }
+
+  cacheSet(OFFLINE_QUEUE, remaining);
+  return flushed;
+}
+
+/* ═══════════════════════════════════════════════════════
+   API (with offline fallback)
    ═══════════════════════════════════════════════════════ */
 
 async function apiLoadUsers() {
-  const { data } = await supabase.from("users").select("*").order("created_at");
-  return (data || []).map(dbToUser);
+  try {
+    const { data, error } = await supabase.from("users").select("*").order("created_at");
+    if (error) throw error;
+    const users = (data || []).map(dbToUser);
+    cacheSet(CACHE_USERS, users); // Cache for offline
+    return users;
+  } catch (e) {
+    console.warn("apiLoadUsers offline, using cache");
+    return cacheGet(CACHE_USERS) || [];
+  }
 }
 
 async function apiLoadTasks() {
-  const { data } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
-  return (data || []).map(dbToTask);
+  try {
+    const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+    if (error) throw error;
+    const tasks = (data || []).map(dbToTask);
+    cacheSet(CACHE_TASKS, tasks); // Cache for offline
+    return tasks;
+  } catch (e) {
+    console.warn("apiLoadTasks offline, using cache");
+    return cacheGet(CACHE_TASKS) || [];
+  }
 }
 
 async function apiCreateUser(user) {
-  await supabase.from("users").insert({ name: user.name, pin: user.pin, is_admin: user.admin });
+  try {
+    const { error } = await supabase.from("users").insert({ name: user.name, pin: user.pin, is_admin: user.admin });
+    if (error) throw error;
+  } catch (e) {
+    console.warn("apiCreateUser offline, queued");
+    addToOfflineQueue({ type: "create_user", user });
+  }
 }
 
 async function apiDeleteUser(name) {
-  await supabase.from("users").delete().eq("name", name);
+  try {
+    await supabase.from("users").delete().eq("name", name);
+  } catch (e) {
+    console.warn("apiDeleteUser failed offline");
+  }
 }
 
 async function apiCreateTask(task) {
-  await supabase.from("tasks").insert(taskToDb(task));
+  // Always update local cache
+  const cached = cacheGet(CACHE_TASKS) || [];
+  cacheSet(CACHE_TASKS, [task, ...cached]);
+
+  try {
+    const { error } = await supabase.from("tasks").insert(taskToDb(task));
+    if (error) throw error;
+  } catch (e) {
+    console.warn("apiCreateTask offline, queued");
+    addToOfflineQueue({ type: "create_task", task });
+  }
 }
 
 async function apiUpdateTask(task) {
-  await supabase.from("tasks").update(taskToDb(task)).eq("id", task.id);
+  // Always update local cache
+  const cached = cacheGet(CACHE_TASKS) || [];
+  cacheSet(CACHE_TASKS, cached.map(t => t.id === task.id ? task : t));
+
+  try {
+    const { error } = await supabase.from("tasks").update(taskToDb(task)).eq("id", task.id);
+    if (error) throw error;
+  } catch (e) {
+    console.warn("apiUpdateTask offline, queued");
+    addToOfflineQueue({ type: "update_task", task });
+  }
 }
 
 async function apiUpdateTasks(tasks) {
@@ -484,19 +591,19 @@ function ActionButton({ label, onClick, theme, subtle, green, style: extraStyle 
    DELETE BUTTON WITH CONFIRMATION
    ═══════════════════════════════════════════════════════ */
 
-function DeleteButton({ taskId, taskTitle, onDelete, theme }) {
+function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
   const [confirming, setConfirming] = useState(false);
 
   if (!confirming) {
     return (
       <button onClick={() => setConfirming(true)} style={{
         ...buttonStyle(),
-        marginTop: "12px", padding: "6px 12px", fontSize: "11px",
+        marginTop: permanent ? "0px" : "12px", padding: "6px 12px", fontSize: "11px",
         background: `${theme.red}10`, color: theme.red,
         border: `1px solid ${theme.red}30`,
         display: "flex", alignItems: "center", gap: "4px",
       }}>
-        🗑 Smazat úkol
+        🗑 {permanent ? "Trvale smazat" : "Smazat úkol"}
       </button>
     );
   }
@@ -505,18 +612,21 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme }) {
 
   return (
     <div style={{
-      marginTop: "12px", padding: "10px",
+      marginTop: permanent ? "0px" : "12px", padding: "10px",
       background: `${theme.red}0a`, border: `1px solid ${theme.red}30`,
       borderRadius: "8px",
     }}>
       <div style={{ fontSize: "12px", color: theme.text, marginBottom: "8px" }}>
-        Opravdu smazat <strong>"{shortTitle}"</strong>? Tato akce je nevratná.
+        {permanent
+          ? <>Trvale smazat <strong>"{shortTitle}"</strong>? Nelze vrátit zpět.</>
+          : <>Smazat <strong>"{shortTitle}"</strong>? Přesune se do koše (30 dní).</>
+        }
       </div>
       <div style={{ display: "flex", gap: "6px" }}>
         <button onClick={() => { onDelete(taskId); setConfirming(false); }} style={{
           ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
           background: theme.red, color: "#fff",
-        }}>Ano, smazat</button>
+        }}>{permanent ? "Trvale smazat" : "Ano, do koše"}</button>
         <button onClick={() => setConfirming(false)} style={{
           ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
           background: "transparent", color: theme.textSub,
@@ -531,7 +641,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme }) {
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, theme, showCompleteBanner }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -781,8 +891,19 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           theme={theme} subtle style={{ marginTop: "8px" }} />
       )}
 
-      {/* Delete button */}
-      <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onDelete} theme={theme} />
+      {/* Delete / Trash actions */}
+      {task.status === "deleted" ? (
+        <div style={{ display: "flex", gap: "6px", marginTop: "12px" }}>
+          <button onClick={() => onRestore(task.id)} style={{
+            ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+            background: `${theme.green}15`, color: theme.green,
+            border: `1px solid ${theme.green}30`,
+          }}>↩ Obnovit</button>
+          <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
+        </div>
+      ) : (
+        <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onDelete} theme={theme} />
+      )}
     </div>
   );
 }
@@ -791,7 +912,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, theme }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme }) {
   const [isOpen, setIsOpen] = useState(false);
 
   const isNew = !task.seenBy?.includes(currentUser.name) && task.createdBy !== currentUser.name;
@@ -1019,6 +1140,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onUpdate={onUpdate}
           onStatusChange={onStatusChange}
           onDelete={onDelete}
+          onRestore={onRestore}
+          onPermanentDelete={onPermanentDelete}
           theme={theme}
           showCompleteBanner={allChecked}
         />
@@ -1625,13 +1748,24 @@ export default function App() {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
   const [showAdmin, setShowAdmin] = useState(false);
+  const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
   const undoTimerRef = useRef();
 
   const theme = THEMES[themeName];
 
-  // Online/offline detection
+  // Online/offline detection + flush queue when back online
   useEffect(() => {
-    const goOnline = () => setOnline(true);
+    const goOnline = async () => {
+      setOnline(true);
+      const flushed = await flushOfflineQueue();
+      if (flushed > 0) {
+        setPendingCount(getOfflineQueue().length);
+        // Reload fresh data from server
+        const [freshUsers, freshTasks] = await Promise.all([apiLoadUsers(), apiLoadTasks()]);
+        setUsers(freshUsers);
+        setTasks(freshTasks);
+      }
+    };
     const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
@@ -1655,6 +1789,12 @@ export default function App() {
   // Initial data load
   useEffect(() => {
     (async () => {
+      // Flush any pending offline changes first
+      if (navigator.onLine) {
+        await flushOfflineQueue();
+        setPendingCount(0);
+      }
+
       const [loadedUsers, loadedTasks] = await Promise.all([apiLoadUsers(), apiLoadTasks()]);
       setUsers(loadedUsers);
       const { tasks: processed, updates } = processRecurring(loadedTasks);
@@ -1733,6 +1873,7 @@ export default function App() {
   const addTask = useCallback(async (task) => {
     setTasks(prev => [task, ...prev]);
     await apiCreateTask(task);
+    setPendingCount(getOfflineQueue().length);
     if (task.assignTo !== "self") {
       notify(`📋 Nový od ${task.createdBy}`, task.title);
     }
@@ -1806,10 +1947,42 @@ export default function App() {
     }, 50);
   }, []);
 
-  const deleteTask = useCallback(async (taskId) => {
+  const deleteTask = useCallback((taskId) => {
+    const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
+    const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
+
+    withUndo(`Smazáno: ${shortTitle}`, taskId, prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      return { ...task, status: "deleted", deletedAt: new Date().toISOString() };
+    }));
+  }, [tasks, withUndo]);
+
+  // Permanently remove tasks in trash older than 30 days
+  useEffect(() => {
+    const cleanup = setInterval(async () => {
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const toDelete = tasks.filter(t =>
+        t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() < cutoff
+      );
+      for (const task of toDelete) {
+        await supabase.from("tasks").delete().eq("id", task.id);
+        setTasks(prev => prev.filter(t => t.id !== task.id));
+      }
+    }, 3600000); // Check every hour
+    return () => clearInterval(cleanup);
+  }, [tasks]);
+
+  const permanentlyDeleteTask = useCallback(async (taskId) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
     await supabase.from("tasks").delete().eq("id", taskId);
   }, []);
+
+  const restoreTask = useCallback((taskId) => {
+    withUndo("Obnoveno", taskId, prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      return { ...task, status: "active", deletedAt: null };
+    }));
+  }, [withUndo]);
 
   // ── Computed values ──
 
@@ -1832,6 +2005,7 @@ export default function App() {
     if (viewStatus === "active") {
       const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
       result = result.filter(t => {
+        if (isDeleted(t)) return false; // never show deleted in active
         if (!isDone(t)) return true; // active tasks always shown
         // Show recently completed tasks (within 24h) crossed out
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
@@ -1840,6 +2014,7 @@ export default function App() {
     }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "cancelled") result = result.filter(t => t.status === "cancelled");
+    else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
 
     // Scope filter
     if (filter === "my") result = result.filter(t => t.assignedTo?.includes(currentUser.name));
@@ -1876,7 +2051,7 @@ export default function App() {
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
-    const activeTasks = tasks.filter(t => !isDone(t));
+    const activeTasks = tasks.filter(t => !isDone(t) && !isDeleted(t));
     return {
       my: activeTasks.filter(t => t.assignedTo?.includes(currentUser.name)).length,
       assigned: activeTasks.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
@@ -1886,8 +2061,9 @@ export default function App() {
 
   const categoryCounts = useMemo(() => {
     const relevantTasks = tasks.filter(t =>
-      viewStatus === "active" ? !isDone(t)
+      viewStatus === "active" ? (!isDone(t) && !isDeleted(t))
       : viewStatus === "done" ? t.status === "done"
+      : viewStatus === "trash" ? t.status === "deleted"
       : t.status === "cancelled"
     );
     const counts = {};
@@ -1942,7 +2118,13 @@ export default function App() {
             <span style={{
               fontSize: "9px", background: theme.red, color: "#fff",
               padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>OFFLINE</span>
+            }}>OFFLINE{pendingCount > 0 ? ` (${pendingCount})` : ""}</span>
+          )}
+          {online && pendingCount > 0 && (
+            <span style={{
+              fontSize: "9px", background: theme.yellow, color: "#fff",
+              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
+            }}>Odesílám {pendingCount}...</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -2032,6 +2214,7 @@ export default function App() {
             <option value="active">Aktivní</option>
             <option value="done">Splněné</option>
             <option value="cancelled">Nerealizované</option>
+            <option value="trash">🗑 Koš</option>
           </select>
 
           {/* Sort */}
@@ -2099,6 +2282,8 @@ export default function App() {
                       onMarkSeen={markSeen}
                       onUpdate={updateTask}
                       onDelete={deleteTask}
+                      onRestore={restoreTask}
+                      onPermanentDelete={permanentlyDeleteTask}
                       theme={theme}
                     />
                   </div>
