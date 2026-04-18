@@ -491,9 +491,9 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme }) {
     return (
       <button onClick={() => setConfirming(true)} style={{
         ...buttonStyle(),
-        marginTop: "12px", padding: "5px 10px", fontSize: "11px",
-        background: "transparent", color: theme.textDim,
-        border: `1px solid ${theme.cardBorder}`,
+        marginTop: "12px", padding: "6px 12px", fontSize: "11px",
+        background: `${theme.red}10`, color: theme.red,
+        border: `1px solid ${theme.red}30`,
         display: "flex", alignItems: "center", gap: "4px",
       }}>
         🗑 Smazat úkol
