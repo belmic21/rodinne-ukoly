@@ -940,9 +940,26 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           </div>
         </div>
 
-        <span style={{ fontSize: "9px", color: theme.textDim, marginTop: "5px" }}>
-          {isOpen ? "▲" : "▼"}
-        </span>
+        {/* Right side: complete button + chevron */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", marginLeft: "4px" }}>
+          {!taskIsDone && canAct && (
+            <button onClick={handleQuickComplete} title="Splnit úkol" style={{
+              ...buttonStyle(),
+              width: "36px", height: "36px",
+              borderRadius: "10px",
+              background: `${theme.green}18`,
+              border: `2px solid ${theme.green}40`,
+              color: theme.green,
+              fontSize: "16px", fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 0.15s",
+              flexShrink: 0,
+            }}>✓</button>
+          )}
+          <span style={{ fontSize: "9px", color: theme.textDim }}>
+            {isOpen ? "▲" : "▼"}
+          </span>
+        </div>
       </div>
 
       {/* Expanded detail */}
