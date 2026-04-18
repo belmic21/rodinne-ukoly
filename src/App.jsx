@@ -240,6 +240,11 @@ const GLOBAL_CSS = `
   from { transform: translateY(80px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+@keyframes completedFade {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.98); }
+  100% { opacity: 0.35; transform: scale(1); }
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
 body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
@@ -797,7 +802,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       opacity: taskIsDone ? 0.35 : 1,
       cursor: "pointer",
       position: "relative",
-      animation: isNew ? "glow 2s ease 3, slideUp 0.3s ease" : "slideUp 0.3s ease",
+      animation: isNew ? "glow 2s ease 3, slideUp 0.3s ease"
+        : taskIsDone ? "completedFade 0.5s ease forwards"
+        : "slideUp 0.3s ease",
       transition: "all 0.2s",
     }}>
       {/* Badges */}
@@ -1663,12 +1670,16 @@ export default function App() {
   }, []);
 
   const changeStatus = useCallback((taskId, action) => {
-    const messages = {
+    // Find task name for the snackbar message
+    const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
+    const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
+    const actionLabels = {
       done: "Splněno", done_all: "Splněno", done_my: "Moje část hotová",
       cancelled: "Nerealizováno", reopen: "Vráceno", in_progress: "Rozpracováno",
     };
+    const message = `${actionLabels[action] || "Změněno"}: ${shortTitle}`;
 
-    withUndo(messages[action] || "Změněno", taskId, prev => prev.map(task => {
+    withUndo(message, taskId, prev => prev.map(task => {
       if (task.id !== taskId) return task;
       const now = new Date().toISOString();
 
@@ -1700,20 +1711,31 @@ export default function App() {
   }, [currentUser, users, withUndo]);
 
   const markSeen = useCallback(async (taskId) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task || task.seenBy?.includes(currentUser.name)) return;
-    const updated = { ...task, seenBy: [...(task.seenBy || []), currentUser.name] };
-    setTasks(prev => prev.map(t => t.id === taskId ? updated : t));
-    await apiUpdateTask(updated);
-  }, [tasks, currentUser]);
+    let updatedTask = null;
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId || t.seenBy?.includes(currentUser.name)) return t;
+      updatedTask = { ...t, seenBy: [...(t.seenBy || []), currentUser.name] };
+      return updatedTask;
+    }));
+    setTimeout(async () => {
+      if (updatedTask) await apiUpdateTask(updatedTask);
+    }, 50);
+  }, [currentUser]);
 
   const updateTask = useCallback(async (taskId, patch) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-    const updated = { ...task, ...patch };
-    setTasks(prev => prev.map(t => t.id === taskId ? updated : t));
-    await apiUpdateTask(updated);
-  }, [tasks]);
+    let updatedTask = null;
+    setTasks(prev => {
+      return prev.map(t => {
+        if (t.id !== taskId) return t;
+        updatedTask = { ...t, ...patch };
+        return updatedTask;
+      });
+    });
+    // Wait for state to settle, then persist
+    setTimeout(async () => {
+      if (updatedTask) await apiUpdateTask(updatedTask);
+    }, 50);
+  }, []);
 
   // ── Computed values ──
 
@@ -2013,6 +2035,59 @@ export default function App() {
             ))}
           </div>
         )}
+
+        {/* ── Today completed section ── */}
+        {viewStatus === "active" && (() => {
+          const todayStr = new Date().toDateString();
+          const todayDone = tasks.filter(t =>
+            t.status === "done" &&
+            t.completedAt &&
+            new Date(t.completedAt).toDateString() === todayStr &&
+            t.assignedTo?.includes(currentUser.name)
+          );
+          if (todayDone.length === 0) return null;
+          return (
+            <div style={{ marginTop: "16px" }}>
+              <div style={{
+                fontSize: "11px", color: theme.textMid, fontWeight: 700,
+                textTransform: "uppercase", letterSpacing: "0.3px",
+                marginBottom: "6px", paddingLeft: "4px",
+                display: "flex", alignItems: "center", gap: "6px",
+              }}>
+                <span style={{
+                  width: "100%", height: "1px", background: theme.cardBorder, flex: 1,
+                }} />
+                <span style={{ whiteSpace: "nowrap" }}>✓ Dnes splněno ({todayDone.length})</span>
+                <span style={{
+                  width: "100%", height: "1px", background: theme.cardBorder, flex: 1,
+                }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {todayDone.map(task => (
+                  <div key={task.id} style={{
+                    ...cardStyle(theme),
+                    padding: "8px 12px",
+                    opacity: 0.5,
+                    display: "flex", alignItems: "center", gap: "8px",
+                  }}>
+                    <span style={{
+                      color: theme.green, fontSize: "14px", fontWeight: 700,
+                    }}>✓</span>
+                    <span style={{
+                      fontSize: "13px", color: theme.textSub,
+                      textDecoration: "line-through", flex: 1,
+                    }}>{task.title}</span>
+                    {task.completedByUser && (
+                      <span style={{ fontSize: "10px", color: theme.textDim }}>
+                        {task.completedByUser}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         <Legend theme={theme} />
       </div>
