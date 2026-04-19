@@ -1154,7 +1154,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -1263,28 +1263,67 @@ function QuickAddBar({ currentUser, users, onAdd, theme }) {
         </button>
       </div>
 
-      {/* Category quick-pick icons */}
+      {/* Category icon bar — dual purpose: FILTER (when not typing) + CATEGORY pick (when typing) */}
       {!showFull && (
         <div style={{
           display: "flex", gap: "2px", marginTop: "4px",
           paddingLeft: "4px", overflowX: "auto",
         }}>
-          {CATEGORIES.filter(c => c.id !== "other").map(cat => (
-            <button key={cat.id} onClick={() => setQuickCategory(quickCategory === cat.id ? null : cat.id)}
-              title={cat.label} style={{
-                ...buttonStyle(),
-                width: "30px", height: "28px",
-                fontSize: "14px",
-                background: quickCategory === cat.id ? theme.accentSoft : "transparent",
-                border: `1px solid ${quickCategory === cat.id ? theme.accentBorder : "transparent"}`,
-                borderRadius: "6px",
+          {CATEGORIES.filter(c => c.id !== "other").map(cat => {
+            const isActiveFilter = categoryFilter === cat.id;
+            const isQuickPick = quickCategory === cat.id;
+            const isHighlighted = isActiveFilter || isQuickPick;
+            const count = categoryCounts?.[cat.id] || 0;
+
+            return (
+              <button key={cat.id}
+                onClick={() => {
+                  if (text.trim()) {
+                    // Typing mode → set category for new task
+                    setQuickCategory(quickCategory === cat.id ? null : cat.id);
+                  } else {
+                    // Filter mode → toggle category filter
+                    onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
+                  }
+                }}
+                title={cat.label + (count > 0 ? ` (${count})` : "")}
+                style={{
+                  ...buttonStyle(),
+                  minWidth: "32px", height: "30px",
+                  padding: "0 4px",
+                  fontSize: "15px",
+                  background: isHighlighted ? theme.accentSoft : "transparent",
+                  border: `2px solid ${isHighlighted ? theme.accentBorder : "transparent"}`,
+                  borderRadius: "8px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: "2px",
+                  opacity: (categoryFilter !== "all" || quickCategory) && !isHighlighted ? 0.3 : 1,
+                  transition: "all 0.15s",
+                  position: "relative",
+                }}>
+                {cat.icon}
+                {count > 0 && !text.trim() && (
+                  <span style={{
+                    fontSize: "9px", fontWeight: 700,
+                    color: isActiveFilter ? theme.accent : theme.textDim,
+                  }}>{count}</span>
+                )}
+              </button>
+            );
+          })}
+          {/* Reset filter button */}
+          {categoryFilter !== "all" && !text.trim() && (
+            <button onClick={() => onCategoryFilterChange("all")}
+              title="Zobrazit vše"
+              style={{
+                ...buttonStyle(), minWidth: "32px", height: "30px",
+                fontSize: "11px", color: theme.red,
+                background: "transparent",
+                border: `1px solid ${theme.red}25`,
+                borderRadius: "8px",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                opacity: quickCategory && quickCategory !== cat.id ? 0.4 : 1,
-                transition: "all 0.12s",
-              }}>
-              {cat.icon}
-            </button>
-          ))}
+              }}>✕</button>
+          )}
         </div>
       )}
 
@@ -1802,10 +1841,47 @@ export default function App() {
       if (updates.length > 0) apiUpdateTasks(updates);
       setLoading(false);
     })();
+
+    // Request notification permission
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }
+
+    // Register custom polling service worker
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw-polling.js", { scope: "/" })
+        .then(reg => {
+          console.log("✅ Polling SW registered");
+        })
+        .catch(err => console.warn("SW registration failed:", err));
+    }
   }, []);
+
+  // Sync user session to service worker
+  useEffect(() => {
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      if (currentUser) {
+        navigator.serviceWorker.controller.postMessage({
+          type: "SET_USER",
+          user: currentUser,
+        });
+      } else {
+        navigator.serviceWorker.controller.postMessage({ type: "CLEAR_USER" });
+      }
+    }
+  }, [currentUser]);
+
+  // Tell SW that tasks have been seen (reset notification count)
+  useEffect(() => {
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller && currentUser) {
+      const myUnread = tasks.filter(t =>
+        !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t)
+      ).length;
+      if (myUnread === 0) {
+        navigator.serviceWorker.controller.postMessage({ type: "TASKS_SEEN" });
+      }
+    }
+  }, [tasks, currentUser]);
 
   // Realtime subscriptions
   useEffect(() => {
@@ -2167,7 +2243,15 @@ export default function App() {
 
         <StatsBar tasks={tasks} currentUser={currentUser} users={users} theme={theme} />
 
-        <QuickAddBar currentUser={currentUser} users={users} onAdd={addTask} theme={theme} />
+        <QuickAddBar
+          currentUser={currentUser}
+          users={users}
+          onAdd={addTask}
+          theme={theme}
+          categoryFilter={categoryFilter}
+          onCategoryFilterChange={setCategoryFilter}
+          categoryCounts={categoryCounts}
+        />
 
         {/* Search */}
         <div style={{ marginBottom: "10px" }}>
