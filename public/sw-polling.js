@@ -1,29 +1,93 @@
 /* ═══════════════════════════════════════════════════════
-   SERVICE WORKER — Background polling for new tasks
-   ═══════════════════════════════════════════════════════
-   
-   This service worker checks for new tasks every 5 minutes
-   and shows a notification if there are unread tasks.
-   Works on Android even with the app closed.
+   SERVICE WORKER — Push notifications + polling fallback
    ═══════════════════════════════════════════════════════ */
 
-// These values are injected at build time by vite
 const SUPABASE_URL = "__SUPABASE_URL__";
 const SUPABASE_KEY = "__SUPABASE_KEY__";
 const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-// ─── Polling logic ───
+// ─── Push notification handler ───
+self.addEventListener("push", (event) => {
+  let data = { title: "📋 Nový úkol", body: "" };
+
+  try {
+    if (event.data) {
+      const parsed = event.data.json();
+      data = {
+        title: parsed.title || data.title,
+        body: parsed.body || data.body,
+        icon: parsed.icon || "/icon-192.png",
+        badge: parsed.badge || "/icon-192.png",
+        tag: parsed.tag || "task-notification",
+        data: parsed.data || { url: "/" },
+      };
+    }
+  } catch (e) {
+    // If not JSON, use as text
+    if (event.data) {
+      data.body = event.data.text();
+    }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: data.icon || "/icon-192.png",
+      badge: data.badge || "/icon-192.png",
+      tag: data.tag || "task-notification",
+      renotify: true,
+      vibrate: [200, 100, 200],
+      data: data.data || { url: "/" },
+      actions: [
+        { action: "open", title: "Otevřít" },
+      ],
+    })
+  );
+});
+
+// ─── Notification click handler ───
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && "focus" in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow("/");
+      }
+    })
+  );
+});
+
+// ─── Polling fallback (for Android + when push unavailable) ───
+
+async function getFromCache(key) {
+  try {
+    const cache = await caches.open("ft-sw-data");
+    const response = await cache.match(new Request(`/__sw_data__/${key}`));
+    if (response) return await response.text();
+    return null;
+  } catch (e) { return null; }
+}
+
+async function setInCache(key, value) {
+  try {
+    const cache = await caches.open("ft-sw-data");
+    await cache.put(new Request(`/__sw_data__/${key}`), new Response(value));
+  } catch (e) {}
+}
 
 async function checkForNewTasks() {
   try {
-    // Get current user from cache
     const userJson = await getFromCache("ft_user");
-    if (!userJson) return; // No logged in user
-
+    if (!userJson) return;
     const user = JSON.parse(userJson);
     if (!user || !user.name) return;
 
-    // Fetch tasks from Supabase
     const response = await fetch(
       `${SUPABASE_URL}/rest/v1/tasks?status=eq.active&order=created_at.desc&limit=50`,
       {
@@ -38,140 +102,67 @@ async function checkForNewTasks() {
     if (!response.ok) return;
     const tasks = await response.json();
 
-    // Find unread tasks assigned to this user
     const unreadTasks = tasks.filter(task => {
       const seenBy = task.seen_by || [];
       const assignedTo = task.assigned_to || [];
-      const createdBy = task.created_by;
-      return (
-        assignedTo.includes(user.name) &&
-        createdBy !== user.name &&
-        !seenBy.includes(user.name)
-      );
+      return assignedTo.includes(user.name) && task.created_by !== user.name && !seenBy.includes(user.name);
     });
 
     if (unreadTasks.length === 0) return;
 
-    // Check if we already notified about these tasks
-    const lastNotifiedKey = "ft_last_notified_count";
-    const lastCount = parseInt(await getFromCache(lastNotifiedKey) || "0");
-    
-    if (unreadTasks.length <= lastCount) return; // No new ones since last notification
+    const lastCount = parseInt(await getFromCache("ft_last_notified") || "0");
+    if (unreadTasks.length <= lastCount) return;
 
-    // Show notification
-    const latestTask = unreadTasks[0];
+    const latest = unreadTasks[0];
     const title = unreadTasks.length === 1
-      ? `📋 Nový úkol od ${latestTask.created_by}`
+      ? `📋 Nový úkol od ${latest.created_by}`
       : `📋 ${unreadTasks.length} nových úkolů`;
-    
     const body = unreadTasks.length === 1
-      ? latestTask.title
-      : unreadTasks.slice(0, 3).map(t => t.title).join(", ") +
-        (unreadTasks.length > 3 ? ` a ${unreadTasks.length - 3} další...` : "");
+      ? latest.title
+      : unreadTasks.slice(0, 3).map(t => t.title).join(", ");
 
     await self.registration.showNotification(title, {
-      body,
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
-      tag: "new-tasks", // Replaces previous notification
-      renotify: true,
-      vibrate: [200, 100, 200],
+      body, icon: "/icon-192.png", badge: "/icon-192.png",
+      tag: "new-tasks", renotify: true, vibrate: [200, 100, 200],
       data: { url: "/" },
     });
 
-    // Remember count to avoid duplicate notifications
-    await setInCache(lastNotifiedKey, String(unreadTasks.length));
-
-  } catch (error) {
-    console.warn("SW: checkForNewTasks failed", error);
-  }
-}
-
-// ─── Cache helpers (using Cache API since SW can't use localStorage) ───
-
-async function getFromCache(key) {
-  try {
-    const cache = await caches.open("ft-sw-data");
-    const response = await cache.match(new Request(`/__sw_data__/${key}`));
-    if (response) return await response.text();
-    return null;
+    await setInCache("ft_last_notified", String(unreadTasks.length));
   } catch (e) {
-    return null;
+    console.warn("SW poll failed:", e);
   }
 }
 
-async function setInCache(key, value) {
-  try {
-    const cache = await caches.open("ft-sw-data");
-    await cache.put(
-      new Request(`/__sw_data__/${key}`),
-      new Response(value)
-    );
-  } catch (e) {}
-}
-
-// ─── Sync user session from main app ───
-
+// ─── Message handler (sync user session from app) ───
 self.addEventListener("message", (event) => {
-  if (event.data && event.data.type === "SET_USER") {
+  if (event.data?.type === "SET_USER") {
     setInCache("ft_user", JSON.stringify(event.data.user));
   }
-  if (event.data && event.data.type === "CLEAR_USER") {
+  if (event.data?.type === "CLEAR_USER") {
     setInCache("ft_user", "");
-    setInCache("ft_last_notified_count", "0");
+    setInCache("ft_last_notified", "0");
   }
-  if (event.data && event.data.type === "TASKS_SEEN") {
-    // Reset notification count when user has seen tasks
-    setInCache("ft_last_notified_count", "0");
+  if (event.data?.type === "TASKS_SEEN") {
+    setInCache("ft_last_notified", "0");
   }
 });
 
-// ─── Notification click handler ───
-
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  
-  event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-      // If app is already open, focus it
-      for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && "focus" in client) {
-          return client.focus();
-        }
-      }
-      // Otherwise open new window
-      if (clients.openWindow) {
-        return clients.openWindow("/");
-      }
-    })
-  );
-});
-
-// ─── Periodic polling using setInterval in SW ───
-
+// ─── Lifecycle ───
 let pollTimer = null;
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  // Initial check after 30 seconds
   setTimeout(() => checkForNewTasks(), 30000);
-  // Then every 5 minutes
   pollTimer = setInterval(() => checkForNewTasks(), POLL_INTERVAL);
 }
 
-// Start polling when SW activates
+self.addEventListener("install", () => self.skipWaiting());
+
 self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
   startPolling();
 });
 
-// Also handle install
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
-});
-
-// Restart polling on fetch (keeps SW alive)
-self.addEventListener("fetch", (event) => {
-  // Don't interfere with normal fetches, just use it to keep SW alive
+self.addEventListener("fetch", () => {
   if (!pollTimer) startPolling();
 });
