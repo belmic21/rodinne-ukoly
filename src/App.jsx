@@ -143,7 +143,7 @@ async function triggerPushNotification(task) {
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
+    await fetch(`${supabaseUrl}/functions/v1/super-api`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -157,6 +157,30 @@ async function triggerPushNotification(task) {
     });
   } catch (e) {
     console.warn("Push trigger failed:", e);
+  }
+}
+
+// Trigger push notification when a task is completed (notify the creator)
+async function triggerCompletionNotification(task, completedByUser) {
+  // Only notify if task was assigned by someone ELSE to the completer
+  if (!task.createdBy || task.createdBy === completedByUser) return;
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    await fetch(`${supabaseUrl}/functions/v1/super-api`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        task: { id: task.id, title: `✓ ${completedByUser} splnil: ${task.title}` },
+        assignedTo: [task.createdBy],
+        createdBy: completedByUser,
+      }),
+    });
+  } catch (e) {
+    console.warn("Completion push trigger failed:", e);
   }
 }
 
@@ -675,7 +699,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -711,6 +735,54 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   return (
     <div style={{ marginTop: "10px", paddingLeft: "32px", animation: "fadeIn 0.12s" }}
          onClick={e => e.stopPropagation()}>
+
+      {/* ── Top bar: back to list + cycling priority ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px",
+      }}>
+        <button onClick={onClose} title="Přepnout na seznam"
+          style={{
+            ...buttonStyle(),
+            padding: "6px 10px", fontSize: "12px",
+            background: theme.inputBg, color: theme.textSub,
+            border: `1px solid ${theme.inputBorder}`,
+            display: "flex", alignItems: "center", gap: "4px",
+          }}>
+          ☰ Přepnout na seznam
+        </button>
+
+        {/* Cycling priority icon — matches quick-add bar behavior */}
+        {!taskIsDone && (() => {
+          const currentPri = task.priority || "low";
+          const priObj = getPriority(currentPri);
+          const priTheme = theme.priority[currentPri];
+          const isDefault = currentPri === "low";
+          const cycleNext = () => {
+            // low → important → urgent → low
+            const next = currentPri === "low" ? "important"
+                       : currentPri === "important" ? "urgent"
+                       : "low";
+            onUpdate(task.id, { priority: next });
+          };
+          return (
+            <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu)`}
+              style={{
+                ...buttonStyle(),
+                minWidth: "36px", height: "30px", padding: "0 8px",
+                fontSize: "14px", fontWeight: 800,
+                background: isDefault ? "transparent" : priTheme.cardBg,
+                color: isDefault ? theme.textDim : priTheme.text,
+                border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
+                borderRadius: "8px",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: "3px",
+                opacity: isDefault ? 0.5 : 1,
+                transition: "all 0.15s",
+              }}>
+              ❗ <span style={{ fontSize: "10px" }}>{priObj.label}</span>
+            </button>
+          );
+        })()}
+      </div>
 
       {/* ── Complete banner ── */}
       {showCompleteBanner && !taskIsDone && canAct && (
@@ -768,15 +840,8 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 
       {!taskIsDone && (
         <>
-          {/* ── Quick settings grid ── */}
+          {/* ── Quick settings grid — Kategorie + Pro koho ── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
-            <div>
-              <div style={labelStyle}>Priorita</div>
-              <select value={task.priority} onChange={e => updateField("priority", e.target.value)}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {PRIORITIES.map(p => <option key={p.id} value={p.id}>{p.sym} {p.label}</option>)}
-              </select>
-            </div>
             <div>
               <div style={labelStyle}>Kategorie</div>
               <select value={task.category || "other"} onChange={e => updateField("category", e.target.value)}
@@ -807,13 +872,15 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 <option value="both">Pro všechny</option>
               </select>
             </div>
-            <div>
-              <div style={labelStyle}>Opakování</div>
-              <select value={task.recDays || 0} onChange={e => updateField("recDays", Number(e.target.value))}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-            </div>
+          </div>
+
+          {/* ── Recurrence (full width, standalone) ── */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Opakování</div>
+            <select value={task.recDays || 0} onChange={e => updateField("recDays", Number(e.target.value))}
+              style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
+              {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
           </div>
 
           {/* ── Due date with quick picks ── */}
@@ -1001,9 +1068,9 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         </div>
       )}
 
-      {/* Delete / Trash actions */}
-      {task.status === "deleted" ? (
-        <div style={{ display: "flex", gap: "6px", marginTop: "12px" }}>
+      {/* Trash-view only: Restore + Permanent delete */}
+      {task.status === "deleted" && (
+        <div style={{ display: "flex", gap: "6px", marginTop: "12px", flexWrap: "wrap" }}>
           <button onClick={() => onRestore(task.id)} style={{
             ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
             background: `${theme.green}15`, color: theme.green,
@@ -1011,8 +1078,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           }}>↩ Obnovit</button>
           <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
         </div>
-      ) : (
-        <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onDelete} theme={theme} />
       )}
     </div>
   );
@@ -1261,6 +1326,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onPermanentDelete={onPermanentDelete}
           theme={theme}
           showCompleteBanner={allChecked}
+          onClose={() => setIsOpen(false)}
         />
       )}
     </div>
@@ -1692,19 +1758,28 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
 function StatsBar({ tasks, currentUser, users, theme }) {
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
-  const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
 
-  const myActive = tasks.filter(t => !isDone(t) && t.assignedTo?.includes(currentUser.name));
-  const doneThisWeek = tasks.filter(t =>
+  // Aktivní úkoly které mám plnit JÁ
+  const myActive = tasks.filter(t =>
+    !isDone(t) && !isDeleted(t) && t.assignedTo?.includes(currentUser.name)
+  );
+
+  // Úkoly, které JÁ jsem zadal NĚKOMU DRUHÉMU (ne sobě)
+  const assignedByMeToOthers = tasks.filter(t =>
+    !isDone(t) && !isDeleted(t) &&
+    t.createdBy === currentUser.name &&
+    !t.assignedTo?.every(a => a === currentUser.name)
+  );
+
+  // Úkoly které JÁ jsem splnil za tento týden
+  const doneThisWeekByMe = tasks.filter(t =>
     t.status === "done" && t.completedAt && new Date(t.completedAt) >= weekAgo &&
-    t.assignedTo?.includes(currentUser.name)
+    t.completedByUser === currentUser.name
   ).length;
-  const doneThisMonth = tasks.filter(t =>
-    t.status === "done" && t.completedAt && new Date(t.completedAt) >= monthAgo &&
-    t.assignedTo?.includes(currentUser.name)
-  ).length;
+
   const overdueCount = myActive.filter(t => daysDiff(t.dueDate) < 0).length;
 
+  // Per-user týdenní dokončené — ukáže aktivitu celé rodiny
   const perUserWeek = users.map(u => ({
     name: u.name,
     count: tasks.filter(t =>
@@ -1717,9 +1792,9 @@ function StatsBar({ tasks, currentUser, users, theme }) {
     <div style={{ ...cardStyle(theme), padding: "12px 14px", marginBottom: "14px" }}>
       <div style={{ display: "flex", gap: "4px", marginBottom: perUserWeek.length > 1 ? "8px" : "0" }}>
         {[
-          { value: myActive.length, label: "Zbývá", color: theme.accent },
-          { value: doneThisWeek, label: "Týden", color: theme.green },
-          { value: doneThisMonth, label: "Měsíc", color: theme.green + "aa" },
+          { value: myActive.length, label: "Zbývá mně", color: theme.accent },
+          { value: assignedByMeToOthers.length, label: "Zadáno druhým", color: theme.purple },
+          { value: doneThisWeekByMe, label: "Splněno týden", color: theme.green },
           { value: overdueCount, label: "Po termínu", color: overdueCount > 0 ? theme.red : theme.textDim },
         ].map((stat, i) => (
           <div key={i} style={{ flex: "1 1 0", textAlign: "center" }}>
@@ -2203,6 +2278,9 @@ export default function App() {
     };
     const message = `${actionLabels[action] || "Změněno"}: ${shortTitle}`;
 
+    // Track completion so we can push-notify the creator AFTER state update
+    let completedTaskForNotify = null;
+
     withUndo(message, taskId, prev => prev.map(task => {
       if (task.id !== taskId) return task;
       const now = new Date().toISOString();
@@ -2212,27 +2290,43 @@ export default function App() {
           return { ...task, status: "in_progress" };
         case "cancelled":
           return { ...task, status: "cancelled", completedAt: now, completedByUser: currentUser.name };
-        case "done":
-          return { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
+        case "done": {
+          const updated = { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
+          if (task.createdBy && task.createdBy !== currentUser.name) completedTaskForNotify = updated;
+          return updated;
+        }
         case "done_my": {
           const newDoneBy = [...new Set([...(task.doneBy || []), currentUser.name])];
           const allDone = users.every(u => newDoneBy.includes(u.name));
-          return {
+          const updated = {
             ...task, doneBy: newDoneBy,
             status: allDone ? "done" : task.status,
             completedAt: allDone ? now : task.completedAt,
             completedByUser: allDone ? currentUser.name : task.completedByUser,
           };
+          // Notify creator only when task is FULLY done and creator is someone else
+          if (allDone && task.createdBy && task.createdBy !== currentUser.name) {
+            completedTaskForNotify = updated;
+          }
+          return updated;
         }
-        case "done_all":
-          return { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
+        case "done_all": {
+          const updated = { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
+          if (task.createdBy && task.createdBy !== currentUser.name) completedTaskForNotify = updated;
+          return updated;
+        }
         case "reopen":
           return { ...task, status: "active", completedAt: null, completedByUser: null, doneBy: [] };
         default:
           return task;
       }
     }));
-  }, [currentUser, users, withUndo]);
+
+    // Fire completion notification (push to creator) outside of setState updater
+    if (completedTaskForNotify) {
+      triggerCompletionNotification(completedTaskForNotify, currentUser.name);
+    }
+  }, [currentUser, users, withUndo, tasks]);
 
   const markSeen = useCallback(async (taskId) => {
     let updatedTask = null;
@@ -2466,11 +2560,19 @@ export default function App() {
               ⚙️
             </button>
           )}
-          <button onClick={() => setCurrentUser(null)} style={{
+          {/* Visible user name */}
+          <span style={{
+            fontSize: "12px", fontWeight: 600, color: theme.text,
+            padding: "4px 8px", background: theme.accentSoft,
+            border: `1px solid ${theme.accentBorder}`, borderRadius: "6px",
+          }}>
+            {currentUser.name}
+          </span>
+          <button onClick={() => setCurrentUser(null)} title="Odhlásit se" style={{
             ...buttonStyle(), background: theme.inputBg,
             border: `1px solid ${theme.inputBorder}`,
-            color: theme.textSub, padding: "5px 10px", fontSize: "11px",
-          }}>{currentUser.name}</button>
+            color: theme.textSub, padding: "5px 9px", fontSize: "12px",
+          }}>⏻</button>
         </div>
       </div>
 
