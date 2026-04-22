@@ -1488,6 +1488,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   // quickAssignees is an array of user names. Empty = default "for me".
   const [quickAssignees, setQuickAssignees] = useState([]);
   const [showFrom, setShowFrom] = useState("");
+  // Bottom sheet for compact filter/picker UI
+  const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
 
@@ -1625,203 +1627,316 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
-      {/* Category icon bar — dual purpose: FILTER (when not typing) + CATEGORY pick (when typing) */}
-      {!showFull && (
-        <div style={{
-          display: "flex", gap: "2px", marginTop: "4px",
-          paddingLeft: "4px", overflowX: "auto",
-        }}>
-          {(() => {
-            const isTyping = text.trim().length > 0;
-            return CATEGORIES.filter(c => c.id !== "other").map(cat => {
-              // In typing mode: highlight = quickCategory match
-              // In filter mode: highlight = categoryFilter match
-              const isHighlighted = isTyping ? (quickCategory === cat.id) : (categoryFilter === cat.id);
-              const anyActive = isTyping ? !!quickCategory : (categoryFilter !== "all");
-              const count = categoryCounts?.[cat.id] || 0;
+      {/* Compact filter bar — active chips + "+ Filtry" button + deferred toggle */}
+      {!showFull && (() => {
+        const isTyping = text.trim().length > 0;
+        // Collect ACTIVE chips for display in the bar
+        const chips = [];
 
-              return (
-                <button key={cat.id}
-                  onClick={() => {
-                    if (isTyping) {
-                      // Typing mode → set/toggle category for new task
-                      setQuickCategory(quickCategory === cat.id ? null : cat.id);
-                    } else {
-                      // Filter mode → toggle category filter
-                      onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
-                    }
-                  }}
-                  title={cat.label + (count > 0 ? ` (${count})` : "")}
-                  style={{
-                    ...buttonStyle(),
-                    minWidth: "32px", height: "30px",
-                    padding: "0 4px",
-                    fontSize: "15px",
-                    background: isHighlighted ? theme.accentSoft : "transparent",
-                    border: `2px solid ${isHighlighted ? theme.accentBorder : "transparent"}`,
-                    borderRadius: "8px",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    gap: "2px",
-                    opacity: anyActive && !isHighlighted ? 0.3 : 1,
-                    transition: "all 0.15s",
-                  }}>
-                  {cat.icon}
-                  {count > 0 && !isTyping && (
-                    <span style={{
-                      fontSize: "9px", fontWeight: 700,
-                      color: isHighlighted ? theme.accent : theme.textDim,
-                    }}>{count}</span>
-                  )}
-                </button>
-              );
+        if (isTyping) {
+          // TYPING MODE — chips are picks for new task
+          if (quickCategory) {
+            const cat = getCategory(quickCategory);
+            chips.push({
+              key: "cat", label: cat.icon + " " + cat.label,
+              onRemove: () => setQuickCategory(null),
+              color: theme.accent,
             });
-          })()}
+          }
+          if (quickPriority && quickPriority !== "low") {
+            const pri = getPriority(quickPriority);
+            const pt = theme.priority[quickPriority];
+            chips.push({
+              key: "pri", label: pri.sym + " " + pri.label,
+              onRemove: () => setQuickPriority(null),
+              color: pt.text,
+            });
+          }
+          quickAssignees.forEach(name => {
+            chips.push({
+              key: "a_" + name, label: name,
+              onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)),
+              color: theme.accent,
+            });
+          });
+        } else {
+          // FILTER MODE — chips are active filters
+          if (categoryFilter && categoryFilter !== "all") {
+            const cat = getCategory(categoryFilter);
+            chips.push({
+              key: "cat", label: cat.icon + " " + cat.label,
+              onRemove: () => onCategoryFilterChange("all"),
+              color: theme.accent,
+            });
+          }
+          if (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my") {
+            if (scopeFilter.startsWith("person:")) {
+              const name = scopeFilter.replace("person:", "");
+              chips.push({
+                key: "p", label: "👤 " + name,
+                onRemove: () => onScopeFilterChange("all"),
+                color: theme.accent,
+              });
+            } else {
+              const labels = { assigned: "Zadané", shared: "Společné", unread: "Nové" };
+              chips.push({
+                key: "s", label: labels[scopeFilter] || scopeFilter,
+                onRemove: () => onScopeFilterChange("all"),
+                color: theme.accent,
+              });
+            }
+          }
+        }
 
-          {/* Divider */}
-          <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
-
-          {/* Priority cycling icon — symbol differs per level for readability in sunlight */}
-          {(() => {
-            // Cycle: null(low) → important → urgent → null(low)
-            const currentPri = quickPriority || "low";
-            const priObj = getPriority(currentPri);
-            const priTheme = theme.priority[currentPri];
-            const isDefault = !quickPriority || quickPriority === "low";
-            const cycleNext = () => {
-              if (!quickPriority || quickPriority === "low") setQuickPriority("important");
-              else if (quickPriority === "important") setQuickPriority("urgent");
-              else setQuickPriority(null); // back to low (default)
-            };
-            // Visual symbol reinforces color for sunlight / b&w readability:
-            // low = — (dash), important = ! (single), urgent = ‼ (double)
-            return (
-              <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu)`}
-                style={{
+        return (
+          <div style={{
+            display: "flex", gap: "4px", marginTop: "6px",
+            paddingLeft: "4px", flexWrap: "wrap", alignItems: "center",
+          }}>
+            {/* Chips of active filters/picks */}
+            {chips.map(chip => (
+              <span key={chip.key} style={{
+                display: "inline-flex", alignItems: "center", gap: "4px",
+                padding: "3px 6px 3px 8px", fontSize: "11px", fontWeight: 600,
+                background: chip.color + "15", color: chip.color,
+                border: `1px solid ${chip.color}35`,
+                borderRadius: "14px",
+              }}>
+                {chip.label}
+                <button onClick={chip.onRemove} title="Odebrat" style={{
                   ...buttonStyle(),
-                  minWidth: "38px", height: "30px", padding: "0 6px",
-                  fontSize: "16px", fontWeight: 900,
-                  background: isDefault ? "transparent" : priTheme.cardBg,
-                  color: isDefault ? theme.textDim : priTheme.text,
-                  border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
-                  borderRadius: "8px",
+                  width: "16px", height: "16px", padding: 0,
+                  background: "transparent", color: chip.color,
+                  border: "none", fontSize: "14px", lineHeight: 1,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  transition: "all 0.15s",
-                  opacity: isDefault ? 0.55 : 1,
-                  letterSpacing: currentPri === "urgent" ? "-1px" : "0",
-                }}>
-                {priObj.sym}
-              </button>
-            );
-          })()}
+                }}>×</button>
+              </span>
+            ))}
 
-          {/* Second divider before assignee picker */}
-          <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
-
-          {/* Assignee picker — 2-letter user pills */}
-          {users.map(u => {
-            const isTyping = text.trim().length > 0;
-            const personFilterKey = `person:${u.name}`;
-            // In typing mode: highlighted = user is in quickAssignees
-            // In filter mode: highlighted = user is currently filtered ("my" for self, "person:X" for others)
-            const isHighlighted = isTyping
-              ? quickAssignees.includes(u.name)
-              : (u.name === currentUser.name
-                ? scopeFilter === "my"
-                : scopeFilter === personFilterKey);
-            const anyActive = isTyping
-              ? quickAssignees.length > 0
-              : (scopeFilter && scopeFilter !== "all");
-            const label = getUserLabel(u.name);
-
-            return (
-              <button key={u.name}
-                onClick={() => {
-                  if (isTyping) {
-                    // Typing mode → toggle user in quickAssignees
-                    setQuickAssignees(prev =>
-                      prev.includes(u.name)
-                        ? prev.filter(n => n !== u.name)
-                        : [...prev, u.name]
-                    );
-                  } else {
-                    // Filter mode → toggle scope filter
-                    if (u.name === currentUser.name) {
-                      onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
-                    } else {
-                      onScopeFilterChange && onScopeFilterChange(scopeFilter === personFilterKey ? "all" : personFilterKey);
-                    }
-                  }
-                }}
-                title={u.name + (isTyping ? " — klik = přiřadit" : " — klik = filtrovat")}
-                style={{
-                  ...buttonStyle(),
-                  minWidth: "34px", height: "30px",
-                  padding: "0 6px",
-                  fontSize: "12px", fontWeight: 700,
-                  background: isHighlighted ? theme.accentSoft : "transparent",
-                  color: isHighlighted ? theme.accent : theme.textSub,
-                  border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
-                  borderRadius: "8px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  opacity: anyActive && !isHighlighted ? 0.3 : 1,
-                  transition: "all 0.15s",
-                  flexShrink: 0,
-                }}>
-                {label}
-              </button>
-            );
-          })}
-
-          {/* Third divider before deferred toggle — only shown in filter mode */}
-          {!text.trim() && (
-            <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
-          )}
-
-          {/* Deferred toggle ⏰ — shows/hides deferred tasks in active view (filter mode only) */}
-          {!text.trim() && (
+            {/* Main "+ Filtry" button — opens bottom sheet */}
             <button
-              onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
-              title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
+              onClick={() => setPickerOpen(true)}
+              title={isTyping ? "Přidat kategorii/prioritu/osobu" : "Přidat filtr"}
               style={{
                 ...buttonStyle(),
-                minWidth: "34px", height: "30px", padding: "0 6px",
-                fontSize: "14px",
-                background: showDeferred ? `${theme.purple}15` : "transparent",
-                color: showDeferred ? theme.purple : theme.textDim,
-                border: `2px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
-                borderRadius: "8px",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                opacity: showDeferred ? 1 : 0.5,
-                transition: "all 0.15s",
-                flexShrink: 0,
+                padding: "4px 10px", fontSize: "11px", fontWeight: 600,
+                background: theme.inputBg, color: theme.textSub,
+                border: `1px dashed ${theme.inputBorder}`, borderRadius: "14px",
+                display: "inline-flex", alignItems: "center", gap: "3px",
               }}>
-              ⏰
+              ✛ {isTyping ? "Nastavit" : "Filtry"}
             </button>
-          )}
 
-          {/* Mode indicator / reset filter */}
-          {text.trim() ? (
-            <span style={{
-              fontSize: "9px", color: theme.textMid, display: "flex",
-              alignItems: "center", paddingLeft: "4px", whiteSpace: "nowrap",
-            }}>← výběr</span>
-          ) : (categoryFilter !== "all" || (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my")) && (
-            <button onClick={() => {
-              onCategoryFilterChange("all");
-              onScopeFilterChange && onScopeFilterChange("all");
-            }}
-              title="Zobrazit vše"
+            {/* Spacer */}
+            <span style={{ flex: 1 }} />
+
+            {/* Global deferred toggle — only in filter mode */}
+            {!isTyping && (
+              <button
+                onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
+                title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
+                style={{
+                  ...buttonStyle(),
+                  minWidth: "32px", height: "26px", padding: "0 6px",
+                  fontSize: "13px",
+                  background: showDeferred ? `${theme.purple}15` : "transparent",
+                  color: showDeferred ? theme.purple : theme.textDim,
+                  border: `1px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
+                  borderRadius: "14px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: showDeferred ? 1 : 0.6,
+                }}>
+                ⏰
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Bottom sheet: filter/picker panel — big icons, touch-friendly */}
+      {pickerOpen && !showFull && (() => {
+        const isTyping = text.trim().length > 0;
+        return (
+          <div
+            onClick={() => setPickerOpen(false)}
+            style={{
+              position: "fixed", inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              zIndex: 50,
+              display: "flex", alignItems: "flex-end", justifyContent: "center",
+              animation: "fadeIn 0.15s",
+            }}>
+            <div
+              onClick={e => e.stopPropagation()}
               style={{
-                ...buttonStyle(), minWidth: "32px", height: "30px",
-                fontSize: "11px", color: theme.red,
-                background: "transparent",
-                border: `1px solid ${theme.red}25`,
-                borderRadius: "8px",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>✕</button>
-          )}
-        </div>
-      )}
+                width: "100%", maxWidth: "560px",
+                background: theme.card,
+                borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
+                padding: "14px 16px 24px",
+                maxHeight: "80vh", overflowY: "auto",
+                animation: "slideUp 0.2s",
+              }}>
+              {/* Header */}
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                marginBottom: "16px",
+              }}>
+                <span style={{ fontSize: "14px", fontWeight: 700, color: theme.text }}>
+                  {isTyping ? "Nastavit nový úkol" : "Filtry"}
+                </span>
+                <button onClick={() => setPickerOpen(false)} style={{
+                  ...buttonStyle(), width: "28px", height: "28px", padding: 0,
+                  background: theme.inputBg, color: theme.textSub,
+                  border: `1px solid ${theme.inputBorder}`, fontSize: "14px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>×</button>
+              </div>
+
+              {/* Kategorie section */}
+              <div style={{
+                fontSize: "10px", color: theme.textMid, fontWeight: 700,
+                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+              }}>Kategorie</div>
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px",
+                marginBottom: "16px",
+              }}>
+                {CATEGORIES.filter(c => c.id !== "other").map(cat => {
+                  const isHighlighted = isTyping
+                    ? quickCategory === cat.id
+                    : categoryFilter === cat.id;
+                  const count = categoryCounts?.[cat.id] || 0;
+                  return (
+                    <button key={cat.id}
+                      onClick={() => {
+                        if (isTyping) {
+                          setQuickCategory(quickCategory === cat.id ? null : cat.id);
+                        } else {
+                          onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
+                        }
+                      }}
+                      style={{
+                        ...buttonStyle(),
+                        padding: "10px 4px", fontSize: "13px",
+                        background: isHighlighted ? theme.accentSoft : theme.inputBg,
+                        color: isHighlighted ? theme.accent : theme.text,
+                        border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
+                        borderRadius: "10px",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+                      }}>
+                      <span style={{ fontSize: "22px" }}>{cat.icon}</span>
+                      <span style={{ fontSize: "10px", fontWeight: 600 }}>{cat.label}</span>
+                      {count > 0 && !isTyping && (
+                        <span style={{
+                          fontSize: "9px", color: isHighlighted ? theme.accent : theme.textMid,
+                          fontWeight: 700,
+                        }}>{count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Priorita section */}
+              <div style={{
+                fontSize: "10px", color: theme.textMid, fontWeight: 700,
+                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+              }}>Priorita</div>
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px",
+                marginBottom: "16px",
+              }}>
+                {PRIORITIES.map(pri => {
+                  const priTheme = theme.priority[pri.id];
+                  const activePri = isTyping ? (quickPriority || "low") : null;
+                  const isHighlighted = isTyping && activePri === pri.id;
+                  return (
+                    <button key={pri.id}
+                      onClick={() => {
+                        if (isTyping) {
+                          // low is default — clicking low again means "reset to low"
+                          setQuickPriority(pri.id === "low" ? null : pri.id);
+                        }
+                      }}
+                      disabled={!isTyping}
+                      style={{
+                        ...buttonStyle(),
+                        padding: "10px 6px", fontSize: "12px",
+                        background: isHighlighted ? priTheme.cardBg : theme.inputBg,
+                        color: isHighlighted ? priTheme.text : theme.text,
+                        border: `2px solid ${isHighlighted ? priTheme.border : theme.inputBorder}`,
+                        borderRadius: "10px",
+                        opacity: !isTyping ? 0.4 : 1,
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: "4px",
+                      }}>
+                      <span style={{ fontSize: "20px", fontWeight: 900, color: priTheme.text }}>
+                        {pri.sym}
+                      </span>
+                      <span style={{ fontSize: "11px", fontWeight: 600 }}>{pri.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Pro koho / filter: uživatelé */}
+              <div style={{
+                fontSize: "10px", color: theme.textMid, fontWeight: 700,
+                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+              }}>{isTyping ? "Pro koho" : "Filtr podle osoby"}</div>
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "6px",
+                marginBottom: "12px",
+              }}>
+                {users.map(u => {
+                  const isHighlighted = isTyping
+                    ? quickAssignees.includes(u.name)
+                    : (u.name === currentUser.name
+                      ? scopeFilter === "my"
+                      : scopeFilter === `person:${u.name}`);
+                  return (
+                    <button key={u.name}
+                      onClick={() => {
+                        if (isTyping) {
+                          setQuickAssignees(prev =>
+                            prev.includes(u.name)
+                              ? prev.filter(n => n !== u.name)
+                              : [...prev, u.name]
+                          );
+                        } else {
+                          if (u.name === currentUser.name) {
+                            onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
+                          } else {
+                            const key = `person:${u.name}`;
+                            onScopeFilterChange && onScopeFilterChange(scopeFilter === key ? "all" : key);
+                          }
+                        }
+                      }}
+                      style={{
+                        ...buttonStyle(),
+                        padding: "10px 8px", fontSize: "13px", fontWeight: 600,
+                        background: isHighlighted ? theme.accentSoft : theme.inputBg,
+                        color: isHighlighted ? theme.accent : theme.text,
+                        border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
+                        borderRadius: "10px",
+                      }}>
+                      {u.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Done button */}
+              <button onClick={() => setPickerOpen(false)} style={{
+                ...buttonStyle(), width: "100%", padding: "12px",
+                background: theme.accent, color: "#fff", fontSize: "14px",
+                marginTop: "8px",
+              }}>
+                Hotovo
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Extended form */}
       {showFull && (
