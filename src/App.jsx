@@ -73,8 +73,8 @@ function formatFullDate(iso) {
 }
 
 function isForgotten(task) {
-  return !isDone(task) && !task.dueDate &&
-    (Date.now() - new Date(task.createdAt).getTime()) / 86400000 > 30;
+  return !isDone(task) && !task.dueDate && !task.showFrom &&
+    (Date.now() - new Date(task.createdAt).getTime()) / 86400000 > 7;
 }
 
 function addDays(n) {
@@ -123,6 +123,40 @@ function smartSort(a, b) {
 function notify(title, body) {
   if ("Notification" in window && Notification.permission === "granted") {
     try { new Notification(title, { body, icon: "/icon-192.png" }); } catch (e) {}
+  }
+}
+
+// Convert VAPID public key for push subscription
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+// Trigger push notification via Supabase Edge Function
+async function triggerPushNotification(task) {
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        task: { id: task.id, title: task.title },
+        assignedTo: task.assignedTo,
+        createdBy: task.createdBy,
+      }),
+    });
+  } catch (e) {
+    console.warn("Push trigger failed:", e);
   }
 }
 
@@ -775,6 +809,44 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             />
           </div>
 
+          {/* ── Show from — deferred tasks ── */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>
+              Zobrazit od {task.showFrom && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(task.showFrom)}</span>}
+            </div>
+            <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
+              {[
+                { label: "Za týden", value: addDays(7) },
+                { label: "Za 14d", value: addDays(14) },
+                { label: "Za měsíc", value: addDays(30) },
+                { label: "Za 2 měsíce", value: addDays(60) },
+              ].map(sf => (
+                <button key={sf.label} onClick={() => updateField("showFrom", sf.value)} style={{
+                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
+                  background: task.showFrom === sf.value ? theme.accentSoft : theme.inputBg,
+                  color: task.showFrom === sf.value ? theme.accent : theme.textSub,
+                  border: `1px solid ${task.showFrom === sf.value ? theme.accentBorder : theme.inputBorder}`,
+                }}>{sf.label}</button>
+              ))}
+              {task.showFrom && (
+                <button onClick={() => updateField("showFrom", null)} style={{
+                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
+                  background: "transparent", color: theme.red,
+                  border: `1px solid ${theme.red}25`,
+                }}>✕ Zobrazit hned</button>
+              )}
+            </div>
+            <input type="date" value={task.showFrom || ""}
+              onChange={e => updateField("showFrom", e.target.value || null)}
+              style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px" }}
+            />
+            {task.showFrom && (
+              <div style={{ fontSize: "11px", color: theme.accent, marginTop: "3px" }}>
+                📅 Úkol se zobrazí od {formatDate(task.showFrom)}{task.dueDate ? `, termín ${formatDate(task.dueDate)}` : ""}
+              </div>
+            )}
+          </div>
+
           {/* ── Season months for recurring ── */}
           {task.recDays > 0 && (
             <div style={{ marginBottom: "8px" }}>
@@ -950,20 +1022,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (task.assignTo === "both") assignLabel = "Všichni";
   else if (task.createdBy !== task.assignedTo?.[0]) assignLabel = `→ ${task.assignedTo?.[0]}`;
 
-  // Card background — STRONG priority colors
-  let cardBackground = priorityTheme.cardBg;
-  let cardBorderColor = priorityTheme.border;
+  // Card background — WHITE by default, color only for special states
+  let cardBackground = theme.card; // White/neutral default
+  let cardBorderColor = theme.cardBorder;
 
+  // Special states override background
+  if (forgotten && !taskIsDone) { cardBackground = `${theme.purple}0a`; cardBorderColor = `${theme.purple}40`; }
   if (isNew) { cardBackground = theme.unreadBg; cardBorderColor = theme.unreadBorder; }
   if (overdue && !taskIsDone) { cardBackground = `${theme.red}0c`; cardBorderColor = theme.red; }
   if (taskIsDone) { cardBackground = theme.card; cardBorderColor = theme.cardBorder; }
 
-  // Left border color
+  // Left border color — priority color by default, overridden by state
   let leftBorderColor = priorityTheme.text;
+  if (forgotten) leftBorderColor = theme.purple;
+  if (soon) leftBorderColor = theme.yellow;
   if (overdue) leftBorderColor = theme.red;
-  else if (soon) leftBorderColor = theme.yellow;
-  else if (isNew) leftBorderColor = theme.green;
-  else if (forgotten) leftBorderColor = theme.purple;
+  if (isNew) leftBorderColor = theme.green;
 
   return (
     <div onClick={handleClick} style={{
@@ -994,7 +1068,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           position: "absolute", top: "7px", right: isNew ? "50px" : "9px",
           background: theme.purple, color: "#fff",
           fontSize: "8px", fontWeight: 800, padding: "2px 6px", borderRadius: "4px",
-        }}>30+d</span>
+        }}>⚠ 7+d</span>
       )}
       {allChecked && !taskIsDone && (
         <span style={{
@@ -1111,6 +1185,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {assignLabel && <span style={{ fontSize: "10px", color: theme.textMid }}>{assignLabel}</span>}
             {task.recDays > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>🔄</span>}
             {task.images?.length > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>📷</span>}
+            {task.showFrom && daysDiff(task.showFrom) > 0 && (
+              <span style={{ fontSize: "10px", fontWeight: 600, color: theme.purple }}>
+                ⏰ od {formatDate(task.showFrom)}
+              </span>
+            )}
             {task.dueDate && (
               <span style={{
                 fontSize: "10px", fontWeight: 600,
@@ -1167,6 +1246,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [initialChecklist, setInitialChecklist] = useState([]);
   const [checklistInput, setChecklistInput] = useState("");
   const [quickCategory, setQuickCategory] = useState(null);
+  const [quickPriority, setQuickPriority] = useState(null); // null = default "important"
+  const [showFrom, setShowFrom] = useState("");
   const inputRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
 
@@ -1180,8 +1261,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     assignedTo: assign === "self" ? [currentUser.name]
       : assign === "person" ? [otherUsers[0]?.name || currentUser.name]
       : users.map(u => u.name),
-    priority,
+    priority: quickPriority || priority,
     dueDate: dueDate || null,
+    showFrom: showFrom || null,
     recDays: recurrence,
     category: quickCategory || (category === "other" ? autoDetectCategory(title) : category),
     activeMo: [],
@@ -1200,6 +1282,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     onAdd(createTaskObject(text.trim()));
     setText("");
     setQuickCategory(null);
+    setQuickPriority(null);
     inputRef.current?.focus();
   };
 
@@ -1212,8 +1295,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const resetForm = () => {
     setText(""); setNote(""); setDueDate(""); setRecurrence(0);
     setPriority("important"); setAssign("self"); setCategory("other");
-    setType("simple"); setShowFull(false);
-    setInitialChecklist([]); setChecklistInput("");
+    setType("simple"); setShowFull(false); setShowFrom("");
+    setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
+    setQuickPriority(null);
   };
 
   const labelStyle = {
@@ -1244,7 +1328,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           placeholder="Napiš úkol a stiskni Enter..."
           value={text}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !showFull) quickSubmit(); }}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (showFull) fullSubmit(); else quickSubmit(); } }}
           style={{
             background: "transparent", border: "none", color: theme.text,
             padding: "8px 4px", fontSize: "14px", fontFamily: FONT,
@@ -1269,50 +1353,58 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           display: "flex", gap: "2px", marginTop: "4px",
           paddingLeft: "4px", overflowX: "auto",
         }}>
-          {CATEGORIES.filter(c => c.id !== "other").map(cat => {
-            const isActiveFilter = categoryFilter === cat.id;
-            const isQuickPick = quickCategory === cat.id;
-            const isHighlighted = isActiveFilter || isQuickPick;
-            const count = categoryCounts?.[cat.id] || 0;
+          {(() => {
+            const isTyping = text.trim().length > 0;
+            return CATEGORIES.filter(c => c.id !== "other").map(cat => {
+              // In typing mode: highlight = quickCategory match
+              // In filter mode: highlight = categoryFilter match
+              const isHighlighted = isTyping ? (quickCategory === cat.id) : (categoryFilter === cat.id);
+              const anyActive = isTyping ? !!quickCategory : (categoryFilter !== "all");
+              const count = categoryCounts?.[cat.id] || 0;
 
-            return (
-              <button key={cat.id}
-                onClick={() => {
-                  if (text.trim()) {
-                    // Typing mode → set category for new task
-                    setQuickCategory(quickCategory === cat.id ? null : cat.id);
-                  } else {
-                    // Filter mode → toggle category filter
-                    onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
-                  }
-                }}
-                title={cat.label + (count > 0 ? ` (${count})` : "")}
-                style={{
-                  ...buttonStyle(),
-                  minWidth: "32px", height: "30px",
-                  padding: "0 4px",
-                  fontSize: "15px",
-                  background: isHighlighted ? theme.accentSoft : "transparent",
-                  border: `2px solid ${isHighlighted ? theme.accentBorder : "transparent"}`,
-                  borderRadius: "8px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  gap: "2px",
-                  opacity: (categoryFilter !== "all" || quickCategory) && !isHighlighted ? 0.3 : 1,
-                  transition: "all 0.15s",
-                  position: "relative",
-                }}>
-                {cat.icon}
-                {count > 0 && !text.trim() && (
-                  <span style={{
-                    fontSize: "9px", fontWeight: 700,
-                    color: isActiveFilter ? theme.accent : theme.textDim,
-                  }}>{count}</span>
-                )}
-              </button>
-            );
-          })}
-          {/* Reset filter button */}
-          {categoryFilter !== "all" && !text.trim() && (
+              return (
+                <button key={cat.id}
+                  onClick={() => {
+                    if (isTyping) {
+                      // Typing mode → set/toggle category for new task
+                      setQuickCategory(quickCategory === cat.id ? null : cat.id);
+                    } else {
+                      // Filter mode → toggle category filter
+                      onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
+                    }
+                  }}
+                  title={cat.label + (count > 0 ? ` (${count})` : "")}
+                  style={{
+                    ...buttonStyle(),
+                    minWidth: "32px", height: "30px",
+                    padding: "0 4px",
+                    fontSize: "15px",
+                    background: isHighlighted ? theme.accentSoft : "transparent",
+                    border: `2px solid ${isHighlighted ? theme.accentBorder : "transparent"}`,
+                    borderRadius: "8px",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    gap: "2px",
+                    opacity: anyActive && !isHighlighted ? 0.3 : 1,
+                    transition: "all 0.15s",
+                  }}>
+                  {cat.icon}
+                  {count > 0 && !isTyping && (
+                    <span style={{
+                      fontSize: "9px", fontWeight: 700,
+                      color: isHighlighted ? theme.accent : theme.textDim,
+                    }}>{count}</span>
+                  )}
+                </button>
+              );
+            });
+          })()}
+          {/* Mode indicator */}
+          {text.trim() ? (
+            <span style={{
+              fontSize: "9px", color: theme.textMid, display: "flex",
+              alignItems: "center", paddingLeft: "4px", whiteSpace: "nowrap",
+            }}>← kategorie</span>
+          ) : categoryFilter !== "all" && (
             <button onClick={() => onCategoryFilterChange("all")}
               title="Zobrazit vše"
               style={{
@@ -1324,6 +1416,38 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>✕</button>
           )}
+        </div>
+      )}
+
+      {/* Priority quick-pick icons — visible when typing */}
+      {!showFull && text.trim() && (
+        <div style={{
+          display: "flex", gap: "3px", marginTop: "3px",
+          paddingLeft: "4px", alignItems: "center",
+        }}>
+          <span style={{ fontSize: "9px", color: theme.textMid, marginRight: "2px" }}>Priorita:</span>
+          {PRIORITIES.map(p => {
+            const isActive = quickPriority === p.id;
+            const priTheme = theme.priority[p.id];
+            return (
+              <button key={p.id}
+                onClick={() => setQuickPriority(quickPriority === p.id ? null : p.id)}
+                style={{
+                  ...buttonStyle(),
+                  padding: "3px 8px",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  background: isActive ? priTheme.cardBg : "transparent",
+                  color: isActive ? priTheme.text : theme.textDim,
+                  border: `1.5px solid ${isActive ? priTheme.border : "transparent"}`,
+                  borderRadius: "6px",
+                  opacity: quickPriority && !isActive ? 0.4 : 1,
+                  transition: "all 0.12s",
+                }}>
+                {p.sym} {p.label}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -1469,6 +1593,41 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             />
           </div>
 
+          {/* Show from — deferred tasks */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Zobrazit od (odložit úkol)</div>
+            <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
+              {[
+                { label: "Za týden", value: addDays(7) },
+                { label: "Za 14d", value: addDays(14) },
+                { label: "Za měsíc", value: addDays(30) },
+                { label: "Za 2 měsíce", value: addDays(60) },
+              ].map(sf => (
+                <button key={sf.label} onClick={() => setShowFrom(sf.value)} style={{
+                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
+                  background: showFrom === sf.value ? theme.accentSoft : theme.inputBg,
+                  color: showFrom === sf.value ? theme.accent : theme.textSub,
+                  border: `1px solid ${showFrom === sf.value ? theme.accentBorder : theme.inputBorder}`,
+                }}>{sf.label}</button>
+              ))}
+              {showFrom && (
+                <button onClick={() => setShowFrom("")} style={{
+                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
+                  background: "transparent", color: theme.red,
+                  border: `1px solid ${theme.red}25`,
+                }}>✕</button>
+              )}
+            </div>
+            <input type="date" value={showFrom} onChange={e => setShowFrom(e.target.value)}
+              style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px" }}
+            />
+            {showFrom && (
+              <div style={{ fontSize: "11px", color: theme.accent, marginTop: "3px" }}>
+                📅 Úkol se zobrazí od {formatDate(showFrom)}{dueDate ? `, termín ${formatDate(dueDate)}` : ""}
+              </div>
+            )}
+          </div>
+
           <div style={{ display: "flex", gap: "8px" }}>
             <button onClick={fullSubmit} style={{
               ...buttonStyle(), flex: 1, padding: "11px",
@@ -1579,7 +1738,7 @@ function Legend({ theme }) {
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           <span style={{ width: "14px", height: "3px", borderRadius: "2px", background: theme.purple }} />
-          <span style={{ color: theme.textSub }}>Zapomenuté 30+d</span>
+          <span style={{ color: theme.textSub }}>Zapomenuté ⚠ 7+d</span>
         </span>
       </div>
     </div>
@@ -1847,17 +2006,39 @@ export default function App() {
       Notification.requestPermission();
     }
 
-    // Register custom polling service worker
+    // Register custom polling service worker + push subscription
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw-polling.js", { scope: "/" })
-        .then(reg => {
-          console.log("✅ Polling SW registered");
+        .then(async (reg) => {
+          console.log("✅ SW registered");
+
+          // Subscribe to push notifications
+          if ("PushManager" in window && Notification.permission === "granted") {
+            try {
+              const existingSub = await reg.pushManager.getSubscription();
+              if (!existingSub) {
+                const subscription = await reg.pushManager.subscribe({
+                  userVisibleOnly: true,
+                  applicationServerKey: urlBase64ToUint8Array(
+                    import.meta.env.VITE_VAPID_PUBLIC_KEY || ""
+                  ),
+                });
+                console.log("✅ Push subscription created");
+                // Save subscription to Supabase (will be linked to user on login)
+                try {
+                  localStorage.setItem("ft_push_sub", JSON.stringify(subscription.toJSON()));
+                } catch (e) {}
+              }
+            } catch (err) {
+              console.warn("Push subscription failed:", err);
+            }
+          }
         })
         .catch(err => console.warn("SW registration failed:", err));
     }
   }, []);
 
-  // Sync user session to service worker
+  // Sync user session to service worker + save push subscription for user
   useEffect(() => {
     if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
       if (currentUser) {
@@ -1865,6 +2046,20 @@ export default function App() {
           type: "SET_USER",
           user: currentUser,
         });
+
+        // Link push subscription to user in Supabase
+        try {
+          const subJson = localStorage.getItem("ft_push_sub");
+          if (subJson) {
+            const subscription = JSON.parse(subJson);
+            supabase.from("push_subscriptions")
+              .upsert(
+                { user_name: currentUser.name, subscription },
+                { onConflict: "user_name,subscription" }
+              )
+              .then(() => console.log("✅ Push sub linked to", currentUser.name));
+          }
+        } catch (e) {}
       } else {
         navigator.serviceWorker.controller.postMessage({ type: "CLEAR_USER" });
       }
@@ -1952,6 +2147,8 @@ export default function App() {
     setPendingCount(getOfflineQueue().length);
     if (task.assignTo !== "self") {
       notify(`📋 Nový od ${task.createdBy}`, task.title);
+      // Trigger push notification to other users
+      triggerPushNotification(task);
     }
   }, []);
 
@@ -2101,6 +2298,15 @@ export default function App() {
     else if (filter === "assigned") result = result.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name));
     else if (filter === "shared") result = result.filter(t => t.assignTo === "both");
     else if (filter === "unread") result = result.filter(t => !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name);
+    else if (filter === "planned") result = result.filter(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t));
+
+    // Hide future planned tasks from all views EXCEPT "planned" filter
+    if (filter !== "planned" && filter !== "all") {
+      result = result.filter(t => {
+        if (!t.showFrom) return true; // No showFrom = always visible
+        return daysDiff(t.showFrom) <= 0; // Show only if showFrom date has arrived
+      });
+    }
 
     // Category filter
     if (categoryFilter !== "all") result = result.filter(t => t.category === categoryFilter);
@@ -2128,10 +2334,12 @@ export default function App() {
   const stats = useMemo(() => {
     if (!currentUser) return {};
     const activeTasks = tasks.filter(t => !isDone(t) && !isDeleted(t));
+    const plannedCount = activeTasks.filter(t => t.showFrom && daysDiff(t.showFrom) > 0).length;
     return {
       my: activeTasks.filter(t => t.assignedTo?.includes(currentUser.name)).length,
       assigned: activeTasks.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
       shared: activeTasks.filter(t => t.assignTo === "both").length,
+      planned: plannedCount,
     };
   }, [tasks, currentUser]);
 
@@ -2285,6 +2493,7 @@ export default function App() {
             ))}
             <option value="assigned">Zadané ({stats.assigned})</option>
             <option value="shared">Společné ({stats.shared})</option>
+            <option value="planned">⏰ Plánované ({stats.planned})</option>
             <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
             <option value="all">Vše</option>
           </select>
