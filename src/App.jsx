@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { supabase, dbToTask, taskToDb, dbToUser } from "./supabase.js";
+import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 
 /* ═══════════════════════════════════════════════════════
    CONFIGURATION
@@ -320,6 +320,10 @@ const GLOBAL_CSS = `
   50% { opacity: 0.6; transform: scale(0.98); }
   100% { opacity: 0.35; transform: scale(1); }
 }
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.15); opacity: 0.85; }
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
 body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
@@ -401,6 +405,10 @@ async function flushOfflineQueue() {
         await supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
       } else if (action.type === "create_user") {
         await supabase.from("users").insert({ name: action.user.name, pin: action.user.pin, is_admin: action.user.admin });
+      } else if (action.type === "create_comment") {
+        await supabase.from("task_comments").insert(commentToDb(action.comment));
+      } else if (action.type === "update_comment") {
+        await supabase.from("task_comments").update(commentToDb(action.comment)).eq("id", action.comment.id);
       }
       flushed++;
     } catch (e) {
@@ -494,11 +502,68 @@ async function apiUpdateTasks(tasks) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   COMMENTS API (with offline fallback via cache)
+   ═══════════════════════════════════════════════════════ */
+
+const CACHE_COMMENTS = "ft_cache_comments";
+const REACTION_EMOJIS = ["👍", "❤️", "❓", "✅"];
+
+async function apiLoadComments() {
+  try {
+    const { data, error } = await supabase.from("task_comments")
+      .select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    const comments = (data || []).map(dbToComment);
+    cacheSet(CACHE_COMMENTS, comments);
+    return comments;
+  } catch (e) {
+    console.warn("apiLoadComments offline, using cache");
+    return cacheGet(CACHE_COMMENTS) || [];
+  }
+}
+
+async function apiCreateComment(comment) {
+  const cached = cacheGet(CACHE_COMMENTS) || [];
+  cacheSet(CACHE_COMMENTS, [...cached, comment]);
+  try {
+    const { error } = await supabase.from("task_comments").insert(commentToDb(comment));
+    if (error) throw error;
+  } catch (e) {
+    console.warn("apiCreateComment offline, queued");
+    addToOfflineQueue({ type: "create_comment", comment });
+  }
+}
+
+async function apiUpdateComment(comment) {
+  const cached = cacheGet(CACHE_COMMENTS) || [];
+  cacheSet(CACHE_COMMENTS, cached.map(c => c.id === comment.id ? comment : c));
+  try {
+    const { error } = await supabase.from("task_comments")
+      .update(commentToDb(comment)).eq("id", comment.id);
+    if (error) throw error;
+  } catch (e) {
+    addToOfflineQueue({ type: "update_comment", comment });
+  }
+}
+
+async function apiDeleteComment(commentId) {
+  try {
+    await supabase.from("task_comments").delete().eq("id", commentId);
+    const cached = cacheGet(CACHE_COMMENTS) || [];
+    cacheSet(CACHE_COMMENTS, cached.filter(c => c.id !== commentId));
+  } catch (e) {
+    console.warn("apiDeleteComment failed");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
    CHECKLIST COMPONENT
    ═══════════════════════════════════════════════════════ */
 
-function Checklist({ items = [], onChange, userName, theme, onAllCompleted }) {
+function Checklist({ items = [], onChange, userName, theme, onAllCompleted, taskId, comments = [], onAddComment, onToggleReaction }) {
   const [newItemText, setNewItemText] = useState("");
+  const [expandedItem, setExpandedItem] = useState(null);   // ID položky s otevřeným komentářovým panelem
+  const [itemCommentInput, setItemCommentInput] = useState("");
 
   const addItem = () => {
     if (!newItemText.trim()) return;
@@ -531,6 +596,12 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted }) {
     }
   };
 
+  const sendItemComment = (itemId) => {
+    if (!itemCommentInput.trim() || !onAddComment || !taskId) return;
+    onAddComment(taskId, itemCommentInput.trim(), itemId);
+    setItemCommentInput("");
+  };
+
   const doneCount = items.filter(i => i.done).length;
   const totalCount = items.length;
 
@@ -543,40 +614,175 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted }) {
         Checklist ({doneCount}/{totalCount})
       </div>
 
-      {items.map(item => (
-        <div key={item.id} style={{
-          display: "flex", alignItems: "center", gap: "8px",
-          padding: "6px 8px", borderRadius: "6px",
-          background: item.done ? `${theme.green}08` : theme.inputBg,
-          border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
-          marginBottom: "3px",
-        }}>
-          <button onClick={() => toggleItem(item.id)} style={{
-            width: "22px", height: "22px", minWidth: "22px",
-            borderRadius: "5px",
-            border: `2px solid ${item.done ? theme.green : theme.textDim}`,
-            background: item.done ? theme.green : "transparent",
-            cursor: "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#fff", fontSize: "11px", fontWeight: 800,
-          }}>
-            {item.done && "✓"}
-          </button>
-          <span style={{
-            flex: 1, fontSize: "13px",
-            color: item.done ? theme.textSub : theme.text,
-            textDecoration: item.done ? "line-through" : "none",
-            lineHeight: 1.3,
-          }}>
-            {item.text}
-            {item.done && item.doneBy && (
-              <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
-                — {item.doneBy}
+      {items.map(item => {
+        // Komentáře a reakce specifické pro tuto položku
+        const itemComments = comments.filter(c => c.checklistItemId === item.id);
+        const itemTextComments = itemComments.filter(c => c.type === "comment" || c.type === "system");
+        const itemReactions = itemComments.filter(c => c.type === "reaction");
+        const reactionsByEmoji = {};
+        itemReactions.forEach(r => {
+          if (!reactionsByEmoji[r.reaction]) reactionsByEmoji[r.reaction] = [];
+          reactionsByEmoji[r.reaction].push(r);
+        });
+        const isExpanded = expandedItem === item.id;
+        const hasActivity = itemComments.length > 0;
+
+        return (
+          <div key={item.id} style={{ marginBottom: "3px" }}>
+            {/* Row — checkbox + text + expand button */}
+            <div style={{
+              display: "flex", alignItems: "center", gap: "8px",
+              padding: "6px 8px", borderRadius: "6px",
+              background: item.done ? `${theme.green}08` : theme.inputBg,
+              border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
+            }}>
+              <button onClick={() => toggleItem(item.id)} style={{
+                width: "22px", height: "22px", minWidth: "22px",
+                borderRadius: "5px",
+                border: `2px solid ${item.done ? theme.green : theme.textDim}`,
+                background: item.done ? theme.green : "transparent",
+                cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: "#fff", fontSize: "11px", fontWeight: 800,
+              }}>
+                {item.done && "✓"}
+              </button>
+              <span style={{
+                flex: 1, fontSize: "13px",
+                color: item.done ? theme.textSub : theme.text,
+                textDecoration: item.done ? "line-through" : "none",
+                lineHeight: 1.3,
+              }}>
+                {item.text}
+                {item.done && item.doneBy && (
+                  <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
+                    — {item.doneBy}
+                  </span>
+                )}
               </span>
+
+              {/* Comment/reaction indicator + toggle button */}
+              {taskId && onAddComment && (
+                <button
+                  onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                  title={hasActivity ? `${itemComments.length} komentářů/reakcí` : "Přidat komentář"}
+                  style={{
+                    ...buttonStyle(),
+                    minWidth: "28px", height: "22px", padding: "0 6px",
+                    fontSize: "11px",
+                    background: isExpanded ? theme.accentSoft : (hasActivity ? theme.accentSoft : "transparent"),
+                    color: hasActivity ? theme.accent : theme.textDim,
+                    border: `1px solid ${hasActivity ? theme.accentBorder : theme.inputBorder}`,
+                    borderRadius: "10px",
+                    display: "flex", alignItems: "center", gap: "3px",
+                  }}>
+                  💬
+                  {itemComments.length > 0 && (
+                    <span style={{ fontSize: "9px", fontWeight: 700 }}>{itemComments.length}</span>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {/* Expanded comment panel */}
+            {isExpanded && taskId && onAddComment && (
+              <div style={{
+                marginLeft: "30px", marginTop: "4px", padding: "8px 10px",
+                background: theme.inputBg,
+                border: `1px solid ${theme.accentBorder}`,
+                borderLeft: `3px solid ${theme.accent}`,
+                borderRadius: "0 6px 6px 0",
+                animation: "slideUp 0.15s",
+              }}>
+                {/* Reaction bar */}
+                {onToggleReaction && (
+                  <div style={{ display: "flex", gap: "3px", marginBottom: "6px", flexWrap: "wrap" }}>
+                    {REACTION_EMOJIS.map(emoji => {
+                      const list = reactionsByEmoji[emoji] || [];
+                      const mine = list.some(r => r.author === userName);
+                      return (
+                        <button key={emoji}
+                          onClick={() => onToggleReaction(taskId, emoji, item.id)}
+                          title={list.length > 0 ? list.map(r => r.author).join(", ") : "Reagovat"}
+                          style={{
+                            ...buttonStyle(),
+                            padding: "2px 7px", fontSize: "12px",
+                            background: mine ? theme.accentSoft : theme.card,
+                            color: mine ? theme.accent : theme.textSub,
+                            border: `1px solid ${mine ? theme.accentBorder : theme.inputBorder}`,
+                            borderRadius: "10px",
+                            display: "inline-flex", alignItems: "center", gap: "2px",
+                          }}>
+                          <span>{emoji}</span>
+                          {list.length > 0 && (
+                            <span style={{ fontSize: "9px", fontWeight: 700 }}>{list.length}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Comments */}
+                {itemTextComments.length > 0 && (
+                  <div style={{ marginBottom: "6px" }}>
+                    {itemTextComments.map(c => {
+                      const isMine = c.author === userName;
+                      return (
+                        <div key={c.id} style={{
+                          padding: "4px 8px", marginBottom: "3px",
+                          background: isMine ? `${theme.accent}10` : theme.card,
+                          borderRadius: "6px", fontSize: "11px",
+                          border: `1px solid ${isMine ? theme.accentBorder : theme.cardBorder}`,
+                        }}>
+                          <div style={{
+                            display: "flex", alignItems: "center", gap: "5px",
+                            marginBottom: "1px",
+                          }}>
+                            <span style={{ fontWeight: 700, color: theme.text, fontSize: "10px" }}>
+                              {c.author}
+                            </span>
+                            <span style={{ fontSize: "9px", color: theme.textMid }}>
+                              {new Date(c.createdAt).toLocaleString("cs-CZ", {
+                                day: "numeric", month: "short",
+                                hour: "2-digit", minute: "2-digit",
+                              })}
+                            </span>
+                          </div>
+                          <div style={{ color: theme.text, lineHeight: 1.35 }}>
+                            {c.content}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Input for new comment on this item */}
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <input
+                    type="text"
+                    value={itemCommentInput}
+                    onChange={e => setItemCommentInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && sendItemComment(item.id)}
+                    placeholder={`Komentář k: ${item.text.slice(0, 24)}${item.text.length > 24 ? "…" : ""}`}
+                    style={{ ...inputStyle(theme), fontSize: "11px", padding: "6px 8px", flex: 1 }}
+                  />
+                  <button
+                    onClick={() => sendItemComment(item.id)}
+                    disabled={!itemCommentInput.trim()}
+                    style={{
+                      ...buttonStyle(), padding: "6px 10px", fontSize: "12px",
+                      background: itemCommentInput.trim() ? theme.accent : theme.buttonBg,
+                      color: "#fff",
+                      opacity: itemCommentInput.trim() ? 1 : 0.4,
+                    }}>→</button>
+                </div>
+              </div>
             )}
-          </span>
-        </div>
-      ))}
+          </div>
+        );
+      })}
 
       <div style={{ display: "flex", gap: "5px", marginTop: "5px" }}>
         <input
@@ -712,10 +918,152 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   TASK COMMENTS — chat panel shown inside TaskDetail
+   ═══════════════════════════════════════════════════════ */
+
+function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, onMarkSeen, theme }) {
+  const [input, setInput] = useState("");
+
+  // Separate comments from reactions
+  const textComments = comments.filter(c => c.type === "comment" || c.type === "system");
+  const reactions = comments.filter(c => c.type === "reaction");
+
+  // Group reactions by emoji
+  const reactionsByEmoji = {};
+  reactions.forEach(r => {
+    if (!reactionsByEmoji[r.reaction]) reactionsByEmoji[r.reaction] = [];
+    reactionsByEmoji[r.reaction].push(r);
+  });
+
+  // Auto mark as seen on mount/when comments change
+  useEffect(() => {
+    const unseen = comments.filter(c =>
+      c.author !== currentUser.name && !c.seenBy?.includes(currentUser.name)
+    );
+    if (unseen.length > 0 && onMarkSeen) {
+      onMarkSeen(unseen.map(c => c.id));
+    }
+  }, [comments, currentUser.name, onMarkSeen]);
+
+  const submit = () => {
+    if (input.trim()) {
+      onAdd(input.trim());
+      setInput("");
+    }
+  };
+
+  return (
+    <div style={{
+      marginTop: "12px", paddingTop: "10px",
+      borderTop: `1px solid ${theme.cardBorder}`,
+    }} onClick={e => e.stopPropagation()}>
+      <div style={{
+        fontSize: "10px", color: theme.textMid, fontWeight: 700,
+        marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+        display: "flex", alignItems: "center", gap: "6px",
+      }}>
+        💬 Komentáře {textComments.length > 0 && `(${textComments.length})`}
+      </div>
+
+      {/* Reaction bar */}
+      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "8px" }}>
+        {REACTION_EMOJIS.map(emoji => {
+          const list = reactionsByEmoji[emoji] || [];
+          const mine = list.some(r => r.author === currentUser.name);
+          return (
+            <button key={emoji}
+              onClick={() => onToggleReaction(emoji)}
+              title={list.length > 0 ? list.map(r => r.author).join(", ") : "Reagovat"}
+              style={{
+                ...buttonStyle(),
+                padding: "3px 8px", fontSize: "13px",
+                background: mine ? theme.accentSoft : theme.inputBg,
+                color: mine ? theme.accent : theme.textSub,
+                border: `1px solid ${mine ? theme.accentBorder : theme.inputBorder}`,
+                borderRadius: "12px",
+                display: "inline-flex", alignItems: "center", gap: "3px",
+              }}>
+              <span>{emoji}</span>
+              {list.length > 0 && (
+                <span style={{ fontSize: "10px", fontWeight: 700 }}>{list.length}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Comments list */}
+      {textComments.length > 0 && (
+        <div style={{ marginBottom: "8px" }}>
+          {textComments.map(c => {
+            const isMine = c.author === currentUser.name;
+            const isSystem = c.type === "system";
+            return (
+              <div key={c.id} style={{
+                padding: "6px 10px", marginBottom: "4px",
+                background: isSystem
+                  ? `${theme.purple}08`
+                  : (isMine ? theme.accentSoft : theme.inputBg),
+                borderRadius: "8px", fontSize: "12px",
+                border: `1px solid ${isSystem ? theme.purple + "25" : (isMine ? theme.accentBorder : theme.inputBorder)}`,
+              }}>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: "6px",
+                  marginBottom: "2px",
+                }}>
+                  <span style={{
+                    fontWeight: 700,
+                    color: isSystem ? theme.purple : theme.text,
+                    fontSize: "11px",
+                  }}>
+                    {isSystem ? "✏️ " : ""}{c.author}
+                  </span>
+                  <span style={{ fontSize: "10px", color: theme.textMid }}>
+                    {new Date(c.createdAt).toLocaleString("cs-CZ", {
+                      day: "numeric", month: "short",
+                      hour: "2-digit", minute: "2-digit",
+                    })}
+                  </span>
+                </div>
+                <div style={{
+                  color: isSystem ? theme.purple : theme.text,
+                  fontStyle: isSystem ? "italic" : "normal",
+                  lineHeight: 1.4,
+                }}>
+                  {c.content}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Input */}
+      <div style={{ display: "flex", gap: "5px" }}>
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()}
+          placeholder="Napsat komentář..."
+          style={{ ...inputStyle(theme), fontSize: "12px", padding: "7px 10px", flex: 1 }}
+        />
+        <button onClick={submit} disabled={!input.trim()} style={{
+          ...buttonStyle(), padding: "7px 14px",
+          background: input.trim() ? theme.accent : theme.buttonBg,
+          color: "#fff", fontSize: "13px",
+          opacity: input.trim() ? 1 : 0.4,
+        }}>→</button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -1060,6 +1408,10 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           theme={theme}
           onChange={cl => commitImmediate("checklist", cl)}
           onAllCompleted={() => {}}
+          taskId={task.id}
+          comments={comments}
+          onAddComment={onAddComment}
+          onToggleReaction={onToggleReaction}
         />
       )}
 
@@ -1124,6 +1476,17 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         </div>
       )}
 
+      {/* ── Komentáře / Chat ── */}
+      <TaskComments
+        task={task}
+        comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
+        currentUser={currentUser}
+        onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
+        onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
+        onMarkSeen={onMarkCommentsSeen}
+        theme={theme}
+      />
+
       {/* Trash-view only: Restore + Permanent delete */}
       {task.status === "deleted" && (
         <div style={{ display: "flex", gap: "6px", marginTop: "12px", flexWrap: "wrap" }}>
@@ -1143,9 +1506,21 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
+
+  // Auto-open when user navigated from UpdatesPanel
+  useEffect(() => {
+    if (autoOpen) {
+      setIsOpen(true);
+      // Scroll into view
+      setTimeout(() => {
+        const el = document.getElementById(`task-${task.id}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [autoOpen, task.id]);
 
   const isNew = !task.seenBy?.includes(currentUser.name) && task.createdBy !== currentUser.name;
   const overdue = daysDiff(task.dueDate) < 0 && !isDone(task);
@@ -1200,7 +1575,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (isNew) leftBorderColor = theme.green;
 
   return (
-    <div onClick={handleClick} style={{
+    <div id={`task-${task.id}`} onClick={handleClick} style={{
       background: cardBackground,
       border: `1px solid ${cardBorderColor}`,
       borderRadius: "12px",
@@ -1463,6 +1838,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           theme={theme}
           showCompleteBanner={allChecked}
           onClose={() => setIsOpen(false)}
+          comments={comments}
+          onAddComment={onAddComment}
+          onToggleReaction={onToggleReaction}
+          onMarkCommentsSeen={onMarkCommentsSeen}
         />
       )}
     </div>
@@ -2713,6 +3092,261 @@ function AdminPanel({ users, onAdd, onRemove, onClose, theme }) {
   );
 }
 
+/* ═══════════════════════════════════════════════════════
+   UPDATES PANEL — inline expandable section showing
+   comments and task changes the user hasn't seen yet
+   ═══════════════════════════════════════════════════════ */
+
+function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onNavigate, onMarkSeen, onQuickReply, theme }) {
+  // Get unseen comments — the user hasn't seen them AND they're not by this user
+  const unseenComments = comments.filter(c =>
+    c.author !== currentUser.name &&
+    !c.seenBy?.includes(currentUser.name)
+  );
+
+  // Only comments relevant to me: task is assigned to me, created by me, or it's on a shared task
+  const relevantComments = unseenComments.filter(c => {
+    const task = tasks.find(t => t.id === c.taskId);
+    if (!task) return false;
+    return (
+      task.createdBy === currentUser.name ||
+      task.assignedTo?.includes(currentUser.name) ||
+      task.assignTo === "both"
+    );
+  });
+
+  // Group by task
+  const byTask = {};
+  relevantComments.forEach(c => {
+    if (!byTask[c.taskId]) byTask[c.taskId] = [];
+    byTask[c.taskId].push(c);
+  });
+
+  const totalCount = relevantComments.length;
+  const taskCount = Object.keys(byTask).length;
+  const hasUpdates = totalCount > 0;
+
+  // Quick reply state — single text field when user decides to reply
+  const [replyTo, setReplyTo] = useState(null); // taskId or null
+  const [replyText, setReplyText] = useState("");
+
+  const sendReply = () => {
+    if (replyTo && replyText.trim() && onQuickReply) {
+      onQuickReply(replyTo, replyText.trim());
+      setReplyText("");
+      setReplyTo(null);
+    }
+  };
+
+  const formatRelativeTime = (iso) => {
+    if (!iso) return "";
+    const diff = Date.now() - new Date(iso).getTime();
+    const min = Math.floor(diff / 60000);
+    const hr = Math.floor(diff / 3600000);
+    const day = Math.floor(diff / 86400000);
+    if (min < 1) return "teď";
+    if (min < 60) return `před ${min} min`;
+    if (hr < 24) return `před ${hr} h`;
+    if (day < 7) return `před ${day}d`;
+    return new Date(iso).toLocaleDateString("cs-CZ", { day: "numeric", month: "short" });
+  };
+
+  // Compact header — always visible
+  return (
+    <div style={{
+      ...cardStyle(theme),
+      marginBottom: "14px",
+      overflow: "hidden",
+      animation: hasUpdates ? "slideUp 0.3s" : "none",
+      borderColor: hasUpdates ? theme.accent + "40" : theme.cardBorder,
+      borderWidth: hasUpdates ? "2px" : "1px",
+      boxShadow: hasUpdates ? `0 0 0 3px ${theme.accent}10` : "none",
+    }}>
+      <button
+        onClick={onToggle}
+        style={{
+          ...buttonStyle(),
+          width: "100%", padding: "10px 14px",
+          background: "transparent", color: theme.text,
+          border: "none", textAlign: "left",
+          display: "flex", alignItems: "center", gap: "10px",
+          fontSize: "13px", fontWeight: 600,
+          cursor: hasUpdates ? "pointer" : "default",
+        }}
+        disabled={!hasUpdates}>
+        {/* Bell icon with badge */}
+        <span style={{ position: "relative", fontSize: "17px" }}>
+          🔔
+          {hasUpdates && (
+            <span style={{
+              position: "absolute", top: "-6px", right: "-8px",
+              background: theme.red, color: "#fff",
+              fontSize: "9px", fontWeight: 800,
+              padding: "1px 5px", borderRadius: "8px",
+              minWidth: "16px", textAlign: "center",
+              animation: "pulse 1.5s infinite",
+            }}>
+              {totalCount}
+            </span>
+          )}
+        </span>
+        <span style={{ flex: 1 }}>
+          {hasUpdates
+            ? `${totalCount} ${totalCount === 1 ? "nová zpráva" : totalCount < 5 ? "nové zprávy" : "nových zpráv"} v ${taskCount} ${taskCount === 1 ? "úkolu" : taskCount < 5 ? "úkolech" : "úkolech"}`
+            : "Žádné nové zprávy"
+          }
+        </span>
+        {hasUpdates && (
+          <span style={{ fontSize: "10px", color: theme.textSub }}>
+            {open ? "▲" : "▼"}
+          </span>
+        )}
+      </button>
+
+      {/* Expanded list */}
+      {open && hasUpdates && (
+        <div style={{
+          borderTop: `1px solid ${theme.cardBorder}`,
+          animation: "slideUp 0.2s",
+        }}>
+          {Object.entries(byTask).map(([taskId, taskComments]) => {
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return null;
+            return (
+              <div key={taskId} style={{
+                padding: "10px 14px",
+                borderBottom: `1px solid ${theme.cardBorder}`,
+              }}>
+                {/* Task title + count */}
+                <div style={{
+                  display: "flex", alignItems: "flex-start", gap: "8px",
+                  marginBottom: "6px",
+                }}>
+                  <button
+                    onClick={() => {
+                      onNavigate(taskId);
+                      onMarkSeen(taskComments.map(c => c.id));
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      background: "transparent", color: theme.accent,
+                      border: "none", padding: 0, fontSize: "13px", fontWeight: 700,
+                      textAlign: "left", cursor: "pointer", flex: 1,
+                    }}>
+                    → {task.title}
+                  </button>
+                </div>
+
+                {/* Comments list */}
+                {taskComments.map(c => {
+                  const contextLabel = c.checklistItemId
+                    ? (task.checklist?.find(i => i.id === c.checklistItemId)?.text || "")
+                    : "";
+                  return (
+                    <div key={c.id} style={{
+                      padding: "6px 10px", marginBottom: "4px",
+                      background: c.type === "system" ? `${theme.purple}08` : theme.inputBg,
+                      borderRadius: "6px", fontSize: "12px",
+                      borderLeft: `3px solid ${c.type === "system" ? theme.purple : theme.accent}`,
+                    }}>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: "6px",
+                        marginBottom: "2px",
+                      }}>
+                        <span style={{ fontWeight: 700, color: theme.text }}>
+                          {c.type === "system" ? "✏️ " : c.type === "reaction" ? `${c.reaction} ` : ""}{c.author}
+                        </span>
+                        <span style={{ fontSize: "10px", color: theme.textMid }}>
+                          {formatRelativeTime(c.createdAt)}
+                        </span>
+                      </div>
+                      {contextLabel && (
+                        <div style={{
+                          fontSize: "10px", color: theme.textMid,
+                          fontStyle: "italic", marginBottom: "3px",
+                        }}>
+                          na položku: {contextLabel}
+                        </div>
+                      )}
+                      {c.type === "comment" && (
+                        <div style={{ color: theme.text, lineHeight: 1.4 }}>
+                          {c.content}
+                        </div>
+                      )}
+                      {c.type === "system" && (
+                        <div style={{ color: theme.purple, fontStyle: "italic", lineHeight: 1.4 }}>
+                          {c.content}
+                        </div>
+                      )}
+                      {c.type === "reaction" && (
+                        <div style={{ color: theme.textSub, fontSize: "11px" }}>
+                          reagoval(a) emoji
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Quick reply */}
+                {replyTo === taskId ? (
+                  <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
+                    <input
+                      type="text"
+                      value={replyText}
+                      onChange={e => setReplyText(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && sendReply()}
+                      placeholder="Odpovědět..."
+                      autoFocus
+                      style={{ ...inputStyle(theme), padding: "6px 10px", fontSize: "12px" }}
+                    />
+                    <button onClick={sendReply} style={{
+                      ...buttonStyle(), padding: "6px 12px", fontSize: "12px",
+                      background: theme.accent, color: "#fff",
+                    }}>Odeslat</button>
+                    <button onClick={() => { setReplyTo(null); setReplyText(""); }} style={{
+                      ...buttonStyle(), padding: "6px 10px", fontSize: "12px",
+                      background: "transparent", color: theme.textSub,
+                      border: `1px solid ${theme.cardBorder}`,
+                    }}>×</button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                    <button onClick={() => setReplyTo(taskId)} style={{
+                      ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
+                      background: `${theme.accent}12`, color: theme.accent,
+                      border: `1px solid ${theme.accent}25`,
+                    }}>💬 Odpovědět</button>
+                    <button
+                      onClick={() => onMarkSeen(taskComments.map(c => c.id))}
+                      style={{
+                        ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
+                        background: "transparent", color: theme.textSub,
+                        border: `1px solid ${theme.cardBorder}`,
+                      }}>✓ Přečteno</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Mark all as seen */}
+          <button
+            onClick={() => onMarkSeen(relevantComments.map(c => c.id))}
+            style={{
+              ...buttonStyle(),
+              width: "100%", padding: "8px",
+              background: theme.inputBg, color: theme.textSub,
+              border: "none", borderTop: `1px solid ${theme.cardBorder}`,
+              fontSize: "11px", fontWeight: 600,
+            }}>
+            ✓ Označit vše jako přečtené
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Snackbar({ message, onUndo, visible, theme }) {
   if (!visible) return null;
   return (
@@ -2741,6 +3375,7 @@ function Snackbar({ message, onUndo, visible, theme }) {
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
+  const [comments, setComments] = useState([]);
   const [users, setUsers] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2752,6 +3387,16 @@ export default function App() {
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
+  const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
+  const [scrollToTaskId, setScrollToTaskId] = useState(null);
+
+  // Clear scrollToTaskId after a short delay so autoOpen doesn't re-trigger
+  useEffect(() => {
+    if (scrollToTaskId) {
+      const t = setTimeout(() => setScrollToTaskId(null), 500);
+      return () => clearTimeout(t);
+    }
+  }, [scrollToTaskId]);
   const [undoState, setUndoState] = useState(null);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
@@ -2770,9 +3415,12 @@ export default function App() {
       if (flushed > 0) {
         setPendingCount(getOfflineQueue().length);
         // Reload fresh data from server
-        const [freshUsers, freshTasks] = await Promise.all([apiLoadUsers(), apiLoadTasks()]);
+        const [freshUsers, freshTasks, freshComments] = await Promise.all([
+          apiLoadUsers(), apiLoadTasks(), apiLoadComments()
+        ]);
         setUsers(freshUsers);
         setTasks(freshTasks);
+        setComments(freshComments);
       }
     };
     const goOffline = () => setOnline(false);
@@ -2804,8 +3452,11 @@ export default function App() {
         setPendingCount(0);
       }
 
-      const [loadedUsers, loadedTasks] = await Promise.all([apiLoadUsers(), apiLoadTasks()]);
+      const [loadedUsers, loadedTasks, loadedComments] = await Promise.all([
+        apiLoadUsers(), apiLoadTasks(), apiLoadComments()
+      ]);
       setUsers(loadedUsers);
+      setComments(loadedComments);
       const { tasks: processed, updates } = processRecurring(loadedTasks);
       setTasks(processed);
       if (updates.length > 0) apiUpdateTasks(updates);
@@ -2913,9 +3564,21 @@ export default function App() {
         apiLoadUsers().then(setUsers);
       }).subscribe();
 
+    const commentsChannel = supabase.channel("comments-realtime-v12")
+      .on("postgres_changes", { event: "*", schema: "public", table: "task_comments" }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          setComments(prev => prev.find(c => c.id === payload.new.id) ? prev : [...prev, dbToComment(payload.new)]);
+        } else if (payload.eventType === "UPDATE") {
+          setComments(prev => prev.map(c => c.id === payload.new.id ? dbToComment(payload.new) : c));
+        } else if (payload.eventType === "DELETE") {
+          setComments(prev => prev.filter(c => c.id !== payload.old.id));
+        }
+      }).subscribe();
+
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(usersChannel);
+      supabase.removeChannel(commentsChannel);
     };
   }, [loading]);
 
@@ -3041,9 +3704,11 @@ export default function App() {
 
   const updateTask = useCallback(async (taskId, patch) => {
     let updatedTask = null;
+    let originalTask = null;
     setTasks(prev => {
       return prev.map(t => {
         if (t.id !== taskId) return t;
+        originalTask = t;
         updatedTask = { ...t, ...patch };
         return updatedTask;
       });
@@ -3051,8 +3716,77 @@ export default function App() {
     // Wait for state to settle, then persist
     setTimeout(async () => {
       if (updatedTask) await apiUpdateTask(updatedTask);
+
+      // Generate system comments for significant changes (only if task is being edited by non-creator or shared)
+      if (originalTask && updatedTask && currentUser) {
+        const changes = [];
+
+        if (patch.title !== undefined && patch.title !== originalTask.title) {
+          changes.push("upravil(a) název");
+        }
+        if (patch.note !== undefined && (patch.note || "") !== (originalTask.note || "")) {
+          const hadNote = (originalTask.note || "").trim().length > 0;
+          const hasNote = (patch.note || "").trim().length > 0;
+          if (!hadNote && hasNote) changes.push("přidal(a) poznámku");
+          else if (hadNote && !hasNote) changes.push("odstranil(a) poznámku");
+          else changes.push("upravil(a) poznámku");
+        }
+        if (patch.category !== undefined && patch.category !== originalTask.category) {
+          const newCat = getCategory(patch.category);
+          changes.push(`změnil(a) kategorii na ${newCat.icon} ${newCat.label}`);
+        }
+        if (patch.priority !== undefined && patch.priority !== originalTask.priority) {
+          const newPri = getPriority(patch.priority);
+          changes.push(`změnil(a) prioritu na ${newPri.sym} ${newPri.label}`);
+        }
+        if (patch.dueDate !== undefined && patch.dueDate !== originalTask.dueDate) {
+          if (!patch.dueDate) changes.push("odstranil(a) termín");
+          else changes.push(`nastavil(a) termín ${patch.dueDate}`);
+        }
+        if (patch.assignedTo !== undefined) {
+          const oldAssigned = (originalTask.assignedTo || []).slice().sort().join(",");
+          const newAssigned = (patch.assignedTo || []).slice().sort().join(",");
+          if (oldAssigned !== newAssigned) {
+            const newList = (patch.assignedTo || []).join(", ");
+            changes.push(`změnil(a) přiřazení na ${newList || "nikoho"}`);
+          }
+        }
+        // Checklist item additions (new items added)
+        if (patch.checklist !== undefined && Array.isArray(patch.checklist)) {
+          const oldIds = new Set((originalTask.checklist || []).map(i => i.id));
+          const addedItems = patch.checklist.filter(i => !oldIds.has(i.id));
+          addedItems.forEach(item => {
+            changes.push(`přidal(a) položku: „${item.text}"`);
+          });
+        }
+
+        // Create system comments — only if there's something to note and the task is not just my own
+        // Avoid spam: only comment for tasks shared with others (not for purely personal tasks)
+        const hasOtherPeople =
+          updatedTask.assignTo === "both" ||
+          (updatedTask.assignedTo || []).some(n => n !== currentUser.name) ||
+          (updatedTask.createdBy && updatedTask.createdBy !== currentUser.name);
+
+        if (hasOtherPeople && changes.length > 0) {
+          for (const changeText of changes) {
+            const sysComment = {
+              id: generateId(),
+              taskId,
+              checklistItemId: null,
+              author: currentUser.name,
+              content: changeText,
+              type: "system",
+              reaction: null,
+              seenBy: [currentUser.name],
+              createdAt: new Date().toISOString(),
+            };
+            setComments(prev => [...prev, sysComment]);
+            await apiCreateComment(sysComment);
+          }
+        }
+      }
     }, 50);
-  }, []);
+  }, [currentUser]);
 
   const deleteTask = useCallback((taskId) => {
     const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
@@ -3090,6 +3824,90 @@ export default function App() {
       return { ...task, status: "active", deletedAt: null };
     }));
   }, [withUndo]);
+
+  // ── Comments ──
+
+  const addComment = useCallback(async (taskId, content, checklistItemId = null) => {
+    if (!content || !content.trim()) return;
+    const comment = {
+      id: generateId(),
+      taskId,
+      checklistItemId,
+      author: currentUser.name,
+      content: content.trim(),
+      type: "comment",
+      reaction: null,
+      seenBy: [currentUser.name],
+      createdAt: new Date().toISOString(),
+    };
+    setComments(prev => [...prev, comment]);
+    await apiCreateComment(comment);
+    setPendingCount(getOfflineQueue().length);
+    // Push notification to others via Edge Function
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+      const others = [...new Set([...(task.assignedTo || []), task.createdBy])]
+        .filter(n => n && n !== currentUser.name);
+      if (others.length > 0) {
+        try {
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+          fetch(`${supabaseUrl}/functions/v1/super-api`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseKey}` },
+            body: JSON.stringify({
+              task: { id: taskId, title: `💬 ${currentUser.name}: ${content.slice(0, 60)}` },
+              assignedTo: others, createdBy: currentUser.name,
+            }),
+          });
+        } catch (e) { console.warn("Comment push failed:", e); }
+      }
+    }
+  }, [currentUser, tasks]);
+
+  const toggleReaction = useCallback(async (taskId, emoji, checklistItemId = null) => {
+    // Find existing reaction by current user
+    const existing = comments.find(c =>
+      c.taskId === taskId &&
+      c.checklistItemId === checklistItemId &&
+      c.type === "reaction" &&
+      c.reaction === emoji &&
+      c.author === currentUser.name
+    );
+    if (existing) {
+      // Remove
+      setComments(prev => prev.filter(c => c.id !== existing.id));
+      await apiDeleteComment(existing.id);
+    } else {
+      // Add
+      const reaction = {
+        id: generateId(),
+        taskId,
+        checklistItemId,
+        author: currentUser.name,
+        content: null,
+        type: "reaction",
+        reaction: emoji,
+        seenBy: [currentUser.name],
+        createdAt: new Date().toISOString(),
+      };
+      setComments(prev => [...prev, reaction]);
+      await apiCreateComment(reaction);
+    }
+  }, [comments, currentUser]);
+
+  const markCommentsSeen = useCallback(async (commentIds) => {
+    if (!commentIds || commentIds.length === 0) return;
+    const updates = [];
+    setComments(prev => prev.map(c => {
+      if (!commentIds.includes(c.id)) return c;
+      if (c.seenBy?.includes(currentUser.name)) return c;
+      const updated = { ...c, seenBy: [...(c.seenBy || []), currentUser.name] };
+      updates.push(updated);
+      return updated;
+    }));
+    for (const u of updates) await apiUpdateComment(u);
+  }, [currentUser]);
 
   // ── Computed values ──
 
@@ -3311,6 +4129,22 @@ export default function App() {
           />
         )}
 
+        <UpdatesPanel
+          comments={comments}
+          tasks={tasks}
+          currentUser={currentUser}
+          users={users}
+          open={updatesPanelOpen}
+          onToggle={() => setUpdatesPanelOpen(o => !o)}
+          onNavigate={(taskId) => {
+            setScrollToTaskId(taskId);
+            setUpdatesPanelOpen(false);
+          }}
+          onMarkSeen={markCommentsSeen}
+          onQuickReply={(taskId, text) => addComment(taskId, text)}
+          theme={theme}
+        />
+
         <StatsBar
           tasks={tasks}
           currentUser={currentUser}
@@ -3469,6 +4303,11 @@ export default function App() {
                       onRestore={restoreTask}
                       onPermanentDelete={permanentlyDeleteTask}
                       theme={theme}
+                      comments={comments.filter(c => c.taskId === task.id)}
+                      onAddComment={addComment}
+                      onToggleReaction={toggleReaction}
+                      onMarkCommentsSeen={markCommentsSeen}
+                      autoOpen={scrollToTaskId === task.id}
                     />
                   </div>
                 );
