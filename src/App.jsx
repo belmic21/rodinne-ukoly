@@ -143,7 +143,7 @@ async function triggerPushNotification(task) {
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/super-api`, {
+    await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -719,6 +719,17 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         </div>
       )}
 
+      {/* ── Editable title ── */}
+      <input
+        type="text"
+        value={task.title}
+        onChange={e => updateField("title", e.target.value)}
+        style={{
+          ...inputStyle(theme), fontSize: "15px", fontWeight: 600,
+          marginBottom: "6px", padding: "8px 10px",
+        }}
+      />
+
       {/* ── Note ── */}
       <textarea
         placeholder="Přidat poznámku..."
@@ -1239,7 +1250,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [note, setNote] = useState("");
   const [type, setType] = useState("simple");
   const [assign, setAssign] = useState("self");
-  const [priority, setPriority] = useState("important");
+  const [priority, setPriority] = useState("low");
   const [dueDate, setDueDate] = useState("");
   const [recurrence, setRecurrence] = useState(0);
   const [category, setCategory] = useState("other");
@@ -1294,7 +1305,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   const resetForm = () => {
     setText(""); setNote(""); setDueDate(""); setRecurrence(0);
-    setPriority("important"); setAssign("self"); setCategory("other");
+    setPriority("low"); setAssign("self"); setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
     setQuickPriority(null);
@@ -1398,7 +1409,40 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               );
             });
           })()}
-          {/* Mode indicator */}
+
+          {/* Divider */}
+          <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
+
+          {/* Priority cycling icon ❗ */}
+          {(() => {
+            // Cycle: null(low) → important → urgent → null(low)
+            const currentPri = quickPriority || "low";
+            const priObj = getPriority(currentPri);
+            const priTheme = theme.priority[currentPri];
+            const cycleNext = () => {
+              if (!quickPriority || quickPriority === "low") setQuickPriority("important");
+              else if (quickPriority === "important") setQuickPriority("urgent");
+              else setQuickPriority(null); // back to low (default)
+            };
+            return (
+              <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu)`}
+                style={{
+                  ...buttonStyle(),
+                  minWidth: "34px", height: "30px", padding: "0 6px",
+                  fontSize: "14px", fontWeight: 800,
+                  background: currentPri !== "low" ? priTheme.cardBg : "transparent",
+                  color: priTheme.text,
+                  border: `2px solid ${currentPri !== "low" ? priTheme.border : "transparent"}`,
+                  borderRadius: "8px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.15s",
+                }}>
+                {priObj.sym}
+              </button>
+            );
+          })()}
+
+          {/* Mode indicator / reset filter */}
           {text.trim() ? (
             <span style={{
               fontSize: "9px", color: theme.textMid, display: "flex",
@@ -1416,38 +1460,6 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>✕</button>
           )}
-        </div>
-      )}
-
-      {/* Priority quick-pick icons — visible when typing */}
-      {!showFull && text.trim() && (
-        <div style={{
-          display: "flex", gap: "3px", marginTop: "3px",
-          paddingLeft: "4px", alignItems: "center",
-        }}>
-          <span style={{ fontSize: "9px", color: theme.textMid, marginRight: "2px" }}>Priorita:</span>
-          {PRIORITIES.map(p => {
-            const isActive = quickPriority === p.id;
-            const priTheme = theme.priority[p.id];
-            return (
-              <button key={p.id}
-                onClick={() => setQuickPriority(quickPriority === p.id ? null : p.id)}
-                style={{
-                  ...buttonStyle(),
-                  padding: "3px 8px",
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  background: isActive ? priTheme.cardBg : "transparent",
-                  color: isActive ? priTheme.text : theme.textDim,
-                  border: `1.5px solid ${isActive ? priTheme.border : "transparent"}`,
-                  borderRadius: "6px",
-                  opacity: quickPriority && !isActive ? 0.4 : 1,
-                  transition: "all 0.12s",
-                }}>
-                {p.sym} {p.label}
-              </button>
-            );
-          })}
         </div>
       )}
 
