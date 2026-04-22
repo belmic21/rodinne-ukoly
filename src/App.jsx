@@ -1473,7 +1473,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -1648,7 +1648,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         // Figure out CURRENT state for each segment based on mode
         const currentCategory = isTyping ? quickCategory : (categoryFilter !== "all" ? categoryFilter : null);
-        const currentPriority = isTyping ? quickPriority : null;
+        const currentPriority = isTyping
+          ? quickPriority
+          : (priorityFilter !== "all" ? priorityFilter : null);
         // For filter mode, "person" is extracted from scopeFilter
         let currentPersonLabel = null;
         let currentPersonCount = 0;
@@ -1766,17 +1768,27 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         const priDropdown = (
           <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
             {PRIORITIES.map(pri => {
-              const selected = (isTyping ? (quickPriority || "low") : "low") === pri.id;
-              const isSet = isTyping && quickPriority === pri.id;
               const pt = theme.priority[pri.id];
+              // Is this priority the currently selected one (in either mode)?
+              const isSet = isTyping
+                ? quickPriority === pri.id
+                : priorityFilter === pri.id;
               return (
                 <button key={pri.id}
                   onClick={() => {
-                    if (!isTyping) { setOpenSegment(null); return; } // priority is only used in typing mode
-                    setQuickPriority(pri.id === "low" ? null : pri.id);
+                    if (isTyping) {
+                      // Typing mode: "low" is default, clicking it means reset
+                      setQuickPriority(pri.id === "low" ? null : pri.id);
+                    } else {
+                      // Filter mode: toggle this priority
+                      if (priorityFilter === pri.id) {
+                        onPriorityFilterChange && onPriorityFilterChange("all");
+                      } else {
+                        onPriorityFilterChange && onPriorityFilterChange(pri.id);
+                      }
+                    }
                     setOpenSegment(null);
                   }}
-                  disabled={!isTyping}
                   style={{
                     ...buttonStyle(),
                     padding: "7px 10px", fontSize: "12px",
@@ -1784,25 +1796,27 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     color: isSet ? pt.text : theme.text,
                     border: "none", textAlign: "left", borderRadius: "6px",
                     display: "flex", alignItems: "center", gap: "8px",
-                    opacity: !isTyping ? 0.5 : 1,
                   }}
-                  onMouseEnter={e => { if (!isSet && isTyping) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
                   onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
                   <span style={{ fontSize: "15px", fontWeight: 900, color: pt.text, width: "16px" }}>
                     {pri.sym}
                   </span>
                   <span style={{ flex: 1 }}>{pri.label}</span>
+                  {isSet && <span style={{ color: pt.text, fontSize: "11px" }}>✓</span>}
                 </button>
               );
             })}
-            {!isTyping && (
-              <div style={{
-                fontSize: "10px", color: theme.textMid,
-                padding: "5px 10px", borderTop: `1px solid ${theme.cardBorder}`,
-                marginTop: "2px",
-              }}>
-                Priorita se volí při zadávání úkolu
-              </div>
+            {!isTyping && priorityFilter !== "all" && (
+              <button onClick={() => {
+                onPriorityFilterChange && onPriorityFilterChange("all");
+                setOpenSegment(null);
+              }} style={{
+                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
+                background: "transparent", color: theme.red,
+                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
+                textAlign: "left", borderRadius: 0, marginTop: "2px",
+              }}>✕ Zrušit filtr</button>
             )}
           </div>
         );
@@ -1934,6 +1948,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             const cat = getCategory(categoryFilter);
             chips.push({ key: "cat", label: cat.icon + " " + cat.label, color: theme.accent,
               onRemove: () => onCategoryFilterChange("all") });
+          }
+          if (priorityFilter && priorityFilter !== "all") {
+            const pri = getPriority(priorityFilter);
+            chips.push({
+              key: "pri", label: pri.sym + " " + pri.label,
+              color: theme.priority[priorityFilter].text,
+              onRemove: () => onPriorityFilterChange && onPriorityFilterChange("all"),
+            });
           }
           if (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my") {
             if (scopeFilter.startsWith("person:")) {
@@ -2727,6 +2749,7 @@ export default function App() {
   const [viewStatus, setViewStatus] = useState("active");
   const [sortMode, setSortMode] = useState("smart");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [undoState, setUndoState] = useState(null);
@@ -3127,6 +3150,9 @@ export default function App() {
     // Category filter
     if (categoryFilter !== "all") result = result.filter(t => t.category === categoryFilter);
 
+    // Priority filter
+    if (priorityFilter !== "all") result = result.filter(t => (t.priority || "low") === priorityFilter);
+
     // Search
     if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
 
@@ -3145,7 +3171,7 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, searchQuery, showDeferred]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -3319,6 +3345,8 @@ export default function App() {
           categoryFilter={categoryFilter}
           onCategoryFilterChange={setCategoryFilter}
           categoryCounts={categoryCounts}
+          priorityFilter={priorityFilter}
+          onPriorityFilterChange={setPriorityFilter}
           scopeFilter={filter}
           onScopeFilterChange={setFilter}
           showDeferred={showDeferred}
