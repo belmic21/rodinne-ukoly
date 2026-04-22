@@ -49,6 +49,14 @@ const getCategory = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[8];
 const isDone = (task) => task.status === "done" || task.status === "cancelled";
 const isDeleted = (task) => task.status === "deleted";
 
+// 2-letter label for assignee picker — "Michal" → "Mi", "Peťulka" → "Pe"
+// Strips diacritics so label is always ASCII-friendly.
+function getUserLabel(name) {
+  if (!name) return "??";
+  const normalized = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return normalized.slice(0, 2);
+}
+
 function daysDiff(dateStr) {
   if (!dateStr) return Infinity;
   return Math.round((new Date(dateStr) - new Date(new Date().toDateString())) / 86400000);
@@ -1377,49 +1385,68 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, scopeFilter, onScopeFilterChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
   const [type, setType] = useState("simple");
-  const [assign, setAssign] = useState("self");
-  const [priority, setPriority] = useState("low");
   const [dueDate, setDueDate] = useState("");
   const [recurrence, setRecurrence] = useState(0);
   const [category, setCategory] = useState("other");
   const [initialChecklist, setInitialChecklist] = useState([]);
   const [checklistInput, setChecklistInput] = useState("");
   const [quickCategory, setQuickCategory] = useState(null);
-  const [quickPriority, setQuickPriority] = useState(null); // null = default "important"
+  const [quickPriority, setQuickPriority] = useState(null); // null = default "low"
+  // quickAssignees is an array of user names. Empty = default "for me".
+  const [quickAssignees, setQuickAssignees] = useState([]);
   const [showFrom, setShowFrom] = useState("");
   const inputRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
 
-  const createTaskObject = (title) => ({
-    id: generateId(),
-    title,
-    note: note.trim() || null,
-    type,
-    createdBy: currentUser.name,
-    assignTo: assign === "person" ? "person" : assign,
-    assignedTo: assign === "self" ? [currentUser.name]
-      : assign === "person" ? [otherUsers[0]?.name || currentUser.name]
-      : users.map(u => u.name),
-    priority: quickPriority || priority,
-    dueDate: dueDate || null,
-    showFrom: showFrom || null,
-    recDays: recurrence,
-    category: quickCategory || (category === "other" ? autoDetectCategory(title) : category),
-    activeMo: [],
-    status: "active",
-    doneBy: [],
-    seenBy: [currentUser.name],
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-    completedByUser: null,
-    checklist: type === "complex" ? initialChecklist : [],
-    images: [],
-  });
+  // Compute final assignment from quickAssignees array
+  const computeAssignment = () => {
+    // No picks → default: for me
+    if (quickAssignees.length === 0) {
+      return { assignTo: "self", assignedTo: [currentUser.name] };
+    }
+    // All users picked → "both"
+    if (quickAssignees.length === users.length) {
+      return { assignTo: "both", assignedTo: users.map(u => u.name) };
+    }
+    // Only self picked
+    if (quickAssignees.length === 1 && quickAssignees[0] === currentUser.name) {
+      return { assignTo: "self", assignedTo: [currentUser.name] };
+    }
+    // Otherwise → "person" with explicit list
+    return { assignTo: "person", assignedTo: [...quickAssignees] };
+  };
+
+  const createTaskObject = (title) => {
+    const { assignTo, assignedTo } = computeAssignment();
+    return {
+      id: generateId(),
+      title,
+      note: note.trim() || null,
+      type,
+      createdBy: currentUser.name,
+      assignTo,
+      assignedTo,
+      priority: quickPriority || "low",
+      dueDate: dueDate || null,
+      showFrom: showFrom || null,
+      recDays: recurrence,
+      category: quickCategory || (category === "other" ? autoDetectCategory(title) : category),
+      activeMo: [],
+      status: "active",
+      doneBy: [],
+      seenBy: [currentUser.name],
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      completedByUser: null,
+      checklist: type === "complex" ? initialChecklist : [],
+      images: [],
+    };
+  };
 
   const quickSubmit = () => {
     if (!text.trim()) return;
@@ -1427,6 +1454,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     setText("");
     setQuickCategory(null);
     setQuickPriority(null);
+    setQuickAssignees([]);
     inputRef.current?.focus();
   };
 
@@ -1438,10 +1466,10 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   const resetForm = () => {
     setText(""); setNote(""); setDueDate(""); setRecurrence(0);
-    setPriority("low"); setAssign("self"); setCategory("other");
+    setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
-    setQuickPriority(null);
+    setQuickPriority(null); setQuickAssignees([]);
   };
 
   const labelStyle = {
@@ -1577,14 +1605,75 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             );
           })()}
 
+          {/* Second divider before assignee picker */}
+          <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
+
+          {/* Assignee picker — 2-letter user pills */}
+          {users.map(u => {
+            const isTyping = text.trim().length > 0;
+            const personFilterKey = `person:${u.name}`;
+            // In typing mode: highlighted = user is in quickAssignees
+            // In filter mode: highlighted = user is currently filtered ("my" for self, "person:X" for others)
+            const isHighlighted = isTyping
+              ? quickAssignees.includes(u.name)
+              : (u.name === currentUser.name
+                ? scopeFilter === "my"
+                : scopeFilter === personFilterKey);
+            const anyActive = isTyping
+              ? quickAssignees.length > 0
+              : (scopeFilter && scopeFilter !== "all");
+            const label = getUserLabel(u.name);
+
+            return (
+              <button key={u.name}
+                onClick={() => {
+                  if (isTyping) {
+                    // Typing mode → toggle user in quickAssignees
+                    setQuickAssignees(prev =>
+                      prev.includes(u.name)
+                        ? prev.filter(n => n !== u.name)
+                        : [...prev, u.name]
+                    );
+                  } else {
+                    // Filter mode → toggle scope filter
+                    if (u.name === currentUser.name) {
+                      onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
+                    } else {
+                      onScopeFilterChange && onScopeFilterChange(scopeFilter === personFilterKey ? "all" : personFilterKey);
+                    }
+                  }
+                }}
+                title={u.name + (isTyping ? " — klik = přiřadit" : " — klik = filtrovat")}
+                style={{
+                  ...buttonStyle(),
+                  minWidth: "34px", height: "30px",
+                  padding: "0 6px",
+                  fontSize: "12px", fontWeight: 700,
+                  background: isHighlighted ? theme.accentSoft : "transparent",
+                  color: isHighlighted ? theme.accent : theme.textSub,
+                  border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
+                  borderRadius: "8px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: anyActive && !isHighlighted ? 0.3 : 1,
+                  transition: "all 0.15s",
+                  flexShrink: 0,
+                }}>
+                {label}
+              </button>
+            );
+          })}
+
           {/* Mode indicator / reset filter */}
           {text.trim() ? (
             <span style={{
               fontSize: "9px", color: theme.textMid, display: "flex",
               alignItems: "center", paddingLeft: "4px", whiteSpace: "nowrap",
-            }}>← kategorie</span>
-          ) : categoryFilter !== "all" && (
-            <button onClick={() => onCategoryFilterChange("all")}
+            }}>← výběr</span>
+          ) : (categoryFilter !== "all" || (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my")) && (
+            <button onClick={() => {
+              onCategoryFilterChange("all");
+              onScopeFilterChange && onScopeFilterChange("all");
+            }}
               title="Zobrazit vše"
               style={{
                 ...buttonStyle(), minWidth: "32px", height: "30px",
@@ -1682,23 +1771,17 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             </div>
           )}
 
+          {/* Info: Pro koho a Priorita jsou v liště nad formulářem */}
+          <div style={{
+            fontSize: "10px", color: theme.textMid, marginBottom: "8px",
+            padding: "6px 10px", background: theme.inputBg,
+            border: `1px dashed ${theme.inputBorder}`, borderRadius: "6px",
+            lineHeight: 1.4,
+          }}>
+            💡 Pro koho a prioritu nastav <strong>v liště nad formulářem</strong> (ikony kategorií, ❗ a iniciály).
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
-            <div>
-              <div style={labelStyle}>Pro koho</div>
-              <select value={assign} onChange={e => setAssign(e.target.value)}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                <option value="self">Pro mě</option>
-                {otherUsers.length === 1 && <option value="person">Pro {otherUsers[0].name}</option>}
-                <option value="both">Pro všechny</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Priorita</div>
-              <select value={priority} onChange={e => setPriority(e.target.value)}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {PRIORITIES.map(p => <option key={p.id} value={p.id}>{p.sym} {p.label}</option>)}
-              </select>
-            </div>
             <div>
               <div style={labelStyle}>Kategorie</div>
               <select value={category} onChange={e => setCategory(e.target.value)}
@@ -2689,6 +2772,8 @@ export default function App() {
           categoryFilter={categoryFilter}
           onCategoryFilterChange={setCategoryFilter}
           categoryCounts={categoryCounts}
+          scopeFilter={filter}
+          onScopeFilterChange={setFilter}
         />
 
         {/* Search */}
