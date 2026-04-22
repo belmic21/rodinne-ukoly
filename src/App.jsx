@@ -679,6 +679,19 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
+
+  // Local state for title/note — saves only on button click, not on every keystroke
+  const [editTitle, setEditTitle] = useState(task.title);
+  const [editNote, setEditNote] = useState(task.note || "");
+  const hasTextChanges = editTitle !== task.title || editNote !== (task.note || "");
+
+  const saveTextChanges = () => {
+    const changes = {};
+    if (editTitle !== task.title) changes.title = editTitle;
+    if (editNote !== (task.note || "")) changes.note = editNote.trim() || null;
+    if (Object.keys(changes).length > 0) onUpdate(task.id, changes);
+  };
+
   const labelStyle = {
     fontSize: "10px", color: theme.textMid, fontWeight: 700,
     marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.3px"
@@ -719,28 +732,39 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         </div>
       )}
 
-      {/* ── Editable title ── */}
+      {/* ── Editable title (local state) ── */}
       <input
         type="text"
-        value={task.title}
-        onChange={e => updateField("title", e.target.value)}
+        value={editTitle}
+        onChange={e => setEditTitle(e.target.value)}
         style={{
           ...inputStyle(theme), fontSize: "15px", fontWeight: 600,
           marginBottom: "6px", padding: "8px 10px",
         }}
       />
 
-      {/* ── Note ── */}
+      {/* ── Note (local state) ── */}
       <textarea
         placeholder="Přidat poznámku..."
-        value={task.note || ""}
-        onChange={e => updateField("note", e.target.value || null)}
+        value={editNote}
+        onChange={e => setEditNote(e.target.value)}
         rows={2}
         style={{
           ...inputStyle(theme), fontSize: "13px",
-          marginBottom: "8px", resize: "vertical", lineHeight: 1.4,
+          marginBottom: "6px", resize: "vertical", lineHeight: 1.4,
         }}
       />
+
+      {/* ── Save button — only visible when changes exist ── */}
+      {hasTextChanges && (
+        <button onClick={saveTextChanges} style={{
+          ...buttonStyle(), width: "100%", padding: "8px",
+          background: theme.accent, color: "#fff", fontSize: "13px",
+          marginBottom: "8px",
+        }}>
+          💾 Uložit změny
+        </button>
+      )}
 
       {!taskIsDone && (
         <>
@@ -1413,12 +1437,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           {/* Divider */}
           <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
 
-          {/* Priority cycling icon ❗ */}
+          {/* Priority cycling icon — always visible as grey ❗, lights up on click */}
           {(() => {
             // Cycle: null(low) → important → urgent → null(low)
             const currentPri = quickPriority || "low";
             const priObj = getPriority(currentPri);
             const priTheme = theme.priority[currentPri];
+            const isDefault = !quickPriority || quickPriority === "low";
             const cycleNext = () => {
               if (!quickPriority || quickPriority === "low") setQuickPriority("important");
               else if (quickPriority === "important") setQuickPriority("urgent");
@@ -1429,15 +1454,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 style={{
                   ...buttonStyle(),
                   minWidth: "34px", height: "30px", padding: "0 6px",
-                  fontSize: "14px", fontWeight: 800,
-                  background: currentPri !== "low" ? priTheme.cardBg : "transparent",
-                  color: priTheme.text,
-                  border: `2px solid ${currentPri !== "low" ? priTheme.border : "transparent"}`,
+                  fontSize: "16px", fontWeight: 800,
+                  background: isDefault ? "transparent" : priTheme.cardBg,
+                  color: isDefault ? theme.textDim : priTheme.text,
+                  border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
                   borderRadius: "8px",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 0.15s",
+                  opacity: isDefault ? 0.5 : 1,
                 }}>
-                {priObj.sym}
+                ❗
               </button>
             );
           })()}
