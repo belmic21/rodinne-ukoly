@@ -59,7 +59,15 @@ function getUserLabel(name) {
 
 function daysDiff(dateStr) {
   if (!dateStr) return Infinity;
-  return Math.round((new Date(dateStr) - new Date(new Date().toDateString())) / 86400000);
+  // Normalize to local-midnight date to avoid timezone issues.
+  // Input can be "YYYY-MM-DD" or full ISO string — strip the time portion.
+  const datePart = typeof dateStr === "string" ? dateStr.slice(0, 10) : dateStr;
+  const [y, m, d] = datePart.split("-").map(Number);
+  if (!y || !m || !d) return Infinity;
+  const target = new Date(y, m - 1, d); // local midnight of target date
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);           // local midnight of today
+  return Math.round((target - today) / 86400000);
 }
 
 function formatDate(iso) {
@@ -831,7 +839,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 opacity: isDefault ? 0.5 : 1,
                 transition: "all 0.15s",
               }}>
-              ❗ <span style={{ fontSize: "10px" }}>{priObj.label}</span>
+              {priObj.sym} <span style={{ fontSize: "10px" }}>{priObj.label}</span>
             </button>
           );
         })()}
@@ -1274,6 +1282,13 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             textDecoration: taskIsDone ? "line-through" : "none",
             opacity: taskIsDone ? 0.7 : 1,
             lineHeight: 1.4, wordBreak: "break-word",
+            // When closed: show max 2 lines + ellipsis. When open: show all.
+            ...(!isOpen ? {
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            } : {}),
           }}>
             {task.title}
           </div>
@@ -1646,7 +1661,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           {/* Divider */}
           <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
 
-          {/* Priority cycling icon — always visible as grey ❗, lights up on click */}
+          {/* Priority cycling icon — symbol differs per level for readability in sunlight */}
           {(() => {
             // Cycle: null(low) → important → urgent → null(low)
             const currentPri = quickPriority || "low";
@@ -1658,21 +1673,24 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               else if (quickPriority === "important") setQuickPriority("urgent");
               else setQuickPriority(null); // back to low (default)
             };
+            // Visual symbol reinforces color for sunlight / b&w readability:
+            // low = — (dash), important = ! (single), urgent = ‼ (double)
             return (
               <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu)`}
                 style={{
                   ...buttonStyle(),
-                  minWidth: "34px", height: "30px", padding: "0 6px",
-                  fontSize: "16px", fontWeight: 800,
+                  minWidth: "38px", height: "30px", padding: "0 6px",
+                  fontSize: "16px", fontWeight: 900,
                   background: isDefault ? "transparent" : priTheme.cardBg,
                   color: isDefault ? theme.textDim : priTheme.text,
                   border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
                   borderRadius: "8px",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 0.15s",
-                  opacity: isDefault ? 0.5 : 1,
+                  opacity: isDefault ? 0.55 : 1,
+                  letterSpacing: currentPri === "urgent" ? "-1px" : "0",
                 }}>
-                ❗
+                {priObj.sym}
               </button>
             );
           })()}
