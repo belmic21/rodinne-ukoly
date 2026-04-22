@@ -1285,9 +1285,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             // When closed: show max 2 lines + ellipsis. When open: show all.
             ...(!isOpen ? {
               display: "-webkit-box",
-              WebkitLineClamp: 2,
+              WebkitLineClamp: "2",
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
+              textOverflow: "ellipsis",
             } : {}),
           }}>
             {task.title}
@@ -1594,6 +1595,24 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             outline: "none", flex: 1, width: "100%",
           }}
         />
+        {/* Confirm button — visible only when text is entered.
+            Needed because clicking category/priority/assignee icons
+            takes focus away from the input, so Enter no longer submits. */}
+        {text.trim() && (
+          <button
+            onClick={() => { if (showFull) fullSubmit(); else quickSubmit(); }}
+            title="Přidat úkol"
+            style={{
+              ...buttonStyle(), width: "32px", height: "32px",
+              background: theme.green, color: "#fff",
+              border: `1px solid ${theme.green}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "15px", fontWeight: 800, flexShrink: 0,
+              animation: "fadeIn 0.15s",
+            }}>
+            ✓
+          </button>
+        )}
         <button onClick={() => setShowFull(!showFull)} title="Podrobnosti" style={{
           ...buttonStyle(), width: "32px", height: "32px",
           background: showFull ? theme.accent : theme.inputBg,
