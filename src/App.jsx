@@ -704,15 +704,56 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
 
-  // Local state for title/note — saves only on button click, not on every keystroke
-  const [editTitle, setEditTitle] = useState(task.title);
-  const [editNote, setEditNote] = useState(task.note || "");
-  const hasTextChanges = editTitle !== task.title || editNote !== (task.note || "");
+  // ── LOCAL STATE for ALL editable fields ──
+  // Changes are stored locally and committed to the store only on 💾 Uložit změny.
+  // This prevents the task from jumping around the list while editing.
+  const [editTitle, setEditTitle]       = useState(task.title);
+  const [editNote, setEditNote]         = useState(task.note || "");
+  const [editPriority, setEditPriority] = useState(task.priority || "low");
+  const [editCategory, setEditCategory] = useState(task.category || "other");
+  const [editAssignTo, setEditAssignTo] = useState(task.assignTo || "self");
+  const [editAssignedTo, setEditAssignedTo] = useState(task.assignedTo || [currentUser.name]);
+  const [editRecDays, setEditRecDays]   = useState(task.recDays || 0);
+  const [editActiveMo, setEditActiveMo] = useState(task.activeMo || []);
+  const [editDueDate, setEditDueDate]   = useState(task.dueDate || "");
+  const [editShowFrom, setEditShowFrom] = useState(task.showFrom || "");
+  const [editType, setEditType]         = useState(task.type || "simple");
 
-  const saveTextChanges = () => {
+  // Detect if any field changed
+  const arraysEqual = (a, b) => {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort(), sb = [...b].sort();
+    return sa.every((v, i) => v === sb[i]);
+  };
+
+  const hasPendingChanges =
+    editTitle !== task.title ||
+    editNote !== (task.note || "") ||
+    editPriority !== (task.priority || "low") ||
+    editCategory !== (task.category || "other") ||
+    editAssignTo !== (task.assignTo || "self") ||
+    !arraysEqual(editAssignedTo, task.assignedTo) ||
+    editRecDays !== (task.recDays || 0) ||
+    !arraysEqual(editActiveMo, task.activeMo) ||
+    editDueDate !== (task.dueDate || "") ||
+    editShowFrom !== (task.showFrom || "") ||
+    editType !== (task.type || "simple");
+
+  const saveAllChanges = () => {
     const changes = {};
     if (editTitle !== task.title) changes.title = editTitle;
     if (editNote !== (task.note || "")) changes.note = editNote.trim() || null;
+    if (editPriority !== (task.priority || "low")) changes.priority = editPriority;
+    if (editCategory !== (task.category || "other")) changes.category = editCategory;
+    if (editAssignTo !== (task.assignTo || "self")) changes.assignTo = editAssignTo;
+    if (!arraysEqual(editAssignedTo, task.assignedTo)) changes.assignedTo = editAssignedTo;
+    if (editRecDays !== (task.recDays || 0)) changes.recDays = editRecDays;
+    if (!arraysEqual(editActiveMo, task.activeMo)) changes.activeMo = editActiveMo;
+    if (editDueDate !== (task.dueDate || "")) changes.dueDate = editDueDate || null;
+    if (editShowFrom !== (task.showFrom || "")) changes.showFrom = editShowFrom || null;
+    if (editType !== (task.type || "simple")) changes.type = editType;
     if (Object.keys(changes).length > 0) onUpdate(task.id, changes);
   };
 
@@ -721,7 +762,9 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.3px"
   };
 
-  const updateField = (key, value) => onUpdate(task.id, { [key]: value });
+  // For fields that MUST commit immediately (checklist items, images) we still use onUpdate.
+  // For deferred fields, use local setters above.
+  const commitImmediate = (key, value) => onUpdate(task.id, { [key]: value });
 
   const quickDates = [
     { label: "Dnes",   value: addDays(0) },
@@ -740,7 +783,9 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       <div style={{
         display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px",
       }}>
-        <button onClick={onClose} title="Přepnout na seznam"
+        <button
+          onClick={(e) => { e.stopPropagation(); onClose && onClose(); }}
+          title="Přepnout na seznam"
           style={{
             ...buttonStyle(),
             padding: "6px 10px", fontSize: "12px",
@@ -751,21 +796,21 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           ☰ Přepnout na seznam
         </button>
 
-        {/* Cycling priority icon — matches quick-add bar behavior */}
+        {/* Cycling priority icon — uses LOCAL state (commits on 💾) */}
         {!taskIsDone && (() => {
-          const currentPri = task.priority || "low";
-          const priObj = getPriority(currentPri);
-          const priTheme = theme.priority[currentPri];
-          const isDefault = currentPri === "low";
-          const cycleNext = () => {
+          const priObj = getPriority(editPriority);
+          const priTheme = theme.priority[editPriority] || theme.priority.low;
+          const isDefault = editPriority === "low";
+          const cycleNext = (e) => {
+            e.stopPropagation();
             // low → important → urgent → low
-            const next = currentPri === "low" ? "important"
-                       : currentPri === "important" ? "urgent"
+            const next = editPriority === "low" ? "important"
+                       : editPriority === "important" ? "urgent"
                        : "low";
-            onUpdate(task.id, { priority: next });
+            setEditPriority(next);
           };
           return (
-            <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu)`}
+            <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu, ulož tlačítkem 💾)`}
               style={{
                 ...buttonStyle(),
                 minWidth: "36px", height: "30px", padding: "0 8px",
@@ -828,8 +873,8 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       />
 
       {/* ── Save button — only visible when changes exist ── */}
-      {hasTextChanges && (
-        <button onClick={saveTextChanges} style={{
+      {hasPendingChanges && (
+        <button onClick={saveAllChanges} style={{
           ...buttonStyle(), width: "100%", padding: "8px",
           background: theme.accent, color: "#fff", fontSize: "13px",
           marginBottom: "8px",
@@ -844,26 +889,40 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
             <div>
               <div style={labelStyle}>Kategorie</div>
-              <select value={task.category || "other"} onChange={e => updateField("category", e.target.value)}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
-              </select>
+              <div style={{ display: "flex", gap: "4px" }}>
+                <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
+                  style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px", flex: 1 }}>
+                  {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+                </select>
+                {/* Small icon toggle: simple ↔ checklist (replaces duplicate bottom button) */}
+                <button
+                  onClick={() => setEditType(editType === "complex" ? "simple" : "complex")}
+                  title={editType === "complex" ? "Přepnout na jednoduchý" : "Přepnout na checklist"}
+                  style={{
+                    ...buttonStyle(), padding: "8px 10px", fontSize: "12px",
+                    background: editType === "complex" ? theme.accentSoft : theme.inputBg,
+                    color: editType === "complex" ? theme.accent : theme.textSub,
+                    border: `1px solid ${editType === "complex" ? theme.accentBorder : theme.inputBorder}`,
+                  }}>
+                  ☰
+                </button>
+              </div>
             </div>
             <div>
               <div style={labelStyle}>Pro koho</div>
               <select
-                value={task.assignTo === "person" ? "person" : task.assignTo}
+                value={editAssignTo === "person" ? "person" : editAssignTo}
                 onChange={e => {
                   const val = e.target.value;
                   if (val === "self") {
-                    updateField("assignedTo", [currentUser.name]);
-                    updateField("assignTo", "self");
+                    setEditAssignedTo([currentUser.name]);
+                    setEditAssignTo("self");
                   } else if (val === "both") {
-                    updateField("assignedTo", users.map(u => u.name));
-                    updateField("assignTo", "both");
+                    setEditAssignedTo(users.map(u => u.name));
+                    setEditAssignTo("both");
                   } else if (otherUsers[0]) {
-                    updateField("assignedTo", [otherUsers[0].name]);
-                    updateField("assignTo", "person");
+                    setEditAssignedTo([otherUsers[0].name]);
+                    setEditAssignTo("person");
                   }
                 }}
                 style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
@@ -877,7 +936,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Recurrence (full width, standalone) ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>Opakování</div>
-            <select value={task.recDays || 0} onChange={e => updateField("recDays", Number(e.target.value))}
+            <select value={editRecDays} onChange={e => setEditRecDays(Number(e.target.value))}
               style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
               {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
@@ -886,27 +945,27 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Due date with quick picks ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>
-              Termín {task.dueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(task.dueDate)}</span>}
+              Termín {editDueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editDueDate)}</span>}
             </div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
-                <button key={qd.label} onClick={() => updateField("dueDate", qd.value)} style={{
+                <button key={qd.label} onClick={() => setEditDueDate(qd.value)} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
-                  background: task.dueDate === qd.value ? theme.accentSoft : theme.inputBg,
-                  color: task.dueDate === qd.value ? theme.accent : theme.textSub,
-                  border: `1px solid ${task.dueDate === qd.value ? theme.accentBorder : theme.inputBorder}`,
+                  background: editDueDate === qd.value ? theme.accentSoft : theme.inputBg,
+                  color: editDueDate === qd.value ? theme.accent : theme.textSub,
+                  border: `1px solid ${editDueDate === qd.value ? theme.accentBorder : theme.inputBorder}`,
                 }}>{qd.label}</button>
               ))}
-              {task.dueDate && (
-                <button onClick={() => updateField("dueDate", null)} style={{
+              {editDueDate && (
+                <button onClick={() => setEditDueDate("")} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
                   background: "transparent", color: theme.red,
                   border: `1px solid ${theme.red}25`,
                 }}>✕</button>
               )}
             </div>
-            <input type="date" value={task.dueDate || ""}
-              onChange={e => updateField("dueDate", e.target.value || null)}
+            <input type="date" value={editDueDate || ""}
+              onChange={e => setEditDueDate(e.target.value)}
               style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px" }}
             />
           </div>
@@ -914,7 +973,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Show from — deferred tasks ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>
-              Zobrazit od {task.showFrom && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(task.showFrom)}</span>}
+              Zobrazit od {editShowFrom && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editShowFrom)}</span>}
             </div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {[
@@ -923,46 +982,45 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 { label: "Za měsíc", value: addDays(30) },
                 { label: "Za 2 měsíce", value: addDays(60) },
               ].map(sf => (
-                <button key={sf.label} onClick={() => updateField("showFrom", sf.value)} style={{
+                <button key={sf.label} onClick={() => setEditShowFrom(sf.value)} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
-                  background: task.showFrom === sf.value ? theme.accentSoft : theme.inputBg,
-                  color: task.showFrom === sf.value ? theme.accent : theme.textSub,
-                  border: `1px solid ${task.showFrom === sf.value ? theme.accentBorder : theme.inputBorder}`,
+                  background: editShowFrom === sf.value ? theme.accentSoft : theme.inputBg,
+                  color: editShowFrom === sf.value ? theme.accent : theme.textSub,
+                  border: `1px solid ${editShowFrom === sf.value ? theme.accentBorder : theme.inputBorder}`,
                 }}>{sf.label}</button>
               ))}
-              {task.showFrom && (
-                <button onClick={() => updateField("showFrom", null)} style={{
+              {editShowFrom && (
+                <button onClick={() => setEditShowFrom("")} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
                   background: "transparent", color: theme.red,
                   border: `1px solid ${theme.red}25`,
                 }}>✕ Zobrazit hned</button>
               )}
             </div>
-            <input type="date" value={task.showFrom || ""}
-              onChange={e => updateField("showFrom", e.target.value || null)}
+            <input type="date" value={editShowFrom || ""}
+              onChange={e => setEditShowFrom(e.target.value)}
               style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px" }}
             />
-            {task.showFrom && (
+            {editShowFrom && (
               <div style={{ fontSize: "11px", color: theme.accent, marginTop: "3px" }}>
-                📅 Úkol se zobrazí od {formatDate(task.showFrom)}{task.dueDate ? `, termín ${formatDate(task.dueDate)}` : ""}
+                📅 Úkol se zobrazí od {formatDate(editShowFrom)}{editDueDate ? `, termín ${formatDate(editDueDate)}` : ""}
               </div>
             )}
           </div>
 
           {/* ── Season months for recurring ── */}
-          {task.recDays > 0 && (
+          {editRecDays > 0 && (
             <div style={{ marginBottom: "8px" }}>
               <div style={labelStyle}>Aktivní měsíce (prázdné = celoročně)</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
                 {MONTH_LABELS.map((m, i) => {
                   const monthNum = i + 1;
-                  const isActive = (task.activeMo || []).includes(monthNum);
+                  const isActive = editActiveMo.includes(monthNum);
                   return (
                     <button key={i} onClick={() => {
-                      const current = task.activeMo || [];
-                      updateField("activeMo", isActive
-                        ? current.filter(x => x !== monthNum)
-                        : [...current, monthNum]
+                      setEditActiveMo(isActive
+                        ? editActiveMo.filter(x => x !== monthNum)
+                        : [...editActiveMo, monthNum]
                       );
                     }} style={{
                       ...buttonStyle(), padding: "3px 6px", fontSize: "9px",
@@ -975,44 +1033,26 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               </div>
             </div>
           )}
-
-          {/* ── Type toggle (simple ↔ complex) ── */}
-          <button onClick={() => {
-            const newType = task.type === "complex" ? "simple" : "complex";
-            onUpdate(task.id, {
-              type: newType,
-              checklist: newType === "complex" ? (task.checklist || []) : task.checklist,
-            });
-          }} style={{
-            ...buttonStyle(), padding: "5px 10px", fontSize: "10px",
-            background: theme.inputBg, color: theme.textSub,
-            border: `1px solid ${theme.inputBorder}`, marginBottom: "6px",
-          }}>
-            {task.type === "complex"
-              ? "☰ Komplexní → Přepnout na jednoduchý"
-              : "✓ Jednoduchý → Přepnout na checklist"
-            }
-          </button>
         </>
       )}
 
-      {/* ── Checklist (shown for complex type OR if items exist) ── */}
-      {(task.type === "complex" || (task.checklist && task.checklist.length > 0)) && (
+      {/* ── Checklist (shown for complex type OR if items exist) — commits immediately ── */}
+      {(editType === "complex" || (task.checklist && task.checklist.length > 0)) && (
         <Checklist
           items={task.checklist || []}
           userName={currentUser.name}
           theme={theme}
-          onChange={cl => updateField("checklist", cl)}
+          onChange={cl => commitImmediate("checklist", cl)}
           onAllCompleted={() => {}}
         />
       )}
 
-      {/* ── Images ── */}
+      {/* ── Images — commits immediately ── */}
       {(task.images?.length > 0 || !taskIsDone) && (
         <ImageAttachments
           images={task.images || []}
           theme={theme}
-          onChange={imgs => updateField("images", imgs)}
+          onChange={imgs => commitImmediate("images", imgs)}
         />
       )}
 
@@ -1056,7 +1096,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               <ActionButton label="Splněno ✓" onClick={() => onStatusChange(task.id, "done")} theme={theme} green />
             </>
           )}
-          <ActionButton label="⏰ Odlož" onClick={() => updateField("showFrom", addDays(7))} theme={theme} subtle />
+          <ActionButton label="⏰ Odlož" onClick={() => commitImmediate("showFrom", addDays(7))} theme={theme} subtle />
           {onDelete && <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />}
         </div>
       )}
@@ -1756,7 +1796,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
    STATISTICS
    ═══════════════════════════════════════════════════════ */
 
-function StatsBar({ tasks, currentUser, users, theme }) {
+function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId }) {
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
 
   // Aktivní úkoly které mám plnit JÁ
@@ -1788,23 +1828,41 @@ function StatsBar({ tasks, currentUser, users, theme }) {
     ).length,
   }));
 
+  const stats = [
+    { id: "my",       value: myActive.length,              label: "Zbývá mně",     color: theme.accent },
+    { id: "assigned", value: assignedByMeToOthers.length,  label: "Zadáno druhým", color: theme.purple },
+    { id: "done_week", value: doneThisWeekByMe,            label: "Splněno týden", color: theme.green },
+    { id: "overdue",  value: overdueCount,                 label: "Po termínu",    color: overdueCount > 0 ? theme.red : theme.textDim },
+  ];
+
   return (
     <div style={{ ...cardStyle(theme), padding: "12px 14px", marginBottom: "14px" }}>
       <div style={{ display: "flex", gap: "4px", marginBottom: perUserWeek.length > 1 ? "8px" : "0" }}>
-        {[
-          { value: myActive.length, label: "Zbývá mně", color: theme.accent },
-          { value: assignedByMeToOthers.length, label: "Zadáno druhým", color: theme.purple },
-          { value: doneThisWeekByMe, label: "Splněno týden", color: theme.green },
-          { value: overdueCount, label: "Po termínu", color: overdueCount > 0 ? theme.red : theme.textDim },
-        ].map((stat, i) => (
-          <div key={i} style={{ flex: "1 1 0", textAlign: "center" }}>
-            <div style={{ fontSize: "18px", fontWeight: 700, color: stat.color }}>{stat.value}</div>
-            <div style={{
-              fontSize: "9px", color: theme.textMid, fontWeight: 600,
-              textTransform: "uppercase", letterSpacing: "0.2px", marginTop: "1px",
-            }}>{stat.label}</div>
-          </div>
-        ))}
+        {stats.map((stat) => {
+          const isActive = activeStatId === stat.id;
+          return (
+            <button key={stat.id}
+              onClick={() => onStatClick && onStatClick(stat.id)}
+              title={`Filtrovat: ${stat.label}`}
+              style={{
+                ...buttonStyle(),
+                flex: "1 1 0",
+                background: isActive ? `${stat.color}15` : "transparent",
+                border: `1px solid ${isActive ? stat.color + "50" : "transparent"}`,
+                borderRadius: "8px",
+                padding: "6px 4px",
+                textAlign: "center",
+                cursor: "pointer",
+                transition: "all 0.15s",
+              }}>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: stat.color }}>{stat.value}</div>
+              <div style={{
+                fontSize: "9px", color: theme.textMid, fontWeight: 600,
+                textTransform: "uppercase", letterSpacing: "0.2px", marginTop: "1px",
+              }}>{stat.label}</div>
+            </button>
+          );
+        })}
       </div>
       {perUserWeek.length > 1 && (
         <div style={{
@@ -2546,12 +2604,20 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           {users.filter(u => u.name !== currentUser.name).map(u =>
             unreadCounts[u.name] > 0 ? (
-              <span key={u.name} style={{ fontSize: "10px", color: theme.textSub }}>
+              <button key={u.name}
+                onClick={() => setFilter(`person:${u.name}`)}
+                title={`Zobrazit úkoly pro ${u.name}`}
+                style={{
+                  ...buttonStyle(),
+                  fontSize: "10px", color: theme.textSub,
+                  background: "transparent", border: "none",
+                  padding: "2px 4px", display: "flex", alignItems: "center", gap: "4px",
+                }}>
                 {u.name}: <span style={{
                   background: theme.yellow, color: "#fff", borderRadius: "8px",
                   padding: "1px 5px", fontSize: "9px", fontWeight: 800,
                 }}>{unreadCounts[u.name]}</span>
-              </span>
+              </button>
             ) : null
           )}
           {currentUser.admin && (
@@ -2589,7 +2655,31 @@ export default function App() {
           />
         )}
 
-        <StatsBar tasks={tasks} currentUser={currentUser} users={users} theme={theme} />
+        <StatsBar
+          tasks={tasks}
+          currentUser={currentUser}
+          users={users}
+          theme={theme}
+          activeStatId={
+            filter === "my" && viewStatus === "active" && sortMode === "smart" ? "my"
+            : filter === "assigned" && viewStatus === "active" ? "assigned"
+            : filter === "my" && viewStatus === "done" ? "done_week"
+            : filter === "my" && viewStatus === "active" && sortMode === "date" ? "overdue"
+            : null
+          }
+          onStatClick={(id) => {
+            // Apply filter based on which stat was clicked
+            if (id === "my") {
+              setFilter("my"); setViewStatus("active"); setSortMode("smart");
+            } else if (id === "assigned") {
+              setFilter("assigned"); setViewStatus("active");
+            } else if (id === "done_week") {
+              setFilter("my"); setViewStatus("done");
+            } else if (id === "overdue") {
+              setFilter("my"); setViewStatus("active"); setSortMode("date");
+            }
+          }}
+        />
 
         <QuickAddBar
           currentUser={currentUser}
