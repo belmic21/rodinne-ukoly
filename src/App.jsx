@@ -1654,8 +1654,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         let currentPersonCount = 0;
         if (isTyping) {
           currentPersonCount = quickAssignees.length;
-          if (quickAssignees.length === 1) currentPersonLabel = quickAssignees[0];
-          else if (quickAssignees.length > 1) currentPersonLabel = `${quickAssignees.length} osob`;
+          if (quickAssignees.length === users.length && users.length > 1) {
+            currentPersonLabel = "Všichni";
+          } else if (quickAssignees.length === 1) {
+            currentPersonLabel = quickAssignees[0];
+          } else if (quickAssignees.length > 1) {
+            // Show first 2 initials + count indicator: "Mi, Pe +1"
+            const labels = quickAssignees.slice(0, 2).map(getUserLabel).join(", ");
+            const extra = quickAssignees.length > 2 ? ` +${quickAssignees.length - 2}` : "";
+            currentPersonLabel = labels + extra;
+          }
         } else {
           if (scopeFilter === "my") { currentPersonLabel = currentUser.name; currentPersonCount = 1; }
           else if (scopeFilter && scopeFilter.startsWith("person:")) {
@@ -1801,6 +1809,38 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         const perDropdown = (
           <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+            {/* Quick "Všichni" option (typing mode only) — one-tap multi-select */}
+            {isTyping && users.length > 1 && (() => {
+              const allSelected = users.every(u => quickAssignees.includes(u.name));
+              return (
+                <button
+                  onClick={() => {
+                    if (allSelected) {
+                      setQuickAssignees([]);
+                    } else {
+                      setQuickAssignees(users.map(u => u.name));
+                    }
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px", fontWeight: 600,
+                    background: allSelected ? theme.accentSoft : "transparent",
+                    color: allSelected ? theme.accent : theme.text,
+                    border: "none",
+                    borderBottom: `1px solid ${theme.cardBorder}`,
+                    textAlign: "left", borderRadius: 0,
+                    display: "flex", alignItems: "center", gap: "8px",
+                    marginBottom: "2px",
+                  }}
+                  onMouseEnter={e => { if (!allSelected) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!allSelected) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ fontSize: "14px", width: "24px", textAlign: "center" }}>👥</span>
+                  <span style={{ flex: 1 }}>Všichni</span>
+                  {allSelected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
+                </button>
+              );
+            })()}
+
             {users.map(u => {
               const selected = isTyping
                 ? quickAssignees.includes(u.name)
@@ -1851,6 +1891,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 textAlign: "left", borderRadius: 0, marginTop: "2px",
               }}>✕ Zrušit výběr</button>
             )}
+            {isTyping && (
+              <div style={{
+                fontSize: "10px", color: theme.textMid,
+                padding: "5px 10px",
+                borderTop: quickAssignees.length > 0 ? "none" : `1px solid ${theme.cardBorder}`,
+                marginTop: quickAssignees.length > 0 ? 0 : "2px",
+              }}>
+                💡 Můžeš vybrat víc osob zároveň
+              </div>
+            )}
           </div>
         );
 
@@ -1867,10 +1917,18 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             chips.push({ key: "pri", label: pri.sym + " " + pri.label, color: theme.priority[quickPriority].text,
               onRemove: () => setQuickPriority(null) });
           }
-          quickAssignees.forEach(name => {
-            chips.push({ key: "a_" + name, label: name, color: theme.accent,
-              onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)) });
-          });
+          // If all users are assigned, collapse to single "Všichni" chip
+          if (quickAssignees.length === users.length && users.length > 1) {
+            chips.push({
+              key: "all", label: "👥 Všichni", color: theme.accent,
+              onRemove: () => setQuickAssignees([]),
+            });
+          } else {
+            quickAssignees.forEach(name => {
+              chips.push({ key: "a_" + name, label: name, color: theme.accent,
+                onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)) });
+            });
+          }
         } else {
           if (categoryFilter && categoryFilter !== "all") {
             const cat = getCategory(categoryFilter);
@@ -1913,19 +1971,6 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
                 theme.accent, !!currentPersonLabel, perDropdown
               )}
-
-              {/* Vše — opens bottom sheet as alternative */}
-              <button
-                onClick={() => { setOpenSegment(null); setPickerOpen(true); }}
-                title="Otevřít celou paletu"
-                style={{
-                  ...buttonStyle(),
-                  padding: "5px 10px", fontSize: "11px",
-                  background: "transparent", color: theme.textSub,
-                  border: `1px dashed ${theme.inputBorder}`, borderRadius: "16px",
-                }}>
-                Vše ▾
-              </button>
 
               {/* Spacer */}
               <span style={{ flex: 1 }} />
