@@ -2327,7 +2327,11 @@ export default function App() {
   useEffect(() => {
     if ("serviceWorker" in navigator && navigator.serviceWorker.controller && currentUser) {
       const myUnread = tasks.filter(t =>
-        !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t)
+        !t.seenBy?.includes(currentUser.name) &&
+        t.createdBy !== currentUser.name &&
+        !isDone(t) &&
+        !isDeleted(t) &&
+        t.assignedTo?.includes(currentUser.name)  // only tasks assigned to me
       ).length;
       if (myUnread === 0) {
         navigator.serviceWorker.controller.postMessage({ type: "TASKS_SEEN" });
@@ -2540,7 +2544,11 @@ export default function App() {
     const counts = {};
     users.forEach(u => {
       counts[u.name] = tasks.filter(t =>
-        !t.seenBy?.includes(u.name) && t.createdBy !== u.name && !isDone(t)
+        !t.seenBy?.includes(u.name) &&     // user hasn't seen it
+        t.createdBy !== u.name &&          // user didn't create it
+        !isDone(t) &&                      // task is active
+        !isDeleted(t) &&                   // not deleted
+        t.assignedTo?.includes(u.name)     // ← BUG FIX: task is actually assigned to this user
       ).length;
     });
     return counts;
@@ -2579,7 +2587,11 @@ export default function App() {
     }
     else if (filter === "assigned") result = result.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name));
     else if (filter === "shared") result = result.filter(t => t.assignTo === "both");
-    else if (filter === "unread") result = result.filter(t => !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name);
+    else if (filter === "unread") result = result.filter(t =>
+      !t.seenBy?.includes(currentUser.name) &&
+      t.createdBy !== currentUser.name &&
+      t.assignedTo?.includes(currentUser.name)  // only my own unread
+    );
 
     // Category filter
     if (categoryFilter !== "all") result = result.filter(t => t.category === categoryFilter);
