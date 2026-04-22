@@ -1137,6 +1137,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 
 function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
 
   const isNew = !task.seenBy?.includes(currentUser.name) && task.createdBy !== currentUser.name;
   const overdue = daysDiff(task.dueDate) < 0 && !isDone(task);
@@ -1355,10 +1356,81 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           </div>
         </div>
 
-        {/* Right side: chevron only */}
-        <span style={{ fontSize: "10px", color: theme.textDim, marginTop: "5px", marginLeft: "4px" }}>
-          {isOpen ? "▲" : "▼"}
-        </span>
+        {/* Right side: quick snooze + chevron */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginTop: "3px", marginLeft: "4px", position: "relative" }}>
+          {/* Quick snooze icon — visible only for active non-deferred tasks */}
+          {!taskIsDone && canAct && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSnoozeMenuOpen(!snoozeMenuOpen);
+              }}
+              title="Odložit úkol"
+              style={{
+                ...buttonStyle(),
+                width: "26px", height: "26px", padding: "0",
+                background: snoozeMenuOpen ? theme.accentSoft : "transparent",
+                color: theme.textSub, fontSize: "13px",
+                border: `1px solid ${snoozeMenuOpen ? theme.accentBorder : "transparent"}`,
+                borderRadius: "6px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.15s",
+              }}>
+              ⏰
+            </button>
+          )}
+          <span style={{ fontSize: "10px", color: theme.textDim, marginTop: "5px" }}>
+            {isOpen ? "▲" : "▼"}
+          </span>
+
+          {/* Snooze menu popup — absolute positioned */}
+          {snoozeMenuOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute", top: "32px", right: "0",
+                background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                borderRadius: "10px", padding: "6px",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+                zIndex: 20,
+                display: "flex", flexDirection: "column", gap: "2px",
+                minWidth: "120px",
+                animation: "slideUp 0.15s",
+              }}>
+              <div style={{
+                fontSize: "9px", color: theme.textMid, fontWeight: 700,
+                textTransform: "uppercase", letterSpacing: "0.3px",
+                padding: "4px 8px 2px",
+              }}>
+                Odložit do
+              </div>
+              {[
+                { label: "Zítra",  value: addDays(1) },
+                { label: "3 dny",  value: addDays(3) },
+                { label: "Týden",  value: addDays(7) },
+                { label: "Měsíc", value: addDays(30) },
+              ].map(opt => (
+                <button key={opt.label}
+                  onClick={() => {
+                    onUpdate(task.id, { showFrom: opt.value });
+                    setSnoozeMenuOpen(false);
+                    setIsOpen(false);
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: "transparent", color: theme.text,
+                    border: "none", textAlign: "left",
+                    borderRadius: "6px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Expanded detail */}
@@ -1385,7 +1457,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, scopeFilter, onScopeFilterChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -1663,6 +1735,33 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             );
           })}
 
+          {/* Third divider before deferred toggle — only shown in filter mode */}
+          {!text.trim() && (
+            <span style={{ width: "1px", height: "20px", background: theme.cardBorder, margin: "0 2px", flexShrink: 0 }} />
+          )}
+
+          {/* Deferred toggle ⏰ — shows/hides deferred tasks in active view (filter mode only) */}
+          {!text.trim() && (
+            <button
+              onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
+              title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
+              style={{
+                ...buttonStyle(),
+                minWidth: "34px", height: "30px", padding: "0 6px",
+                fontSize: "14px",
+                background: showDeferred ? `${theme.purple}15` : "transparent",
+                color: showDeferred ? theme.purple : theme.textDim,
+                border: `2px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
+                borderRadius: "8px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: showDeferred ? 1 : 0.5,
+                transition: "all 0.15s",
+                flexShrink: 0,
+              }}>
+              ⏰
+            </button>
+          )}
+
           {/* Mode indicator / reset filter */}
           {text.trim() ? (
             <span style={{
@@ -1882,14 +1981,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId }) {
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
 
-  // Aktivní úkoly které mám plnit JÁ
+  // Helper: je úkol "viditelně aktivní" — tj. není done, není deleted,
+  // a buď nemá showFrom nebo už showFrom nastal (není odložený do budoucnosti)
+  const isVisiblyActive = (t) =>
+    !isDone(t) && !isDeleted(t) &&
+    !(t.showFrom && daysDiff(t.showFrom) > 0);
+
+  // Aktivní úkoly které mám plnit JÁ (nezahrnuje odložené do budoucnosti)
   const myActive = tasks.filter(t =>
-    !isDone(t) && !isDeleted(t) && t.assignedTo?.includes(currentUser.name)
+    isVisiblyActive(t) && t.assignedTo?.includes(currentUser.name)
   );
 
   // Úkoly, které JÁ jsem zadal NĚKOMU DRUHÉMU (ne sobě)
   const assignedByMeToOthers = tasks.filter(t =>
-    !isDone(t) && !isDeleted(t) &&
+    isVisiblyActive(t) &&
     t.createdBy === currentUser.name &&
     !t.assignedTo?.every(a => a === currentUser.name)
   );
@@ -2198,6 +2303,7 @@ export default function App() {
   const [sortMode, setSortMode] = useState("smart");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [undoState, setUndoState] = useState(null);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
@@ -2564,8 +2670,8 @@ export default function App() {
       result = result.filter(t => {
         if (isDeleted(t)) return false;
         if (!isDone(t)) {
-          // In active view, hide planned (future showFrom) tasks
-          if (t.showFrom && daysDiff(t.showFrom) > 0) return false;
+          // In active view, hide planned (future showFrom) tasks UNLESS showDeferred is on
+          if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
         // Show recently completed tasks (within 24h) crossed out
@@ -2614,16 +2720,20 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, searchQuery]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, searchQuery, showDeferred]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
+    // Active = not done, not deleted
     const activeTasks = tasks.filter(t => !isDone(t) && !isDeleted(t));
+    // Planned = active but deferred (showFrom in future)
     const plannedCount = activeTasks.filter(t => t.showFrom && daysDiff(t.showFrom) > 0).length;
+    // Visible = active AND not deferred — these count in "Moje", "Zadané", "Společné"
+    const visibleActive = activeTasks.filter(t => !(t.showFrom && daysDiff(t.showFrom) > 0));
     return {
-      my: activeTasks.filter(t => t.assignedTo?.includes(currentUser.name)).length,
-      assigned: activeTasks.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
-      shared: activeTasks.filter(t => t.assignTo === "both").length,
+      my: visibleActive.filter(t => t.assignedTo?.includes(currentUser.name)).length,
+      assigned: visibleActive.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
+      shared: visibleActive.filter(t => t.assignTo === "both").length,
       planned: plannedCount,
     };
   }, [tasks, currentUser]);
@@ -2786,6 +2896,8 @@ export default function App() {
           categoryCounts={categoryCounts}
           scopeFilter={filter}
           onScopeFilterChange={setFilter}
+          showDeferred={showDeferred}
+          onShowDeferredChange={setShowDeferred}
         />
 
         {/* Search */}
