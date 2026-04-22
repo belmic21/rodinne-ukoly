@@ -21,6 +21,7 @@ export const dbToTask = (r) => ({
   category: r.category,
   status: r.status,
   dueDate: r.due_date,
+  showFrom: r.show_from,            // ← NEW: deferred "show from" date
   recDays: r.rec_days,
   activeMo: r.active_months || [],
   assignTo: r.assign_to,
@@ -33,6 +34,7 @@ export const dbToTask = (r) => ({
   createdAt: r.created_at,
   completedAt: r.completed_at,
   completedByUser: r.completed_by_user,
+  deletedAt: r.deleted_at,          // ← NEW: trash timestamp
 })
 
 export const taskToDb = (t) => ({
@@ -44,6 +46,7 @@ export const taskToDb = (t) => ({
   category: t.category,
   status: t.status,
   due_date: t.dueDate,
+  show_from: t.showFrom,            // ← NEW: deferred "show from" date
   rec_days: t.recDays,
   active_months: t.activeMo,
   assign_to: t.assignTo,
@@ -56,6 +59,7 @@ export const taskToDb = (t) => ({
   created_at: t.createdAt,
   completed_at: t.completedAt,
   completed_by_user: t.completedByUser,
+  deleted_at: t.deletedAt,          // ← NEW: trash timestamp
 })
 
 export const dbToUser = (r) => ({
