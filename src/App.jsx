@@ -1490,8 +1490,23 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [showFrom, setShowFrom] = useState("");
   // Bottom sheet for compact filter/picker UI
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Which segment dropdown is open ("cat" | "pri" | "per" | null)
+  const [openSegment, setOpenSegment] = useState(null);
   const inputRef = useRef();
+  const segmentBarRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
+
+  // Close open segment dropdown when clicking outside the segment bar
+  useEffect(() => {
+    if (!openSegment) return;
+    const onDocClick = (e) => {
+      if (segmentBarRef.current && !segmentBarRef.current.contains(e.target)) {
+        setOpenSegment(null);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [openSegment]);
 
   // Compute final assignment from quickAssignees array
   const computeAssignment = () => {
@@ -1627,127 +1642,340 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
-      {/* Compact filter bar — active chips + "+ Filtry" button + deferred toggle */}
+      {/* Segmented filter bar — 3 buttons with mini-dropdowns + chips below */}
       {!showFull && (() => {
         const isTyping = text.trim().length > 0;
-        // Collect ACTIVE chips for display in the bar
-        const chips = [];
 
+        // Figure out CURRENT state for each segment based on mode
+        const currentCategory = isTyping ? quickCategory : (categoryFilter !== "all" ? categoryFilter : null);
+        const currentPriority = isTyping ? quickPriority : null;
+        // For filter mode, "person" is extracted from scopeFilter
+        let currentPersonLabel = null;
+        let currentPersonCount = 0;
         if (isTyping) {
-          // TYPING MODE — chips are picks for new task
+          currentPersonCount = quickAssignees.length;
+          if (quickAssignees.length === 1) currentPersonLabel = quickAssignees[0];
+          else if (quickAssignees.length > 1) currentPersonLabel = `${quickAssignees.length} osob`;
+        } else {
+          if (scopeFilter === "my") { currentPersonLabel = currentUser.name; currentPersonCount = 1; }
+          else if (scopeFilter && scopeFilter.startsWith("person:")) {
+            currentPersonLabel = scopeFilter.replace("person:", "");
+            currentPersonCount = 1;
+          }
+        }
+
+        // Segment helper — renders a button with its mini-dropdown
+        const renderSegment = (id, defaultLabel, activeLabel, activeColor, isActive, dropdownContent) => {
+          const isOpen = openSegment === id;
+          return (
+            <div style={{ position: "relative", flexShrink: 0 }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenSegment(isOpen ? null : id);
+                }}
+                style={{
+                  ...buttonStyle(),
+                  padding: "5px 10px", fontSize: "12px", fontWeight: 600,
+                  background: isActive ? (activeColor + "15") : theme.inputBg,
+                  color: isActive ? activeColor : theme.textSub,
+                  border: `1px solid ${isActive ? activeColor + "50" : theme.inputBorder}`,
+                  borderRadius: "16px",
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  whiteSpace: "nowrap",
+                }}>
+                {isActive ? activeLabel : defaultLabel}
+                <span style={{ fontSize: "8px", opacity: 0.7 }}>{isOpen ? "▲" : "▼"}</span>
+              </button>
+              {isOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: "absolute", top: "calc(100% + 4px)", left: 0,
+                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: "10px", padding: "6px",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    zIndex: 25, minWidth: "170px",
+                    animation: "slideUp 0.15s",
+                  }}>
+                  {dropdownContent}
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        // DROPDOWN CONTENTS
+        const catDropdown = (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+            {CATEGORIES.map(cat => {
+              const selected = currentCategory === cat.id;
+              const count = categoryCounts?.[cat.id] || 0;
+              return (
+                <button key={cat.id}
+                  onClick={() => {
+                    if (isTyping) {
+                      setQuickCategory(selected ? null : cat.id);
+                    } else {
+                      onCategoryFilterChange(selected ? "all" : cat.id);
+                    }
+                    setOpenSegment(null);
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: selected ? theme.accentSoft : "transparent",
+                    color: selected ? theme.accent : theme.text,
+                    border: "none", textAlign: "left", borderRadius: "6px",
+                    display: "flex", alignItems: "center", gap: "6px",
+                  }}
+                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ fontSize: "15px" }}>{cat.icon}</span>
+                  <span style={{ flex: 1 }}>{cat.label}</span>
+                  {count > 0 && !isTyping && (
+                    <span style={{ fontSize: "10px", color: theme.textMid, fontWeight: 700 }}>{count}</span>
+                  )}
+                  {selected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
+                </button>
+              );
+            })}
+            {currentCategory && (
+              <button onClick={() => {
+                if (isTyping) setQuickCategory(null);
+                else onCategoryFilterChange("all");
+                setOpenSegment(null);
+              }} style={{
+                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
+                background: "transparent", color: theme.red,
+                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
+                textAlign: "left", borderRadius: 0, marginTop: "2px",
+              }}>✕ Zrušit výběr</button>
+            )}
+          </div>
+        );
+
+        const priDropdown = (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+            {PRIORITIES.map(pri => {
+              const selected = (isTyping ? (quickPriority || "low") : "low") === pri.id;
+              const isSet = isTyping && quickPriority === pri.id;
+              const pt = theme.priority[pri.id];
+              return (
+                <button key={pri.id}
+                  onClick={() => {
+                    if (!isTyping) { setOpenSegment(null); return; } // priority is only used in typing mode
+                    setQuickPriority(pri.id === "low" ? null : pri.id);
+                    setOpenSegment(null);
+                  }}
+                  disabled={!isTyping}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: isSet ? pt.cardBg : "transparent",
+                    color: isSet ? pt.text : theme.text,
+                    border: "none", textAlign: "left", borderRadius: "6px",
+                    display: "flex", alignItems: "center", gap: "8px",
+                    opacity: !isTyping ? 0.5 : 1,
+                  }}
+                  onMouseEnter={e => { if (!isSet && isTyping) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ fontSize: "15px", fontWeight: 900, color: pt.text, width: "16px" }}>
+                    {pri.sym}
+                  </span>
+                  <span style={{ flex: 1 }}>{pri.label}</span>
+                </button>
+              );
+            })}
+            {!isTyping && (
+              <div style={{
+                fontSize: "10px", color: theme.textMid,
+                padding: "5px 10px", borderTop: `1px solid ${theme.cardBorder}`,
+                marginTop: "2px",
+              }}>
+                Priorita se volí při zadávání úkolu
+              </div>
+            )}
+          </div>
+        );
+
+        const perDropdown = (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+            {users.map(u => {
+              const selected = isTyping
+                ? quickAssignees.includes(u.name)
+                : (u.name === currentUser.name ? scopeFilter === "my" : scopeFilter === `person:${u.name}`);
+              return (
+                <button key={u.name}
+                  onClick={() => {
+                    if (isTyping) {
+                      setQuickAssignees(prev =>
+                        prev.includes(u.name) ? prev.filter(n => n !== u.name) : [...prev, u.name]
+                      );
+                      // keep open in typing mode so user can pick multiple
+                    } else {
+                      if (u.name === currentUser.name) {
+                        onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
+                      } else {
+                        const key = `person:${u.name}`;
+                        onScopeFilterChange && onScopeFilterChange(scopeFilter === key ? "all" : key);
+                      }
+                      setOpenSegment(null);
+                    }
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: selected ? theme.accentSoft : "transparent",
+                    color: selected ? theme.accent : theme.text,
+                    border: "none", textAlign: "left", borderRadius: "6px",
+                    display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{
+                    fontSize: "10px", fontWeight: 700,
+                    width: "24px", textAlign: "center",
+                    color: selected ? theme.accent : theme.textMid,
+                  }}>{getUserLabel(u.name)}</span>
+                  <span style={{ flex: 1 }}>{u.name}</span>
+                  {selected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
+                </button>
+              );
+            })}
+            {isTyping && quickAssignees.length > 0 && (
+              <button onClick={() => { setQuickAssignees([]); setOpenSegment(null); }} style={{
+                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
+                background: "transparent", color: theme.red,
+                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
+                textAlign: "left", borderRadius: 0, marginTop: "2px",
+              }}>✕ Zrušit výběr</button>
+            )}
+          </div>
+        );
+
+        // CHIPS (active filters)
+        const chips = [];
+        if (isTyping) {
           if (quickCategory) {
             const cat = getCategory(quickCategory);
-            chips.push({
-              key: "cat", label: cat.icon + " " + cat.label,
-              onRemove: () => setQuickCategory(null),
-              color: theme.accent,
-            });
+            chips.push({ key: "cat", label: cat.icon + " " + cat.label, color: theme.accent,
+              onRemove: () => setQuickCategory(null) });
           }
           if (quickPriority && quickPriority !== "low") {
             const pri = getPriority(quickPriority);
-            const pt = theme.priority[quickPriority];
-            chips.push({
-              key: "pri", label: pri.sym + " " + pri.label,
-              onRemove: () => setQuickPriority(null),
-              color: pt.text,
-            });
+            chips.push({ key: "pri", label: pri.sym + " " + pri.label, color: theme.priority[quickPriority].text,
+              onRemove: () => setQuickPriority(null) });
           }
           quickAssignees.forEach(name => {
-            chips.push({
-              key: "a_" + name, label: name,
-              onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)),
-              color: theme.accent,
-            });
+            chips.push({ key: "a_" + name, label: name, color: theme.accent,
+              onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)) });
           });
         } else {
-          // FILTER MODE — chips are active filters
           if (categoryFilter && categoryFilter !== "all") {
             const cat = getCategory(categoryFilter);
-            chips.push({
-              key: "cat", label: cat.icon + " " + cat.label,
-              onRemove: () => onCategoryFilterChange("all"),
-              color: theme.accent,
-            });
+            chips.push({ key: "cat", label: cat.icon + " " + cat.label, color: theme.accent,
+              onRemove: () => onCategoryFilterChange("all") });
           }
           if (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my") {
             if (scopeFilter.startsWith("person:")) {
               const name = scopeFilter.replace("person:", "");
-              chips.push({
-                key: "p", label: "👤 " + name,
-                onRemove: () => onScopeFilterChange("all"),
-                color: theme.accent,
-              });
+              chips.push({ key: "p", label: "👤 " + name, color: theme.accent,
+                onRemove: () => onScopeFilterChange("all") });
             } else {
               const labels = { assigned: "Zadané", shared: "Společné", unread: "Nové" };
-              chips.push({
-                key: "s", label: labels[scopeFilter] || scopeFilter,
-                onRemove: () => onScopeFilterChange("all"),
-                color: theme.accent,
-              });
+              chips.push({ key: "s", label: labels[scopeFilter] || scopeFilter, color: theme.accent,
+                onRemove: () => onScopeFilterChange("all") });
             }
           }
         }
 
         return (
-          <div style={{
-            display: "flex", gap: "4px", marginTop: "6px",
-            paddingLeft: "4px", flexWrap: "wrap", alignItems: "center",
-          }}>
-            {/* Chips of active filters/picks */}
-            {chips.map(chip => (
-              <span key={chip.key} style={{
-                display: "inline-flex", alignItems: "center", gap: "4px",
-                padding: "3px 6px 3px 8px", fontSize: "11px", fontWeight: 600,
-                background: chip.color + "15", color: chip.color,
-                border: `1px solid ${chip.color}35`,
-                borderRadius: "14px",
-              }}>
-                {chip.label}
-                <button onClick={chip.onRemove} title="Odebrat" style={{
-                  ...buttonStyle(),
-                  width: "16px", height: "16px", padding: 0,
-                  background: "transparent", color: chip.color,
-                  border: "none", fontSize: "14px", lineHeight: 1,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>×</button>
-              </span>
-            ))}
+          <div ref={segmentBarRef} style={{ marginTop: "6px" }}>
+            {/* Row of segmented buttons */}
+            <div style={{
+              display: "flex", gap: "6px", alignItems: "center",
+              paddingLeft: "4px", flexWrap: "wrap",
+            }}>
+              {renderSegment("cat",
+                <><span>🏷️</span><span>Kategorie</span></>,
+                currentCategory ? <><span>{getCategory(currentCategory).icon}</span><span>{getCategory(currentCategory).label}</span></> : "Kategorie",
+                theme.accent, !!currentCategory, catDropdown
+              )}
+              {renderSegment("pri",
+                <><span style={{ fontWeight: 900 }}>!</span><span>Priorita</span></>,
+                currentPriority ? <><span style={{ fontWeight: 900, color: theme.priority[currentPriority].text }}>{getPriority(currentPriority).sym}</span><span>{getPriority(currentPriority).label}</span></> : "Priorita",
+                currentPriority ? theme.priority[currentPriority].text : theme.accent,
+                !!currentPriority, priDropdown
+              )}
+              {renderSegment("per",
+                <><span>👤</span><span>Osoba</span></>,
+                currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
+                theme.accent, !!currentPersonLabel, perDropdown
+              )}
 
-            {/* Main "+ Filtry" button — opens bottom sheet */}
-            <button
-              onClick={() => setPickerOpen(true)}
-              title={isTyping ? "Přidat kategorii/prioritu/osobu" : "Přidat filtr"}
-              style={{
-                ...buttonStyle(),
-                padding: "4px 10px", fontSize: "11px", fontWeight: 600,
-                background: theme.inputBg, color: theme.textSub,
-                border: `1px dashed ${theme.inputBorder}`, borderRadius: "14px",
-                display: "inline-flex", alignItems: "center", gap: "3px",
-              }}>
-              ✛ {isTyping ? "Nastavit" : "Filtry"}
-            </button>
-
-            {/* Spacer */}
-            <span style={{ flex: 1 }} />
-
-            {/* Global deferred toggle — only in filter mode */}
-            {!isTyping && (
+              {/* Vše — opens bottom sheet as alternative */}
               <button
-                onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
-                title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
+                onClick={() => { setOpenSegment(null); setPickerOpen(true); }}
+                title="Otevřít celou paletu"
                 style={{
                   ...buttonStyle(),
-                  minWidth: "32px", height: "26px", padding: "0 6px",
-                  fontSize: "13px",
-                  background: showDeferred ? `${theme.purple}15` : "transparent",
-                  color: showDeferred ? theme.purple : theme.textDim,
-                  border: `1px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
-                  borderRadius: "14px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  opacity: showDeferred ? 1 : 0.6,
+                  padding: "5px 10px", fontSize: "11px",
+                  background: "transparent", color: theme.textSub,
+                  border: `1px dashed ${theme.inputBorder}`, borderRadius: "16px",
                 }}>
-                ⏰
+                Vše ▾
               </button>
+
+              {/* Spacer */}
+              <span style={{ flex: 1 }} />
+
+              {/* Deferred toggle — filter mode only */}
+              {!isTyping && (
+                <button
+                  onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
+                  title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
+                  style={{
+                    ...buttonStyle(),
+                    minWidth: "32px", height: "26px", padding: "0 6px",
+                    fontSize: "13px",
+                    background: showDeferred ? `${theme.purple}15` : "transparent",
+                    color: showDeferred ? theme.purple : theme.textDim,
+                    border: `1px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
+                    borderRadius: "14px",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    opacity: showDeferred ? 1 : 0.6,
+                  }}>
+                  ⏰
+                </button>
+              )}
+            </div>
+
+            {/* Chips row (only if any active filter) */}
+            {chips.length > 0 && (
+              <div style={{
+                display: "flex", gap: "4px", flexWrap: "wrap",
+                marginTop: "6px", paddingLeft: "4px",
+              }}>
+                {chips.map(chip => (
+                  <span key={chip.key} style={{
+                    display: "inline-flex", alignItems: "center", gap: "4px",
+                    padding: "2px 5px 2px 8px", fontSize: "11px", fontWeight: 600,
+                    background: chip.color + "15", color: chip.color,
+                    border: `1px solid ${chip.color}35`,
+                    borderRadius: "12px",
+                  }}>
+                    {chip.label}
+                    <button onClick={chip.onRemove} title="Odebrat" style={{
+                      ...buttonStyle(),
+                      width: "14px", height: "14px", padding: 0,
+                      background: "transparent", color: chip.color,
+                      border: "none", fontSize: "13px", lineHeight: 1,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>×</button>
+                  </span>
+                ))}
+              </div>
             )}
           </div>
         );
