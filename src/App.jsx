@@ -989,13 +989,16 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               <ActionButton label="Splněno ✓" onClick={() => onStatusChange(task.id, "done")} theme={theme} green />
             </>
           )}
-          <ActionButton label="⊘ Nerealizováno" onClick={() => onStatusChange(task.id, "cancelled")} theme={theme} subtle />
+          <ActionButton label="⏰ Odlož" onClick={() => updateField("showFrom", addDays(7))} theme={theme} subtle />
+          {onDelete && <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />}
         </div>
       )}
 
       {taskIsDone && (
-        <ActionButton label="↩ Vrátit zpět" onClick={() => onStatusChange(task.id, "reopen")}
-          theme={theme} subtle style={{ marginTop: "8px" }} />
+        <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginTop: "8px" }}>
+          <ActionButton label="↩ Vrátit zpět" onClick={() => onStatusChange(task.id, "reopen")} theme={theme} subtle />
+          {onDelete && <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />}
+        </div>
       )}
 
       {/* Delete / Trash actions */}
@@ -2312,19 +2315,25 @@ export default function App() {
     if (!currentUser) return [];
     let result = tasks;
 
-    // Status filter — keep recently completed visible in active view
+    // Status filter
     if (viewStatus === "active") {
       const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
       result = result.filter(t => {
-        if (isDeleted(t)) return false; // never show deleted in active
-        if (!isDone(t)) return true; // active tasks always shown
+        if (isDeleted(t)) return false;
+        if (!isDone(t)) {
+          // In active view, hide planned (future showFrom) tasks
+          if (t.showFrom && daysDiff(t.showFrom) > 0) return false;
+          return true;
+        }
         // Show recently completed tasks (within 24h) crossed out
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
         return false;
       });
     }
+    else if (viewStatus === "planned") {
+      result = result.filter(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t));
+    }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
-    else if (viewStatus === "cancelled") result = result.filter(t => t.status === "cancelled");
     else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
 
     // Scope filter
@@ -2336,15 +2345,6 @@ export default function App() {
     else if (filter === "assigned") result = result.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name));
     else if (filter === "shared") result = result.filter(t => t.assignTo === "both");
     else if (filter === "unread") result = result.filter(t => !t.seenBy?.includes(currentUser.name) && t.createdBy !== currentUser.name);
-    else if (filter === "planned") result = result.filter(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t));
-
-    // Hide future planned tasks from all views EXCEPT "planned" filter
-    if (filter !== "planned" && filter !== "all") {
-      result = result.filter(t => {
-        if (!t.showFrom) return true; // No showFrom = always visible
-        return daysDiff(t.showFrom) <= 0; // Show only if showFrom date has arrived
-      });
-    }
 
     // Category filter
     if (categoryFilter !== "all") result = result.filter(t => t.category === categoryFilter);
@@ -2531,7 +2531,6 @@ export default function App() {
             ))}
             <option value="assigned">Zadané ({stats.assigned})</option>
             <option value="shared">Společné ({stats.shared})</option>
-            <option value="planned">⏰ Plánované ({stats.planned})</option>
             <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
             <option value="all">Vše</option>
           </select>
@@ -2543,8 +2542,8 @@ export default function App() {
             color: theme.textSub,
           }}>
             <option value="active">Aktivní</option>
+            <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
             <option value="done">Splněné</option>
-            <option value="cancelled">Nerealizované</option>
             <option value="trash">🗑 Koš</option>
           </select>
 
