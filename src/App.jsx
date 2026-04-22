@@ -143,7 +143,7 @@ async function triggerPushNotification(task) {
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
+    await fetch(`${supabaseUrl}/functions/v1/super-api`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
