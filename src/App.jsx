@@ -4037,7 +4037,14 @@ function NotificationPanel({ currentUser, onClose, theme }) {
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-      const res = await fetch(`${supabaseUrl}/functions/v1/super-api`, {
+      if (!supabaseUrl) {
+        addLog("❌ VITE_SUPABASE_URL není nastaven v env!");
+        setTestResult("error");
+        return;
+      }
+      const url = `${supabaseUrl}/functions/v1/super-api`;
+      addLog(`🌐 URL: ${url}`);
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4050,22 +4057,30 @@ function NotificationPanel({ currentUser, onClose, theme }) {
         }),
       });
       const text = await res.text();
-      addLog(`Response ${res.status}: ${text.slice(0, 200)}`);
+      addLog(`📬 Response ${res.status}: ${text.slice(0, 300)}`);
       setTestResult(res.ok ? "ok" : "error");
     } catch (e) {
-      addLog(`❌ Chyba: ${e.message}`);
+      addLog(`❌ Fetch selhal: ${e.message}`);
+      addLog(`💡 Funkce super-api možná neexistuje v Supabase, nebo má CORS problém`);
       setTestResult("error");
     }
   };
 
-  const showLocalNotification = () => {
+  const showLocalNotification = async () => {
     addLog("🔔 Zobrazuji lokální notifikaci...");
     try {
-      new Notification("Test lokální notifikace", {
-        body: "Pokud tohle vidíš, local notifications fungují ✓",
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        addLog("❌ Service Worker není registrován");
+        return;
+      }
+      await reg.showNotification("Test lokální notifikace", {
+        body: "Pokud tohle vidíš, notifikace fungují ✓",
         icon: "/icon-192.png",
+        badge: "/icon-192.png",
+        tag: "test-local",
       });
-      addLog("✅ Lokální notifikace odeslána");
+      addLog("✅ Lokální notifikace odeslána přes SW");
     } catch (e) {
       addLog(`❌ Chyba: ${e.message}`);
     }
