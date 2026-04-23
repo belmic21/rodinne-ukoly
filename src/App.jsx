@@ -2190,6 +2190,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (taskIsDone) { cardBackground = theme.card; cardBorderColor = theme.cardBorder; }
   // Progress card — lighter accent tint
   if (progressItem) { cardBackground = theme.accentSoft; cardBorderColor = theme.accentBorder; }
+  // Deleted (trash) — muted gray look
+  if (taskIsDeleted) { cardBackground = theme.inputBg; cardBorderColor = theme.inputBorder; }
 
   // Left border color — priority color by default, overridden by state
   let leftBorderColor = priorityTheme.text;
@@ -2198,6 +2200,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (overdue) leftBorderColor = theme.red;
   if (isNew) leftBorderColor = theme.green;
   if (progressItem) leftBorderColor = theme.accent;
+  if (taskIsDeleted) leftBorderColor = theme.textDim; // muted gray left border
 
   return (
     <div id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
@@ -2241,7 +2244,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       borderRadius: "12px",
       borderLeft: `5px solid ${actionAnim ? animColor : leftBorderColor}`,
       padding: "11px 13px",
-      opacity: taskIsDone && !actionAnim ? 0.35 : 1,
+      opacity: actionAnim ? 1 : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : 1),
       cursor: "pointer",
       position: "relative",
       animation: actionAnim ? "actionCardGlow 0.55s ease-out"
@@ -2281,8 +2284,33 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       )}
 
       <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
-        {/* Quick complete checkbox */}
-        {!taskIsDone && canAct ? (
+        {/* Quick complete checkbox / Reopen / Restore depending on state */}
+        {taskIsDeleted ? (
+          /* DELETED → Restore button with accent color */
+          <button onClick={(e) => {
+            e.stopPropagation();
+            if (onRestore) {
+              runWithAnimation("restore", () => onRestore(task.id));
+            }
+          }} style={{
+            width: actionAnim === "restore" ? "40px" : "32px",
+            height: actionAnim === "restore" ? "40px" : "32px",
+            minWidth: actionAnim === "restore" ? "40px" : "32px",
+            borderRadius: "8px",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: actionAnim === "restore" ? "22px" : "15px",
+            fontWeight: 700,
+            background: actionAnim === "restore" ? theme.accent : theme.accentSoft,
+            color: actionAnim === "restore" ? "#fff" : theme.accent,
+            border: `2.5px solid ${actionAnim === "restore" ? theme.accent : theme.accentBorder}`,
+            cursor: actionAnim ? "default" : "pointer",
+            transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            boxShadow: actionAnim === "restore" ? `0 0 0 10px ${theme.accent}25, 0 4px 20px ${theme.accent}60` : "none",
+            animation: actionAnim === "restore" ? "completePulse 0.55s ease-out" : "none",
+          }} title="Obnovit z koše">
+            ↩
+          </button>
+        ) : !taskIsDone && canAct ? (
           <button onClick={handleQuickComplete} style={{
             width: completing ? "40px" : "32px",
             height: completing ? "40px" : "32px",
@@ -5056,82 +5084,95 @@ export default function App() {
           }}
         />
 
-        <QuickAddBar
-          currentUser={currentUser}
-          users={users}
-          onAdd={addTask}
-          theme={theme}
-          categoryFilter={categoryFilter}
-          onCategoryFilterChange={setCategoryFilter}
-          categoryCounts={categoryCounts}
-          priorityFilter={priorityFilter}
-          onPriorityFilterChange={setPriorityFilter}
-          scopeFilter={filter}
-          onScopeFilterChange={setFilter}
-          showDeferred={showDeferred}
-          onShowDeferredChange={setShowDeferred}
-        />
-
-        {/* Search */}
-        <div style={{ marginBottom: "10px" }}>
-          <input
-            type="text"
-            placeholder="🔍 Hledat v úkolech..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            style={{
-              ...inputStyle(theme), fontSize: "13px", padding: "8px 12px",
-              background: searchQuery ? theme.accentSoft : theme.inputBg,
-              border: `1px solid ${searchQuery ? theme.accentBorder : theme.inputBorder}`,
-            }}
-          />
-        </div>
-
-        {/* Compact filters — one row */}
         <div style={{
-          display: "flex", alignItems: "center", gap: "4px",
-          marginBottom: "8px", flexWrap: "wrap",
+          position: "sticky",
+          top: 0,
+          zIndex: 20,
+          background: theme.bg,
+          paddingTop: "2px",
+          paddingBottom: "4px",
+          marginLeft: "-2px",
+          marginRight: "-2px",
+          paddingLeft: "2px",
+          paddingRight: "2px",
         }}>
-          {/* Scope filter — includes per-person */}
-          <select value={filter} onChange={e => setFilter(e.target.value)} style={{
-            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-            background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
-            color: theme.accent, fontWeight: 600,
-          }}>
-            <option value="my">Moje ({stats.my})</option>
-            <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
-            {users.filter(u => u.name !== currentUser.name).map(u => (
-              <option key={u.name} value={`person:${u.name}`}>{u.name}</option>
-            ))}
-            <option value="assigned">Zadané ({stats.assigned})</option>
-            <option value="shared">Společné ({stats.shared})</option>
-            <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
-            <option value="all">Vše</option>
-          </select>
+          <QuickAddBar
+            currentUser={currentUser}
+            users={users}
+            onAdd={addTask}
+            theme={theme}
+            categoryFilter={categoryFilter}
+            onCategoryFilterChange={setCategoryFilter}
+            categoryCounts={categoryCounts}
+            priorityFilter={priorityFilter}
+            onPriorityFilterChange={setPriorityFilter}
+            scopeFilter={filter}
+            onScopeFilterChange={setFilter}
+            showDeferred={showDeferred}
+            onShowDeferredChange={setShowDeferred}
+          />
 
-          {/* Status */}
-          <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
-            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-            background: "transparent", border: `1px solid ${theme.inputBorder}`,
-            color: theme.textSub,
-          }}>
-            <option value="active">Aktivní</option>
-            <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
-            <option value="done">Splněné</option>
-            <option value="trash">🗑 Koš</option>
-          </select>
+          {/* Search */}
+          <div style={{ marginBottom: "10px" }}>
+            <input
+              type="text"
+              placeholder="🔍 Hledat v úkolech..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                ...inputStyle(theme), fontSize: "13px", padding: "8px 12px",
+                background: searchQuery ? theme.accentSoft : theme.inputBg,
+                border: `1px solid ${searchQuery ? theme.accentBorder : theme.inputBorder}`,
+              }}
+            />
+          </div>
 
-          {/* Sort */}
-          <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
-            ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-            background: "transparent", border: `1px solid ${theme.inputBorder}`,
-            color: theme.textSub,
+          {/* Compact filters — one row */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "4px",
+            marginBottom: "8px", flexWrap: "wrap",
           }}>
-            <option value="smart">↕ Chytré</option>
-            <option value="priority">↕ Priorita</option>
-            <option value="date">↕ Termín</option>
-            <option value="created">↕ Nejnovější</option>
-          </select>
+            {/* Scope filter — includes per-person */}
+            <select value={filter} onChange={e => setFilter(e.target.value)} style={{
+              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+              background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
+              color: theme.accent, fontWeight: 600,
+            }}>
+              <option value="my">Moje ({stats.my})</option>
+              <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
+              {users.filter(u => u.name !== currentUser.name).map(u => (
+                <option key={u.name} value={`person:${u.name}`}>{u.name}</option>
+              ))}
+              <option value="assigned">Zadané ({stats.assigned})</option>
+              <option value="shared">Společné ({stats.shared})</option>
+              <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
+              <option value="all">Vše</option>
+            </select>
+
+            {/* Status */}
+            <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
+              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+              background: "transparent", border: `1px solid ${theme.inputBorder}`,
+              color: theme.textSub,
+            }}>
+              <option value="active">Aktivní</option>
+              <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
+              <option value="done">Splněné</option>
+              <option value="trash">🗑 Koš</option>
+            </select>
+
+            {/* Sort */}
+            <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
+              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+              background: "transparent", border: `1px solid ${theme.inputBorder}`,
+              color: theme.textSub,
+            }}>
+              <option value="smart">↕ Chytré</option>
+              <option value="priority">↕ Priorita</option>
+              <option value="date">↕ Termín</option>
+              <option value="created">↕ Nejnovější</option>
+            </select>
+          </div>
         </div>
 
         {/* Task list */}
@@ -5190,18 +5231,22 @@ export default function App() {
                     )}
                     {showDelSep && (
                       <div style={{
-                        display: "flex", alignItems: "center", gap: "8px",
-                        margin: "12px 0 8px",
+                        margin: "14px 0 8px",
+                        padding: "10px 12px",
+                        background: theme.inputBg,
+                        borderTop: `3px solid ${theme.textDim}`,
+                        borderRadius: "8px 8px 0 0",
+                        borderLeft: `1px solid ${theme.inputBorder}`,
+                        borderRight: `1px solid ${theme.inputBorder}`,
+                        display: "flex", alignItems: "center", gap: "6px",
                       }}>
-                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
                         <span style={{
-                          fontSize: "10px", color: theme.red, fontWeight: 700,
+                          fontSize: "11px", color: theme.textSub, fontWeight: 700,
                           textTransform: "uppercase", letterSpacing: "0.3px",
-                          whiteSpace: "nowrap",
+                          display: "flex", alignItems: "center", gap: "5px",
                         }}>
-                          🗑 Dnes smazáno (v koši)
+                          🗑 Dnes smazáno — koš
                         </span>
-                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
                       </div>
                     )}
                     <TaskCard
