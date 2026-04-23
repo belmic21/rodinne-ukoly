@@ -2243,7 +2243,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       border: `1px solid ${actionAnim ? animColor : cardBorderColor}`,
       borderRadius: "12px",
       borderLeft: `5px solid ${actionAnim ? animColor : leftBorderColor}`,
-      padding: "11px 13px",
+      padding: "8px 11px",
       opacity: actionAnim ? 1 : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : 1),
       cursor: "pointer",
       position: "relative",
@@ -3252,6 +3252,29 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px",
                 marginBottom: "16px",
               }}>
+                {/* "Vše" pseudo-kategorie — resetuje filter */}
+                {!isTyping && (
+                  <button
+                    onClick={() => onCategoryFilterChange("all")}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "10px 4px", fontSize: "13px",
+                      background: categoryFilter === "all" ? theme.accentSoft : theme.inputBg,
+                      color: categoryFilter === "all" ? theme.accent : theme.text,
+                      border: `2px solid ${categoryFilter === "all" ? theme.accentBorder : theme.inputBorder}`,
+                      borderRadius: "10px",
+                      display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+                    }}>
+                    <span style={{ fontSize: "22px" }}>📋</span>
+                    <span style={{ fontSize: "10px", fontWeight: 600 }}>Vše</span>
+                    {categoryCounts?.all > 0 && (
+                      <span style={{
+                        fontSize: "9px", color: categoryFilter === "all" ? theme.accent : theme.textMid,
+                        fontWeight: 700,
+                      }}>{categoryCounts.all}</span>
+                    )}
+                  </button>
+                )}
                 {CATEGORIES.filter(c => c.id !== "other").map(cat => {
                   const isHighlighted = isTyping
                     ? quickCategory === cat.id
@@ -4900,39 +4923,92 @@ export default function App() {
     return items;
   }, [filteredTasks, viewStatus]);
 
+  // Helper: apply all filters EXCEPT the one being computed for.
+  // `skip` parameter: "scope" | "status" | "category" | "priority" — omits that filter from counting.
+  const countTasks = useCallback((predicate, skip = []) => {
+    if (!currentUser) return 0;
+    return tasks.filter(t => {
+      if (!predicate(t)) return false;
+      // Status filter (viewStatus) — skip if counting statuses
+      if (!skip.includes("status")) {
+        if (viewStatus === "active" && (isDone(t) || isDeleted(t))) return false;
+        if (viewStatus === "active" && t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+        if (viewStatus === "planned" && !(t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t))) return false;
+        if (viewStatus === "done" && t.status !== "done") return false;
+        if (viewStatus === "trash" && t.status !== "deleted") return false;
+      }
+      // Scope filter — skip if counting scopes
+      if (!skip.includes("scope")) {
+        if (filter === "my" && !t.assignedTo?.includes(currentUser.name)) return false;
+        else if (filter === "for_me" && !(t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name)) return false;
+        else if (filter.startsWith("person:")) {
+          const personName = filter.replace("person:", "");
+          if (!t.assignedTo?.includes(personName)) return false;
+        }
+        else if (filter === "assigned" && !(t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name))) return false;
+        else if (filter === "shared" && t.assignTo !== "both") return false;
+        else if (filter === "unread" && !(
+          !t.seenBy?.includes(currentUser.name) &&
+          t.createdBy !== currentUser.name &&
+          t.assignedTo?.includes(currentUser.name)
+        )) return false;
+      }
+      // Category filter — skip if counting categories
+      if (!skip.includes("category")) {
+        if (categoryFilter !== "all" && t.category !== categoryFilter) return false;
+      }
+      // Priority filter — skip if counting priorities
+      if (!skip.includes("priority")) {
+        if (priorityFilter !== "all" && (t.priority || "low") !== priorityFilter) return false;
+      }
+      return true;
+    }).length;
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, showDeferred]);
+
   const stats = useMemo(() => {
     if (!currentUser) return {};
-    // Active = not done, not deleted
-    const activeTasks = tasks.filter(t => !isDone(t) && !isDeleted(t));
-    // Planned = active but deferred (showFrom in future)
-    const plannedCount = activeTasks.filter(t => t.showFrom && daysDiff(t.showFrom) > 0).length;
-    // Visible = active AND not deferred — these count in "Moje", "Zadané", "Společné"
-    const visibleActive = activeTasks.filter(t => !(t.showFrom && daysDiff(t.showFrom) > 0));
     return {
-      my: visibleActive.filter(t => t.assignedTo?.includes(currentUser.name)).length,
-      forMe: visibleActive.filter(t =>
-        t.assignedTo?.includes(currentUser.name) &&
-        t.createdBy !== currentUser.name
-      ).length,
-      assigned: visibleActive.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
-      shared: visibleActive.filter(t => t.assignTo === "both").length,
-      planned: plannedCount,
+      // "my" count — scope skipped (counting per-scope)
+      my: countTasks(t => t.assignedTo?.includes(currentUser.name), ["scope"]),
+      forMe: countTasks(t =>
+        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name,
+        ["scope"]
+      ),
+      assigned: countTasks(t =>
+        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name),
+        ["scope"]
+      ),
+      shared: countTasks(t => t.assignTo === "both", ["scope"]),
+      // "planned" count — status skipped, counts only deferred with all other filters
+      planned: countTasks(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t), ["status"]),
+      // "done" count — status skipped
+      done: countTasks(t => t.status === "done", ["status"]),
+      // "trash" count
+      trash: countTasks(t => t.status === "deleted", ["status"]),
+      // "active" count (for viewStatus "Aktivní")
+      active: countTasks(t => !isDone(t) && !isDeleted(t), ["status"]),
     };
-  }, [tasks, currentUser]);
+  }, [currentUser, countTasks]);
 
   const categoryCounts = useMemo(() => {
-    const relevantTasks = tasks.filter(t =>
-      viewStatus === "active" ? (!isDone(t) && !isDeleted(t))
-      : viewStatus === "done" ? t.status === "done"
-      : viewStatus === "trash" ? t.status === "deleted"
-      : t.status === "cancelled"
-    );
     const counts = {};
+    // "all" — total for current status+scope+priority (without category filter)
+    counts.all = countTasks(() => true, ["category"]);
     CATEGORIES.forEach(cat => {
-      counts[cat.id] = relevantTasks.filter(t => t.category === cat.id).length;
+      counts[cat.id] = countTasks(t => t.category === cat.id, ["category"]);
     });
     return counts;
-  }, [tasks, viewStatus]);
+  }, [countTasks]);
+
+  // Priority counts — for priority filter display
+  const priorityCounts = useMemo(() => {
+    return {
+      all: countTasks(() => true, ["priority"]),
+      urgent: countTasks(t => (t.priority || "low") === "urgent", ["priority"]),
+      important: countTasks(t => (t.priority || "low") === "important", ["priority"]),
+      low: countTasks(t => (t.priority || "low") === "low", ["priority"]),
+    };
+  }, [countTasks]);
 
   // ── Render ──
 
@@ -5138,15 +5214,15 @@ export default function App() {
               background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
               color: theme.accent, fontWeight: 600,
             }}>
-              <option value="my">Moje ({stats.my})</option>
+              <option value="my">👤 Moje ({stats.my})</option>
               <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
               {users.filter(u => u.name !== currentUser.name).map(u => (
-                <option key={u.name} value={`person:${u.name}`}>{u.name}</option>
+                <option key={u.name} value={`person:${u.name}`}>👤 {u.name}</option>
               ))}
-              <option value="assigned">Zadané ({stats.assigned})</option>
-              <option value="shared">Společné ({stats.shared})</option>
-              <option value="unread">Nové ({unreadCounts[currentUser.name] || 0})</option>
-              <option value="all">Vše</option>
+              <option value="assigned">📤 Zadané ({stats.assigned})</option>
+              <option value="shared">👥 Společné ({stats.shared})</option>
+              <option value="unread">🔴 Nové ({unreadCounts[currentUser.name] || 0})</option>
+              <option value="all">📋 Vše</option>
             </select>
 
             {/* Status */}
@@ -5155,10 +5231,10 @@ export default function App() {
               background: "transparent", border: `1px solid ${theme.inputBorder}`,
               color: theme.textSub,
             }}>
-              <option value="active">Aktivní</option>
+              <option value="active">⚡ Aktivní ({stats.active || 0})</option>
               <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
-              <option value="done">Splněné</option>
-              <option value="trash">🗑 Koš</option>
+              <option value="done">✓ Splněné ({stats.done || 0})</option>
+              <option value="trash">🗑 Koš ({stats.trash || 0})</option>
             </select>
 
             {/* Sort */}
@@ -5195,7 +5271,7 @@ export default function App() {
             )}
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
             {(() => {
               let shownDoneSep = false;
               let shownDelSep = false;
