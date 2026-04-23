@@ -2124,8 +2124,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
-      {/* Segmented filter bar — 3 buttons with mini-dropdowns + chips below */}
-      {!showFull && (() => {
+      {/* Segmented filter bar — 3 buttons with mini-dropdowns + chips below. Shown ALWAYS. */}
+      {(() => {
         const isTyping = text.trim().length > 0;
 
         // Figure out CURRENT state for each segment based on mode
@@ -2531,7 +2531,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       })()}
 
       {/* Bottom sheet: filter/picker panel — big icons, touch-friendly */}
-      {pickerOpen && !showFull && (() => {
+      {pickerOpen && (() => {
         const isTyping = text.trim().length > 0;
         return (
           <div
@@ -2799,95 +2799,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             </div>
           )}
 
-          {/* Pro koho — multi-select via checkboxy (available users) */}
-          <div style={{ marginBottom: "8px" }}>
-            <div style={labelStyle}>Pro koho</div>
-            <div style={{
-              display: "flex", gap: "5px", flexWrap: "wrap",
-              padding: "6px", background: theme.inputBg,
-              border: `1px solid ${theme.inputBorder}`, borderRadius: "6px",
-            }}>
-              {users.length > 1 && (() => {
-                const allSelected = users.every(u => quickAssignees.includes(u.name));
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (allSelected) setQuickAssignees([]);
-                      else setQuickAssignees(users.map(u => u.name));
-                    }}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                      background: allSelected ? theme.accentSoft : "transparent",
-                      color: allSelected ? theme.accent : theme.textSub,
-                      border: `1px solid ${allSelected ? theme.accentBorder : theme.inputBorder}`,
-                      borderRadius: "12px",
-                      display: "inline-flex", alignItems: "center", gap: "3px",
-                    }}>
-                    👥 Všichni
-                  </button>
-                );
-              })()}
-              {users.map(u => {
-                const selected = quickAssignees.includes(u.name);
-                return (
-                  <button
-                    key={u.name}
-                    type="button"
-                    onClick={() => {
-                      setQuickAssignees(prev =>
-                        prev.includes(u.name)
-                          ? prev.filter(n => n !== u.name)
-                          : [...prev, u.name]
-                      );
-                    }}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                      background: selected ? theme.accentSoft : "transparent",
-                      color: selected ? theme.accent : theme.textSub,
-                      border: `1px solid ${selected ? theme.accentBorder : theme.inputBorder}`,
-                      borderRadius: "12px",
-                    }}>
-                    {u.name}
-                  </button>
-                );
-              })}
-            </div>
-            {quickAssignees.length === 0 && (
-              <div style={{ fontSize: "10px", color: theme.textMid, marginTop: "3px", paddingLeft: "4px" }}>
-                Když nikoho nevybereš, úkol bude jen pro tebe.
-              </div>
-            )}
-          </div>
-
-          {/* Priorita — 3 velká tlačítka */}
-          <div style={{ marginBottom: "8px" }}>
-            <div style={labelStyle}>Priorita</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "5px" }}>
-              {PRIORITIES.map(pri => {
-                const pt = theme.priority[pri.id];
-                const isSet = (quickPriority || "low") === pri.id;
-                return (
-                  <button key={pri.id}
-                    type="button"
-                    onClick={() => setQuickPriority(pri.id === "low" ? null : pri.id)}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "6px", fontSize: "11px", fontWeight: 600,
-                      background: isSet ? pt.cardBg : theme.inputBg,
-                      color: isSet ? pt.text : theme.text,
-                      border: `2px solid ${isSet ? pt.border : theme.inputBorder}`,
-                      borderRadius: "8px",
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
-                    }}>
-                    <span style={{ fontSize: "14px", fontWeight: 900, color: pt.text }}>{pri.sym}</span>
-                    <span>{pri.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+          {/* Informační hint — Pro koho a Prioritu nastavuješ v liště nad formulářem */}
+          <div style={{
+            fontSize: "11px", color: theme.textSub, marginBottom: "10px",
+            padding: "6px 10px", background: `${theme.accent}08`,
+            border: `1px dashed ${theme.accentBorder}`, borderRadius: "6px",
+            lineHeight: 1.4,
+          }}>
+            💡 <strong>Pro koho</strong> a <strong>Prioritu</strong> nastavuješ v liště nad formulářem (segmenty Kategorie / Priorita / Osoba).
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
