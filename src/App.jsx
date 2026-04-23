@@ -99,6 +99,17 @@ function addDays(n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Posunout existing dueDate o N dní dopředu. Pokud nemá dueDate, vrátí null.
+function shiftDueDate(currentDueDate, shiftDays) {
+  if (!currentDueDate) return null;
+  const datePart = typeof currentDueDate === "string" ? currentDueDate.slice(0, 10) : currentDueDate;
+  const [y, m, d] = datePart.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + shiftDays);
+  return date.toISOString().slice(0, 10);
+}
+
 function autoDetectCategory(title) {
   const lower = title.toLowerCase();
   for (const cat of CATEGORIES) {
@@ -1155,6 +1166,11 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
 
+  // ── VIEW MODE vs EDIT MODE ──
+  // Default: view mode (read-only + action buttons + functional checklist checkboxes)
+  // After clicking ✏️ Upravit: edit mode (all fields editable)
+  const [isEditing, setIsEditing] = useState(false);
+
   // ── LOCAL STATE for ALL editable fields ──
   // Changes are stored locally and committed to the store only on 💾 Uložit změny.
   // This prevents the task from jumping around the list while editing.
@@ -1206,6 +1222,8 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     if (editShowFrom !== (task.showFrom || "")) changes.showFrom = editShowFrom || null;
     if (editType !== (task.type || "simple")) changes.type = editType;
     if (Object.keys(changes).length > 0) onUpdate(task.id, changes);
+    // After save, return to view mode
+    setIsEditing(false);
   };
 
   const labelStyle = {
@@ -1226,17 +1244,394 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     { label: "Měsíc",  value: addDays(30) },
   ];
 
+  // ═══════════════════════════════════════════════════════
+  // VIEW MODE — read-only overview with functional checklist + actions
+  // Default until user clicks ✏️ Upravit
+  // ═══════════════════════════════════════════════════════
+  if (!isEditing) {
+    const priObj = getPriority(task.priority || "low");
+    const priTheme = theme.priority[task.priority || "low"] || theme.priority.low;
+    const isForMe = task.createdBy && task.createdBy !== currentUser.name && task.assignedTo?.includes(currentUser.name);
+    const cat = getCategory(task.category);
+    const overdue = daysDiff(task.dueDate) < 0 && !taskIsDone;
+    const allChecked = (task.checklist?.length || 0) > 0 && task.checklist.every(i => i.done);
+
+    // Handler for checkbox toggle — immediately commits
+    const toggleChecklistItem = (itemId) => {
+      const updated = (task.checklist || []).map(item => {
+        if (item.id !== itemId) return item;
+        return {
+          ...item,
+          done: !item.done,
+          doneBy: !item.done ? currentUser.name : null,
+          doneAt: !item.done ? new Date().toISOString() : null,
+        };
+      });
+      onUpdate(task.id, { checklist: updated });
+    };
+
+    return (
+      <div style={{ marginTop: "10px", paddingLeft: "32px", animation: "fadeIn 0.12s" }}
+           onClick={e => e.stopPropagation()}>
+
+        {/* Top bar: Close + Edit button */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px",
+        }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onClose && onClose(); }}
+            title="Zavřít detail"
+            style={{
+              ...buttonStyle(),
+              padding: "6px 10px", fontSize: "12px",
+              background: theme.inputBg, color: theme.textSub,
+              border: `1px solid ${theme.inputBorder}`,
+              display: "flex", alignItems: "center", gap: "4px",
+            }}>
+            ← Zavřít
+          </button>
+          <span style={{ flex: 1 }} />
+          {task.status !== "deleted" && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
+              title="Upravit úkol"
+              style={{
+                ...buttonStyle(),
+                padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                background: theme.accentSoft, color: theme.accent,
+                border: `1px solid ${theme.accentBorder}`,
+                display: "flex", alignItems: "center", gap: "5px",
+              }}>
+              ✏️ Upravit
+            </button>
+          )}
+        </div>
+
+        {/* Title (read-only) */}
+        <div style={{
+          fontSize: "16px", fontWeight: 700, color: theme.text,
+          marginBottom: "8px", lineHeight: 1.3,
+          textDecoration: taskIsDone ? "line-through" : "none",
+          opacity: taskIsDone ? 0.6 : 1,
+        }}>
+          {task.title}
+        </div>
+
+        {/* Info pills: priority + from + due date + category */}
+        <div style={{
+          display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "10px",
+          alignItems: "center",
+        }}>
+          {/* Priority */}
+          <span style={{
+            fontSize: "11px", fontWeight: 800,
+            color: priTheme.text, background: priTheme.bg,
+            padding: "2px 8px", borderRadius: "6px",
+            border: `1px solid ${priTheme.border}`,
+          }}>
+            {priObj.sym} {priObj.label}
+          </span>
+
+          {/* Od koho */}
+          {isForMe && (
+            <span style={{
+              fontSize: "11px", fontWeight: 700,
+              color: theme.accent, background: theme.accentSoft,
+              padding: "2px 8px", borderRadius: "10px",
+              border: `1px solid ${theme.accentBorder}`,
+            }}>
+              📥 od {task.createdBy}
+            </span>
+          )}
+
+          {/* Category */}
+          {task.category && task.category !== "other" && (
+            <span style={{
+              fontSize: "11px", color: theme.textSub,
+              padding: "2px 8px", borderRadius: "6px",
+              background: theme.inputBg,
+              border: `1px solid ${theme.inputBorder}`,
+            }}>
+              {cat.icon} {cat.label}
+            </span>
+          )}
+
+          {/* Due date */}
+          {task.dueDate && (
+            <span style={{
+              fontSize: "11px", fontWeight: 600,
+              color: overdue ? theme.red : theme.textSub,
+              background: overdue ? `${theme.red}10` : theme.inputBg,
+              padding: "2px 8px", borderRadius: "6px",
+              border: `1px solid ${overdue ? theme.red + "30" : theme.inputBorder}`,
+            }}>
+              📅 {formatDate(task.dueDate)}
+            </span>
+          )}
+
+          {/* Recurrence */}
+          {task.recDays > 0 && (
+            <span style={{
+              fontSize: "11px", color: theme.purple,
+              padding: "2px 8px", borderRadius: "6px",
+              background: `${theme.purple}10`,
+              border: `1px solid ${theme.purple}30`,
+            }}>
+              🔄 {RECURRENCE_OPTIONS.find(r => r.value === task.recDays)?.label || `${task.recDays}d`}
+            </span>
+          )}
+
+          {/* Deferred */}
+          {task.showFrom && daysDiff(task.showFrom) > 0 && (
+            <span style={{
+              fontSize: "11px", color: theme.purple,
+              padding: "2px 8px", borderRadius: "6px",
+              background: `${theme.purple}10`,
+              border: `1px solid ${theme.purple}30`,
+            }}>
+              ⏰ odloženo do {formatDate(task.showFrom)}
+            </span>
+          )}
+
+          {/* Assigned to */}
+          {task.assignedTo && task.assignedTo.length > 0 && task.assignTo !== "self" && (
+            <span style={{
+              fontSize: "11px", color: theme.textSub,
+              padding: "2px 8px", borderRadius: "6px",
+              background: theme.inputBg,
+              border: `1px solid ${theme.inputBorder}`,
+            }}>
+              👤 {task.assignTo === "both" ? "Společné" : task.assignedTo.join(", ")}
+            </span>
+          )}
+        </div>
+
+        {/* Note (if exists) — read-only */}
+        {task.note && task.note.trim() && (
+          <div style={{
+            padding: "8px 10px", marginBottom: "10px",
+            background: theme.inputBg,
+            border: `1px solid ${theme.inputBorder}`,
+            borderRadius: "6px",
+            fontSize: "13px", color: theme.text, lineHeight: 1.4,
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {task.note}
+          </div>
+        )}
+
+        {/* Checklist — FUNCTIONAL checkboxes (not edit mode!)  */}
+        {task.checklist && task.checklist.length > 0 && (
+          <div style={{ marginBottom: "10px" }}>
+            <div style={{
+              fontSize: "10px", color: theme.textMid, fontWeight: 700,
+              marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+            }}>
+              Seznam ({task.checklist.filter(i => i.done).length}/{task.checklist.length})
+            </div>
+            {task.checklist.map(item => {
+              const itemComments = comments.filter(c => c.checklistItemId === item.id);
+              return (
+                <div key={item.id} style={{
+                  display: "flex", alignItems: "center", gap: "8px",
+                  padding: "7px 10px", borderRadius: "6px", marginBottom: "3px",
+                  background: item.done ? `${theme.green}08` : theme.inputBg,
+                  border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
+                }}>
+                  <button
+                    onClick={() => toggleChecklistItem(item.id)}
+                    style={{
+                      width: "24px", height: "24px", minWidth: "24px",
+                      borderRadius: "5px",
+                      border: `2px solid ${item.done ? theme.green : theme.textDim}`,
+                      background: item.done ? theme.green : "transparent",
+                      cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: "12px", fontWeight: 800,
+                    }}>
+                    {item.done && "✓"}
+                  </button>
+                  <span style={{
+                    flex: 1, fontSize: "13px",
+                    color: item.done ? theme.textSub : theme.text,
+                    textDecoration: item.done ? "line-through" : "none",
+                    lineHeight: 1.3,
+                  }}>
+                    {item.text}
+                    {item.done && item.doneBy && (
+                      <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
+                        — {item.doneBy}
+                      </span>
+                    )}
+                  </span>
+                  {itemComments.length > 0 && (
+                    <span title={`${itemComments.length} komentářů`} style={{
+                      fontSize: "10px", fontWeight: 700, color: theme.accent,
+                      padding: "1px 6px", borderRadius: "8px",
+                      background: theme.accentSoft,
+                      border: `1px solid ${theme.accentBorder}`,
+                    }}>
+                      💬 {itemComments.length}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Images — view only */}
+        {task.images && task.images.length > 0 && (
+          <div style={{ marginBottom: "10px" }}>
+            <div style={{
+              fontSize: "10px", color: theme.textMid, fontWeight: 700,
+              marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
+            }}>
+              Fotky ({task.images.length})
+            </div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              {task.images.map(img => (
+                <img key={img.id} src={img.data} alt=""
+                  style={{
+                    width: "80px", height: "80px", objectFit: "cover",
+                    borderRadius: "6px", border: `1px solid ${theme.inputBorder}`,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => window.open(img.data, "_blank")}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── ACTIONS ── */}
+        {task.status !== "deleted" && (
+          <div style={{
+            display: "flex", gap: "5px", flexWrap: "wrap",
+            marginTop: "12px", paddingTop: "10px",
+            borderTop: `1px solid ${theme.cardBorder}`,
+          }}>
+            {/* Completion action — depends on state */}
+            {canAct && !taskIsDone && (
+              <>
+                {task.assignTo === "both" && task.doneBy?.includes(currentUser.name) ? (
+                  <ActionButton label="↩ Odškrnout" onClick={() => onStatusChange(task.id, "unmark")} theme={theme} subtle />
+                ) : (
+                  <ActionButton
+                    label={allChecked ? "✓ Splnit všechno" : (task.assignTo === "both" ? "✓ Splnil(a) jsem já" : "✓ Hotovo")}
+                    onClick={() => onStatusChange(task.id, "complete")}
+                    theme={theme}
+                    green
+                  />
+                )}
+              </>
+            )}
+
+            {taskIsDone && (
+              <ActionButton label="↩ Vrátit zpět" onClick={() => onStatusChange(task.id, "reopen")} theme={theme} subtle />
+            )}
+
+            {/* Snooze menu — quick buttons for common delays */}
+            {!taskIsDone && (
+              <div style={{ position: "relative" }}>
+                <details style={{ display: "inline-block" }}>
+                  <summary style={{
+                    ...buttonStyle(),
+                    padding: "6px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.textSub,
+                    border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: "6px", cursor: "pointer",
+                    listStyle: "none",
+                    display: "inline-flex", alignItems: "center", gap: "4px",
+                  }}>
+                    ⏰ Odložit
+                  </summary>
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 4px)", left: 0,
+                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: "8px", padding: "4px",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    zIndex: 30, minWidth: "140px",
+                  }}>
+                    {[
+                      { label: "Zítra", shiftDays: 1 },
+                      { label: "3 dny", shiftDays: 3 },
+                      { label: "Týden", shiftDays: 7 },
+                      { label: "Měsíc", shiftDays: 30 },
+                    ].map(opt => (
+                      <button key={opt.label}
+                        onClick={() => {
+                          const patch = { showFrom: addDays(opt.shiftDays) };
+                          if (task.dueDate) {
+                            patch.dueDate = shiftDueDate(task.dueDate, opt.shiftDays);
+                          }
+                          onUpdate(task.id, patch);
+                          onClose && onClose();
+                        }}
+                        style={{
+                          ...buttonStyle(),
+                          width: "100%", padding: "7px 10px", fontSize: "12px",
+                          background: "transparent", color: theme.text,
+                          border: "none", textAlign: "left", borderRadius: "6px",
+                          display: "block",
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            )}
+
+            {/* Delete */}
+            {onDelete && (
+              <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />
+            )}
+          </div>
+        )}
+
+        {/* Trash-view only: Restore + Permanent delete */}
+        {task.status === "deleted" && (
+          <div style={{ display: "flex", gap: "6px", marginTop: "12px", flexWrap: "wrap" }}>
+            <button onClick={() => onRestore(task.id)} style={{
+              ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+              background: `${theme.green}15`, color: theme.green,
+              border: `1px solid ${theme.green}30`,
+            }}>↩ Obnovit</button>
+            <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
+          </div>
+        )}
+
+        {/* Komentáře (always) */}
+        <TaskComments
+          task={task}
+          comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
+          currentUser={currentUser}
+          onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
+          onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
+          onMarkSeen={onMarkCommentsSeen}
+          theme={theme}
+        />
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // EDIT MODE — all fields editable, save via 💾 button
+  // ═══════════════════════════════════════════════════════
   return (
     <div style={{ marginTop: "10px", paddingLeft: "32px", animation: "fadeIn 0.12s" }}
          onClick={e => e.stopPropagation()}>
 
-      {/* ── Top bar: back to list + cycling priority ── */}
+      {/* ── Top bar: Back to view + cycling priority ── */}
       <div style={{
         display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px",
       }}>
         <button
-          onClick={(e) => { e.stopPropagation(); onClose && onClose(); }}
-          title="Přepnout na seznam"
+          onClick={(e) => { e.stopPropagation(); setIsEditing(false); }}
+          title="Zpět na detail (bez uložení)"
           style={{
             ...buttonStyle(),
             padding: "6px 10px", fontSize: "12px",
@@ -1244,40 +1639,23 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             border: `1px solid ${theme.inputBorder}`,
             display: "flex", alignItems: "center", gap: "4px",
           }}>
-          ☰ Přepnout na seznam
+          ← Zpět na detail
         </button>
 
-        {/* Cycling priority icon — uses LOCAL state (commits on 💾) */}
-        {!taskIsDone && (() => {
-          const priObj = getPriority(editPriority);
-          const priTheme = theme.priority[editPriority] || theme.priority.low;
-          const isDefault = editPriority === "low";
-          const cycleNext = (e) => {
-            e.stopPropagation();
-            // low → important → urgent → low
-            const next = editPriority === "low" ? "important"
-                       : editPriority === "important" ? "urgent"
-                       : "low";
-            setEditPriority(next);
-          };
-          return (
-            <button onClick={cycleNext} title={`Priorita: ${priObj.label} (klikni pro změnu, ulož tlačítkem 💾)`}
-              style={{
-                ...buttonStyle(),
-                minWidth: "36px", height: "30px", padding: "0 8px",
-                fontSize: "14px", fontWeight: 800,
-                background: isDefault ? "transparent" : priTheme.cardBg,
-                color: isDefault ? theme.textDim : priTheme.text,
-                border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
-                borderRadius: "8px",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "3px",
-                opacity: isDefault ? 0.5 : 1,
-                transition: "all 0.15s",
-              }}>
-              {priObj.sym} <span style={{ fontSize: "10px" }}>{priObj.label}</span>
-            </button>
-          );
-        })()}
+        <span style={{ flex: 1 }} />
+
+        {/* Save button in top bar — always visible in edit mode */}
+        {hasPendingChanges && (
+          <button onClick={saveAllChanges} style={{
+            ...buttonStyle(),
+            padding: "6px 14px", fontSize: "12px", fontWeight: 700,
+            background: theme.accent, color: "#fff",
+            border: "none",
+            display: "flex", alignItems: "center", gap: "4px",
+          }}>
+            💾 Uložit
+          </button>
+        )}
       </div>
 
       {/* ── Complete banner ── */}
@@ -1336,26 +1714,33 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 
       {!taskIsDone && (
         <>
-          {/* ── Quick settings grid — Kategorie + Pro koho ── */}
+          {/* ── Type toggle + Pro koho ── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
             <div>
-              <div style={labelStyle}>Kategorie</div>
-              <div style={{ display: "flex", gap: "4px" }}>
-                <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
-                  style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px", flex: 1 }}>
-                  {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
-                </select>
-                {/* Small icon toggle: simple ↔ checklist (replaces duplicate bottom button) */}
+              <div style={labelStyle}>Typ</div>
+              <div style={{
+                display: "flex", gap: "0",
+                border: `1px solid ${theme.cardBorder}`, borderRadius: "8px", overflow: "hidden",
+              }}>
                 <button
-                  onClick={() => setEditType(editType === "complex" ? "simple" : "complex")}
-                  title={editType === "complex" ? "Přepnout na jednoduchý" : "Přepnout na checklist"}
+                  onClick={() => setEditType("simple")}
                   style={{
-                    ...buttonStyle(), padding: "8px 10px", fontSize: "12px",
-                    background: editType === "complex" ? theme.accentSoft : theme.inputBg,
-                    color: editType === "complex" ? theme.accent : theme.textSub,
-                    border: `1px solid ${editType === "complex" ? theme.accentBorder : theme.inputBorder}`,
+                    ...buttonStyle(), flex: 1, padding: "8px", fontSize: "12px",
+                    background: editType === "simple" ? theme.accent : "transparent",
+                    color: editType === "simple" ? "#fff" : theme.textSub,
+                    border: "none",
                   }}>
-                  ☰
+                  ✓ Jednoduchý
+                </button>
+                <button
+                  onClick={() => setEditType("complex")}
+                  style={{
+                    ...buttonStyle(), flex: 1, padding: "8px", fontSize: "12px",
+                    background: editType === "complex" ? theme.accent : "transparent",
+                    color: editType === "complex" ? "#fff" : theme.textSub,
+                    border: "none",
+                  }}>
+                  ☰ S checklistem
                 </button>
               </div>
             </div>
@@ -1396,7 +1781,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Due date with quick picks ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>
-              Termín {editDueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editDueDate)}</span>}
+              Termín splnění {editDueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editDueDate)}</span>}
             </div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
@@ -1424,16 +1809,23 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Show from — deferred tasks ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>
-              Zobrazit od {editShowFrom && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editShowFrom)}</span>}
+              Zobrazit od (odložit) {editShowFrom && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editShowFrom)}</span>}
             </div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {[
-                { label: "Za týden", value: addDays(7) },
-                { label: "Za 14d", value: addDays(14) },
-                { label: "Za měsíc", value: addDays(30) },
-                { label: "Za 2 měsíce", value: addDays(60) },
+                { label: "Za týden", value: addDays(7), shiftDays: 7 },
+                { label: "Za 14d", value: addDays(14), shiftDays: 14 },
+                { label: "Za měsíc", value: addDays(30), shiftDays: 30 },
+                { label: "Za 2 měsíce", value: addDays(60), shiftDays: 60 },
               ].map(sf => (
-                <button key={sf.label} onClick={() => setEditShowFrom(sf.value)} style={{
+                <button key={sf.label} onClick={() => {
+                  setEditShowFrom(sf.value);
+                  // Pokud úkol má termín splnění, posunout ho o stejný počet dní
+                  if (editDueDate) {
+                    const shifted = shiftDueDate(editDueDate, sf.shiftDays);
+                    if (shifted) setEditDueDate(shifted);
+                  }
+                }} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
                   background: editShowFrom === sf.value ? theme.accentSoft : theme.inputBg,
                   color: editShowFrom === sf.value ? theme.accent : theme.textSub,
@@ -1562,17 +1954,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {onDelete && <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />}
         </div>
       )}
-
-      {/* ── Komentáře / Chat ── */}
-      <TaskComments
-        task={task}
-        comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
-        currentUser={currentUser}
-        onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
-        onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
-        onMarkSeen={onMarkCommentsSeen}
-        theme={theme}
-      />
 
       {/* Trash-view only: Restore + Permanent delete */}
       {task.status === "deleted" && (
@@ -1899,14 +2280,19 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 Odložit do
               </div>
               {[
-                { label: "Zítra",  value: addDays(1) },
-                { label: "3 dny",  value: addDays(3) },
-                { label: "Týden",  value: addDays(7) },
-                { label: "Měsíc", value: addDays(30) },
+                { label: "Zítra",  value: addDays(1),  shiftDays: 1 },
+                { label: "3 dny",  value: addDays(3),  shiftDays: 3 },
+                { label: "Týden",  value: addDays(7),  shiftDays: 7 },
+                { label: "Měsíc", value: addDays(30), shiftDays: 30 },
               ].map(opt => (
                 <button key={opt.label}
                   onClick={() => {
-                    onUpdate(task.id, { showFrom: opt.value });
+                    const patch = { showFrom: opt.value };
+                    // Pokud má úkol termín splnění, posunout ho o stejný počet dní
+                    if (task.dueDate) {
+                      patch.dueDate = shiftDueDate(task.dueDate, opt.shiftDays);
+                    }
+                    onUpdate(task.id, patch);
                     setSnoozeMenuOpen(false);
                     setIsOpen(false);
                   }}
@@ -2809,26 +3195,36 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             💡 <strong>Pro koho</strong> a <strong>Prioritu</strong> nastavuješ v liště nad formulářem (segmenty Kategorie / Priorita / Osoba).
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
-            <div>
-              <div style={labelStyle}>Kategorie</div>
-              <select value={category} onChange={e => setCategory(e.target.value)}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Opakování</div>
-              <select value={recurrence} onChange={e => setRecurrence(Number(e.target.value))}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
+          {/* Opakování — řádek tlačítek */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Opakování</div>
+            <div style={{
+              display: "flex", gap: "4px", flexWrap: "wrap",
+            }}>
+              {RECURRENCE_OPTIONS.map(r => {
+                const isSel = recurrence === r.value;
+                return (
+                  <button key={r.value}
+                    type="button"
+                    onClick={() => setRecurrence(r.value)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      background: isSel ? theme.accentSoft : theme.inputBg,
+                      color: isSel ? theme.accent : theme.textSub,
+                      border: `1px solid ${isSel ? theme.accentBorder : theme.inputBorder}`,
+                      borderRadius: "12px",
+                    }}>
+                    {r.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Quick dates */}
           <div style={{ marginBottom: "8px" }}>
-            <div style={labelStyle}>Termín</div>
+            <div style={labelStyle}>Termín splnění</div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
                 <button key={qd.label} onClick={() => setDueDate(qd.value)} style={{
@@ -2856,12 +3252,19 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <div style={labelStyle}>Zobrazit od (odložit úkol)</div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {[
-                { label: "Za týden", value: addDays(7) },
-                { label: "Za 14d", value: addDays(14) },
-                { label: "Za měsíc", value: addDays(30) },
-                { label: "Za 2 měsíce", value: addDays(60) },
+                { label: "Za týden", value: addDays(7), shiftDays: 7 },
+                { label: "Za 14d", value: addDays(14), shiftDays: 14 },
+                { label: "Za měsíc", value: addDays(30), shiftDays: 30 },
+                { label: "Za 2 měsíce", value: addDays(60), shiftDays: 60 },
               ].map(sf => (
-                <button key={sf.label} onClick={() => setShowFrom(sf.value)} style={{
+                <button key={sf.label} onClick={() => {
+                  setShowFrom(sf.value);
+                  // Pokud máme termín splnění, posunout ho
+                  if (dueDate) {
+                    const shifted = shiftDueDate(dueDate, sf.shiftDays);
+                    if (shifted) setDueDate(shifted);
+                  }
+                }} style={{
                   ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
                   background: showFrom === sf.value ? theme.accentSoft : theme.inputBg,
                   color: showFrom === sf.value ? theme.accent : theme.textSub,
