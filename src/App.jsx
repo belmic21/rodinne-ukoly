@@ -1331,6 +1331,14 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         };
       });
       onUpdate(task.id, { checklist: updated });
+
+      // Auto-complete the whole task when all checklist items are done
+      if (updated.length > 0 && updated.every(item => item.done)) {
+        setTimeout(() => {
+          if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+          else onStatusChange(task.id, "done");
+        }, 300);
+      }
     };
 
     return (
@@ -1727,6 +1735,24 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             </div>
           </div>
 
+          {/* ── Checklist (PŘESUNUTO NAHORU - blíž ke jménu a poznámce) ── */}
+          {(editType === "complex" || (task.checklist && task.checklist.length > 0)) && (
+            <Checklist
+              items={task.checklist || []}
+              userName={currentUser.name}
+              theme={theme}
+              onChange={cl => commitImmediate("checklist", cl)}
+              onAllCompleted={() => {
+                if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+                else onStatusChange(task.id, "done");
+              }}
+              taskId={task.id}
+              comments={comments}
+              onAddComment={onAddComment}
+              onToggleReaction={onToggleReaction}
+            />
+          )}
+
           {/* ── Recurrence (full width, standalone) ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>Opakování</div>
@@ -1835,21 +1861,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             </div>
           )}
         </>
-      )}
-
-      {/* ── Checklist (shown for complex type OR if items exist) — commits immediately ── */}
-      {(editType === "complex" || (task.checklist && task.checklist.length > 0)) && (
-        <Checklist
-          items={task.checklist || []}
-          userName={currentUser.name}
-          theme={theme}
-          onChange={cl => commitImmediate("checklist", cl)}
-          onAllCompleted={() => {}}
-          taskId={task.id}
-          comments={comments}
-          onAddComment={onAddComment}
-          onToggleReaction={onToggleReaction}
-        />
       )}
 
       {/* ── Images — commits immediately ── */}
@@ -2540,6 +2551,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [category, setCategory] = useState("other");
   const [initialChecklist, setInitialChecklist] = useState([]);
   const [checklistInput, setChecklistInput] = useState("");
+  const [editingChecklistId, setEditingChecklistId] = useState(null); // ID of item being edited inline
+  const [editingChecklistText, setEditingChecklistText] = useState("");
   const [quickCategory, setQuickCategory] = useState(null);
   const [quickPriority, setQuickPriority] = useState(null); // null = default "low"
   // quickAssignees is an array of user names. Empty = default "for me".
@@ -3332,7 +3345,52 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                   display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px",
                 }}>
                   <span style={{ fontSize: "12px", color: theme.textSub }}>○</span>
-                  <span style={{ flex: 1, fontSize: "13px", color: theme.text }}>{item.text}</span>
+                  {editingChecklistId === item.id ? (
+                    <input
+                      type="text"
+                      value={editingChecklistText}
+                      autoFocus
+                      onChange={e => setEditingChecklistText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const newText = editingChecklistText.trim();
+                          if (newText) {
+                            setInitialChecklist(prev => prev.map(x =>
+                              x.id === item.id ? { ...x, text: newText } : x
+                            ));
+                          }
+                          setEditingChecklistId(null);
+                          setEditingChecklistText("");
+                        }
+                        if (e.key === "Escape") {
+                          setEditingChecklistId(null);
+                          setEditingChecklistText("");
+                        }
+                      }}
+                      onBlur={() => {
+                        const newText = editingChecklistText.trim();
+                        if (newText) {
+                          setInitialChecklist(prev => prev.map(x =>
+                            x.id === item.id ? { ...x, text: newText } : x
+                          ));
+                        }
+                        setEditingChecklistId(null);
+                        setEditingChecklistText("");
+                      }}
+                      style={{ ...inputStyle(theme), flex: 1, fontSize: "13px", padding: "3px 6px" }}
+                    />
+                  ) : (
+                    <span
+                      onClick={() => {
+                        setEditingChecklistId(item.id);
+                        setEditingChecklistText(item.text);
+                      }}
+                      title="Klikni pro úpravu"
+                      style={{ flex: 1, fontSize: "13px", color: theme.text, cursor: "text" }}>
+                      {item.text}
+                    </span>
+                  )}
                   <button onClick={() => setInitialChecklist(prev => prev.filter(x => x.id !== item.id))}
                     style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: "14px" }}>
                     ×
