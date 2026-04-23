@@ -260,6 +260,44 @@ function processRecurring(tasks) {
   return { tasks: processed, updates };
 }
 
+// Self-healing migration: if an active task has a fully-completed checklist,
+// mark the task as done automatically. Fixes legacy state where auto-complete wasn't wired.
+function sanitizeCompletedChecklists(tasks, users) {
+  const updates = [];
+  const now = new Date().toISOString();
+
+  const processed = tasks.map(task => {
+    // Only active tasks with checklist items
+    if (task.status !== "active") return task;
+    if (!task.checklist || task.checklist.length === 0) return task;
+    // All items done?
+    if (!task.checklist.every(i => i.done)) return task;
+
+    // All items complete — mark the whole task as done
+    const lastDoneAt = task.checklist
+      .map(i => i.doneAt)
+      .filter(Boolean)
+      .sort()
+      .pop();
+    const lastDoneBy = task.checklist
+      .slice()
+      .reverse()
+      .find(i => i.doneBy)?.doneBy;
+
+    const updated = {
+      ...task,
+      status: "done",
+      completedAt: lastDoneAt || now,
+      completedByUser: lastDoneBy || task.createdBy,
+      doneBy: users ? users.map(u => u.name) : [],
+    };
+    updates.push(updated);
+    return updated;
+  });
+
+  return { tasks: processed, updates };
+}
+
 /* ═══════════════════════════════════════════════════════
    THEMES
    ═══════════════════════════════════════════════════════ */
@@ -4211,8 +4249,11 @@ export default function App() {
       setUsers(loadedUsers);
       setComments(loadedComments);
       const { tasks: processed, updates } = processRecurring(loadedTasks);
-      setTasks(processed);
-      if (updates.length > 0) apiUpdateTasks(updates);
+      // Self-healing: auto-complete tasks whose checklists are fully done (legacy state)
+      const { tasks: sanitized, updates: sanUpdates } = sanitizeCompletedChecklists(processed, loadedUsers);
+      setTasks(sanitized);
+      const allUpdates = [...updates, ...sanUpdates];
+      if (allUpdates.length > 0) apiUpdateTasks(allUpdates);
       setLoading(false);
     })();
 
