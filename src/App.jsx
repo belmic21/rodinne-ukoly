@@ -3905,6 +3905,304 @@ function LoginScreen({ users, onLogin, themeName }) {
   );
 }
 
+function NotificationPanel({ currentUser, onClose, theme }) {
+  const [permission, setPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+  const [swStatus, setSwStatus] = useState("checking...");
+  const [subStatus, setSubStatus] = useState("checking...");
+  const [dbSubs, setDbSubs] = useState([]);
+  const [vapidKey, setVapidKey] = useState("");
+  const [testResult, setTestResult] = useState(null);
+  const [log, setLog] = useState([]);
+
+  const addLog = (msg) => {
+    const ts = new Date().toLocaleTimeString("cs-CZ");
+    setLog(prev => [...prev, `[${ts}] ${msg}`]);
+  };
+
+  // Initial checks
+  useEffect(() => {
+    (async () => {
+      // Service worker
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        setSwStatus(reg ? `✅ Registrován (${reg.scope})` : "❌ Není registrován");
+
+        if (reg && "PushManager" in window) {
+          const sub = await reg.pushManager.getSubscription();
+          setSubStatus(sub ? "✅ Subscription existuje" : "❌ Žádná subscription");
+        }
+      } else {
+        setSwStatus("❌ Service Worker nepodporován");
+      }
+
+      // VAPID key
+      const key = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+      setVapidKey(key ? `✅ ${key.slice(0, 20)}...` : "❌ CHYBÍ (env var VITE_VAPID_PUBLIC_KEY)");
+
+      // DB subscriptions for this user
+      try {
+        const { data, error } = await supabase
+          .from("push_subscriptions")
+          .select("*")
+          .eq("user_name", currentUser.name);
+        if (error) {
+          setDbSubs([{ error: error.message }]);
+        } else {
+          setDbSubs(data || []);
+        }
+      } catch (e) {
+        setDbSubs([{ error: e.message }]);
+      }
+    })();
+  }, [currentUser.name]);
+
+  const requestPermission = async () => {
+    addLog("Žádám o povolení notifikací...");
+    if (!("Notification" in window)) {
+      addLog("❌ Notification API není podporováno");
+      return;
+    }
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      addLog(`Výsledek: ${result}`);
+      if (result === "granted") {
+        addLog("✅ Povolení uděleno — pokouším se o push subscription");
+        await setupSubscription();
+      }
+    } catch (e) {
+      addLog(`❌ Chyba: ${e.message}`);
+    }
+  };
+
+  const setupSubscription = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      addLog("❌ Browser nepodporuje Push API");
+      return;
+    }
+    const key = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+    if (!key) {
+      addLog("❌ VITE_VAPID_PUBLIC_KEY není nastaven v env");
+      return;
+    }
+    try {
+      let reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        addLog("Registruji Service Worker...");
+        reg = await navigator.serviceWorker.register("/sw-polling.js", { scope: "/" });
+        addLog("✅ Service Worker registrován");
+      }
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        addLog("Vytvářím push subscription...");
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(key),
+        });
+        addLog("✅ Subscription vytvořena");
+      } else {
+        addLog("✅ Subscription již existuje");
+      }
+      // Save to DB
+      addLog("Ukládám do DB (push_subscriptions)...");
+      const { error } = await supabase
+        .from("push_subscriptions")
+        .upsert(
+          { user_name: currentUser.name, subscription: sub.toJSON() },
+          { onConflict: "user_name,subscription" }
+        );
+      if (error) {
+        addLog(`❌ DB upsert chyba: ${error.message}`);
+      } else {
+        addLog("✅ Uloženo do DB");
+        localStorage.setItem("ft_push_sub", JSON.stringify(sub.toJSON()));
+        // Reload subs
+        const { data } = await supabase
+          .from("push_subscriptions")
+          .select("*")
+          .eq("user_name", currentUser.name);
+        setDbSubs(data || []);
+        setSubStatus("✅ Subscription existuje");
+      }
+    } catch (e) {
+      addLog(`❌ Chyba: ${e.message}`);
+    }
+  };
+
+  const sendTestNotification = async () => {
+    setTestResult("sending");
+    addLog("📤 Posílám testovací notifikaci...");
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      const res = await fetch(`${supabaseUrl}/functions/v1/super-api`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify({
+          task: { id: "test", title: `🔔 Testovací notifikace (${new Date().toLocaleTimeString("cs-CZ")})` },
+          assignedTo: [currentUser.name],
+          createdBy: "system",
+        }),
+      });
+      const text = await res.text();
+      addLog(`Response ${res.status}: ${text.slice(0, 200)}`);
+      setTestResult(res.ok ? "ok" : "error");
+    } catch (e) {
+      addLog(`❌ Chyba: ${e.message}`);
+      setTestResult("error");
+    }
+  };
+
+  const showLocalNotification = () => {
+    addLog("🔔 Zobrazuji lokální notifikaci...");
+    try {
+      new Notification("Test lokální notifikace", {
+        body: "Pokud tohle vidíš, local notifications fungují ✓",
+        icon: "/icon-192.png",
+      });
+      addLog("✅ Lokální notifikace odeslána");
+    } catch (e) {
+      addLog(`❌ Chyba: ${e.message}`);
+    }
+  };
+
+  const clearSubscription = async () => {
+    addLog("🗑 Mažu subscription...");
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) {
+        await sub.unsubscribe();
+        addLog("✅ Subscription zrušena v browseru");
+      }
+      localStorage.removeItem("ft_push_sub");
+      await supabase
+        .from("push_subscriptions")
+        .delete()
+        .eq("user_name", currentUser.name);
+      addLog("✅ Subscription smazána z DB");
+      setSubStatus("❌ Žádná subscription");
+      setDbSubs([]);
+    } catch (e) {
+      addLog(`❌ Chyba: ${e.message}`);
+    }
+  };
+
+  const statusColor = (val) => val?.startsWith("✅") ? theme.green : theme.red;
+
+  return (
+    <div style={{ ...cardStyle(theme), padding: "16px", marginBottom: "14px", animation: "slideUp 0.2s" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+        <span style={{ fontSize: "14px", fontWeight: 700 }}>🔔 Diagnostika notifikací</span>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "18px" }}>×</button>
+      </div>
+
+      {/* Status */}
+      <div style={{
+        background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+        borderRadius: "8px", padding: "10px", marginBottom: "10px",
+        fontSize: "12px", lineHeight: 1.7,
+      }}>
+        <div>Uživatel: <strong>{currentUser.name}</strong></div>
+        <div style={{ color: statusColor(permission === "granted" ? "✅" : "❌") }}>
+          Browser permission: <strong>{permission}</strong>
+        </div>
+        <div style={{ color: statusColor(swStatus) }}>Service Worker: {swStatus}</div>
+        <div style={{ color: statusColor(subStatus) }}>Push Subscription: {subStatus}</div>
+        <div style={{ color: statusColor(vapidKey) }}>VAPID klíč: {vapidKey}</div>
+        <div>DB záznamy: <strong>{dbSubs.length}</strong> {dbSubs[0]?.error ? `(chyba: ${dbSubs[0].error})` : ""}</div>
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "10px" }}>
+        {permission !== "granted" && (
+          <button onClick={requestPermission} style={{
+            ...buttonStyle(), padding: "8px 14px", fontSize: "12px", fontWeight: 700,
+            background: theme.accent, color: "#fff", border: "none",
+          }}>
+            🔔 Povolit notifikace
+          </button>
+        )}
+        {permission === "granted" && (
+          <>
+            <button onClick={setupSubscription} style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: "12px",
+              background: theme.accentSoft, color: theme.accent,
+              border: `1px solid ${theme.accentBorder}`,
+            }}>
+              🔄 Znovu registrovat
+            </button>
+            <button onClick={showLocalNotification} style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: "12px",
+              background: `${theme.green}15`, color: theme.green,
+              border: `1px solid ${theme.green}30`,
+            }}>
+              📣 Test lokální
+            </button>
+            <button onClick={sendTestNotification} style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: "12px",
+              background: `${theme.green}15`, color: theme.green,
+              border: `1px solid ${theme.green}30`,
+            }}>
+              📤 Test push (přes server)
+            </button>
+            <button onClick={clearSubscription} style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: "12px",
+              background: `${theme.red}10`, color: theme.red,
+              border: `1px solid ${theme.red}30`,
+            }}>
+              🗑 Reset subscription
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Help text */}
+      {permission === "denied" && (
+        <div style={{
+          padding: "10px", background: `${theme.red}0a`,
+          border: `1px solid ${theme.red}30`, borderRadius: "8px",
+          fontSize: "11px", color: theme.red, lineHeight: 1.5, marginBottom: "10px",
+        }}>
+          ⚠ Notifikace byly zablokovány. Musíš je povolit v nastavení prohlížeče:
+          <br />• <strong>Chrome/Edge</strong>: klik na 🔒 vedle URL → Notifications → Allow
+          <br />• <strong>Safari iOS</strong>: Nastavení → Safari → Web notifications
+        </div>
+      )}
+
+      {permission === "default" && (
+        <div style={{
+          padding: "10px", background: `${theme.accent}0a`,
+          border: `1px solid ${theme.accentBorder}`, borderRadius: "8px",
+          fontSize: "11px", color: theme.accent, lineHeight: 1.5, marginBottom: "10px",
+        }}>
+          💡 Klikni na <strong>🔔 Povolit notifikace</strong>. Browser zobrazí výzvu — povol "Allow".
+          <br /><strong>iOS</strong>: aplikace musí být přidaná na Home Screen jako PWA + iOS 16.4+.
+        </div>
+      )}
+
+      {/* Log */}
+      {log.length > 0 && (
+        <div style={{
+          background: "#0a0e14", color: "#a0c4e8",
+          border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
+          padding: "8px", fontSize: "10px", fontFamily: "monospace",
+          maxHeight: "180px", overflowY: "auto",
+        }}>
+          {log.map((line, i) => (
+            <div key={i} style={{ marginBottom: "2px" }}>{line}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminPanel({ users, onAdd, onRemove, onClose, theme }) {
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
@@ -4264,6 +4562,7 @@ export default function App() {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
   const undoTimerRef = useRef();
 
@@ -5089,6 +5388,12 @@ export default function App() {
               ⚙️
             </button>
           )}
+          {/* Notification diagnostic panel */}
+          <button onClick={() => setShowNotifPanel(!showNotifPanel)}
+            title="Nastavení notifikací"
+            style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "14px" }}>
+            🔔
+          </button>
           {/* Visible user name */}
           <span style={{
             fontSize: "12px", fontWeight: 600, color: theme.text,
@@ -5114,6 +5419,14 @@ export default function App() {
             onAdd={async u => apiCreateUser(u)}
             onRemove={async n => apiDeleteUser(n)}
             onClose={() => setShowAdmin(false)}
+            theme={theme}
+          />
+        )}
+
+        {showNotifPanel && (
+          <NotificationPanel
+            currentUser={currentUser}
+            onClose={() => setShowNotifPanel(false)}
             theme={theme}
           />
         )}
