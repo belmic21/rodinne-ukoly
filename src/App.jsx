@@ -1262,7 +1262,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -1370,12 +1370,18 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       });
       onUpdate(task.id, { checklist: updated });
 
-      // Auto-complete the whole task when all checklist items are done
+      // Auto-complete the whole task when all checklist items are done — with animation
       if (updated.length > 0 && updated.every(item => item.done)) {
-        setTimeout(() => {
-          if (task.assignTo === "both") onStatusChange(task.id, "done_my");
-          else onStatusChange(task.id, "done");
-        }, 300);
+        if (onTriggerCompleteAnim) {
+          // Parent card will show 550ms green pulse then fire the status change
+          onTriggerCompleteAnim();
+        } else {
+          // Fallback: just fire the change
+          setTimeout(() => {
+            if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+            else onStatusChange(task.id, "done");
+          }, 300);
+        }
       }
     };
 
@@ -1781,8 +1787,12 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               theme={theme}
               onChange={cl => commitImmediate("checklist", cl)}
               onAllCompleted={() => {
-                if (task.assignTo === "both") onStatusChange(task.id, "done_my");
-                else onStatusChange(task.id, "done");
+                if (onTriggerCompleteAnim) {
+                  onTriggerCompleteAnim();
+                } else {
+                  if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+                  else onStatusChange(task.id, "done");
+                }
               }}
               taskId={task.id}
               comments={comments}
@@ -2568,6 +2578,16 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onAddComment={onAddComment}
           onToggleReaction={onToggleReaction}
           onMarkCommentsSeen={onMarkCommentsSeen}
+          onTriggerCompleteAnim={() => {
+            // Close detail so user sees the card animation, then run the complete action
+            setIsOpen(false);
+            setTimeout(() => {
+              runWithAnimation("complete", () => {
+                if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+                else onStatusChange(task.id, "done");
+              });
+            }, 50);
+          }}
         />
       )}
     </div>
