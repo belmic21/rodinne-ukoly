@@ -564,6 +564,8 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
   const [newItemText, setNewItemText] = useState("");
   const [expandedItem, setExpandedItem] = useState(null);   // ID položky s otevřeným komentářovým panelem
   const [itemCommentInput, setItemCommentInput] = useState("");
+  const [editingItem, setEditingItem] = useState(null);     // ID položky v editaci
+  const [editText, setEditText] = useState("");
 
   const addItem = () => {
     if (!newItemText.trim()) return;
@@ -576,6 +578,34 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
     };
     onChange([...items, newItem]);
     setNewItemText("");
+  };
+
+  const startEdit = (item) => {
+    setEditingItem(item.id);
+    setEditText(item.text);
+    setExpandedItem(null); // close comment panel if open
+  };
+
+  const saveEdit = () => {
+    if (!editText.trim()) return;
+    const updated = items.map(item =>
+      item.id === editingItem ? { ...item, text: editText.trim() } : item
+    );
+    onChange(updated);
+    setEditingItem(null);
+    setEditText("");
+  };
+
+  const cancelEdit = () => {
+    setEditingItem(null);
+    setEditText("");
+  };
+
+  const deleteItem = (itemId) => {
+    if (!confirm("Smazat položku?")) return;
+    onChange(items.filter(i => i.id !== itemId));
+    if (expandedItem === itemId) setExpandedItem(null);
+    if (editingItem === itemId) cancelEdit();
   };
 
   const toggleItem = (itemId) => {
@@ -647,40 +677,97 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
               }}>
                 {item.done && "✓"}
               </button>
-              <span style={{
-                flex: 1, fontSize: "13px",
-                color: item.done ? theme.textSub : theme.text,
-                textDecoration: item.done ? "line-through" : "none",
-                lineHeight: 1.3,
-              }}>
-                {item.text}
-                {item.done && item.doneBy && (
-                  <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
-                    — {item.doneBy}
-                  </span>
-                )}
-              </span>
 
-              {/* Comment/reaction indicator + toggle button */}
-              {taskId && onAddComment && (
-                <button
-                  onClick={() => setExpandedItem(isExpanded ? null : item.id)}
-                  title={hasActivity ? `${itemComments.length} komentářů/reakcí` : "Přidat komentář"}
+              {/* Editable text — either input (editing) or span (viewing, dblclick/click opens edit) */}
+              {editingItem === item.id ? (
+                <input
+                  type="text"
+                  value={editText}
+                  onChange={e => setEditText(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") saveEdit();
+                    if (e.key === "Escape") cancelEdit();
+                  }}
+                  onBlur={saveEdit}
+                  autoFocus
                   style={{
-                    ...buttonStyle(),
-                    minWidth: "28px", height: "22px", padding: "0 6px",
-                    fontSize: "11px",
-                    background: isExpanded ? theme.accentSoft : (hasActivity ? theme.accentSoft : "transparent"),
-                    color: hasActivity ? theme.accent : theme.textDim,
-                    border: `1px solid ${hasActivity ? theme.accentBorder : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    display: "flex", alignItems: "center", gap: "3px",
+                    ...inputStyle(theme),
+                    flex: 1, fontSize: "13px", padding: "3px 6px",
+                    background: theme.card,
+                  }}
+                />
+              ) : (
+                <span
+                  onClick={() => !item.done && startEdit(item)}
+                  title={item.done ? "" : "Klikni pro úpravu"}
+                  style={{
+                    flex: 1, fontSize: "13px",
+                    color: item.done ? theme.textSub : theme.text,
+                    textDecoration: item.done ? "line-through" : "none",
+                    lineHeight: 1.3,
+                    cursor: item.done ? "default" : "text",
                   }}>
-                  💬
-                  {itemComments.length > 0 && (
-                    <span style={{ fontSize: "9px", fontWeight: 700 }}>{itemComments.length}</span>
+                  {item.text}
+                  {item.done && item.doneBy && (
+                    <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
+                      — {item.doneBy}
+                    </span>
                   )}
-                </button>
+                </span>
+              )}
+
+              {/* Action buttons */}
+              {editingItem === item.id ? (
+                <>
+                  <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }} title="Uložit" style={{
+                    ...buttonStyle(), width: "26px", height: "22px", padding: 0,
+                    background: theme.green, color: "#fff", border: "none",
+                    fontSize: "13px", fontWeight: 800,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>✓</button>
+                  <button onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }} title="Zrušit" style={{
+                    ...buttonStyle(), width: "24px", height: "22px", padding: 0,
+                    background: "transparent", color: theme.textSub,
+                    border: `1px solid ${theme.inputBorder}`, fontSize: "12px",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>×</button>
+                </>
+              ) : (
+                <>
+                  {/* Delete button */}
+                  <button
+                    onClick={() => deleteItem(item.id)}
+                    title="Smazat položku"
+                    style={{
+                      ...buttonStyle(), width: "24px", height: "22px", padding: 0,
+                      background: "transparent", color: theme.red,
+                      border: `1px solid ${theme.red}25`, borderRadius: "5px",
+                      fontSize: "12px", opacity: 0.6,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>🗑</button>
+
+                  {/* Comment/reaction indicator + toggle button */}
+                  {taskId && onAddComment && (
+                    <button
+                      onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                      title={hasActivity ? `${itemComments.length} komentářů/reakcí` : "Přidat komentář"}
+                      style={{
+                        ...buttonStyle(),
+                        minWidth: "28px", height: "22px", padding: "0 6px",
+                        fontSize: "11px",
+                        background: isExpanded ? theme.accentSoft : (hasActivity ? theme.accentSoft : "transparent"),
+                        color: hasActivity ? theme.accent : theme.textDim,
+                        border: `1px solid ${hasActivity ? theme.accentBorder : theme.inputBorder}`,
+                        borderRadius: "10px",
+                        display: "flex", alignItems: "center", gap: "3px",
+                      }}>
+                      💬
+                      {itemComments.length > 0 && (
+                        <span style={{ fontSize: "9px", fontWeight: 700 }}>{itemComments.length}</span>
+                      )}
+                    </button>
+                  )}
+                </>
               )}
             </div>
 
@@ -1683,6 +1770,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             }}>
               {priority.sym} {priority.label}
             </span>
+
+            {/* "Od koho" indicator — task created by someone else and assigned to me */}
+            {task.createdBy &&
+             task.createdBy !== currentUser.name &&
+             task.assignedTo?.includes(currentUser.name) && (
+              <span title={`Zadal(a) ti: ${task.createdBy}`} style={{
+                fontSize: "10px", fontWeight: 700,
+                color: theme.accent,
+                background: theme.accentSoft,
+                padding: "1px 6px", borderRadius: "10px",
+                border: `1px solid ${theme.accentBorder}`,
+                display: "inline-flex", alignItems: "center", gap: "3px",
+              }}>
+                📥 od {task.createdBy}
+              </span>
+            )}
 
             {/* Category */}
             {task.category && task.category !== "other" && (
@@ -2696,14 +2799,95 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             </div>
           )}
 
-          {/* Info: Pro koho a Priorita jsou v liště nad formulářem */}
-          <div style={{
-            fontSize: "10px", color: theme.textMid, marginBottom: "8px",
-            padding: "6px 10px", background: theme.inputBg,
-            border: `1px dashed ${theme.inputBorder}`, borderRadius: "6px",
-            lineHeight: 1.4,
-          }}>
-            💡 Pro koho a prioritu nastav <strong>v liště nad formulářem</strong> (ikony kategorií, ❗ a iniciály).
+          {/* Pro koho — multi-select via checkboxy (available users) */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Pro koho</div>
+            <div style={{
+              display: "flex", gap: "5px", flexWrap: "wrap",
+              padding: "6px", background: theme.inputBg,
+              border: `1px solid ${theme.inputBorder}`, borderRadius: "6px",
+            }}>
+              {users.length > 1 && (() => {
+                const allSelected = users.every(u => quickAssignees.includes(u.name));
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (allSelected) setQuickAssignees([]);
+                      else setQuickAssignees(users.map(u => u.name));
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      background: allSelected ? theme.accentSoft : "transparent",
+                      color: allSelected ? theme.accent : theme.textSub,
+                      border: `1px solid ${allSelected ? theme.accentBorder : theme.inputBorder}`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "3px",
+                    }}>
+                    👥 Všichni
+                  </button>
+                );
+              })()}
+              {users.map(u => {
+                const selected = quickAssignees.includes(u.name);
+                return (
+                  <button
+                    key={u.name}
+                    type="button"
+                    onClick={() => {
+                      setQuickAssignees(prev =>
+                        prev.includes(u.name)
+                          ? prev.filter(n => n !== u.name)
+                          : [...prev, u.name]
+                      );
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      background: selected ? theme.accentSoft : "transparent",
+                      color: selected ? theme.accent : theme.textSub,
+                      border: `1px solid ${selected ? theme.accentBorder : theme.inputBorder}`,
+                      borderRadius: "12px",
+                    }}>
+                    {u.name}
+                  </button>
+                );
+              })}
+            </div>
+            {quickAssignees.length === 0 && (
+              <div style={{ fontSize: "10px", color: theme.textMid, marginTop: "3px", paddingLeft: "4px" }}>
+                Když nikoho nevybereš, úkol bude jen pro tebe.
+              </div>
+            )}
+          </div>
+
+          {/* Priorita — 3 velká tlačítka */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Priorita</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "5px" }}>
+              {PRIORITIES.map(pri => {
+                const pt = theme.priority[pri.id];
+                const isSet = (quickPriority || "low") === pri.id;
+                return (
+                  <button key={pri.id}
+                    type="button"
+                    onClick={() => setQuickPriority(pri.id === "low" ? null : pri.id)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "6px", fontSize: "11px", fontWeight: 600,
+                      background: isSet ? pt.cardBg : theme.inputBg,
+                      color: isSet ? pt.text : theme.text,
+                      border: `2px solid ${isSet ? pt.border : theme.inputBorder}`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
+                    }}>
+                    <span style={{ fontSize: "14px", fontWeight: 900, color: pt.text }}>{pri.sym}</span>
+                    <span>{pri.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
@@ -3953,6 +4137,10 @@ export default function App() {
 
     // Scope filter
     if (filter === "my") result = result.filter(t => t.assignedTo?.includes(currentUser.name));
+    else if (filter === "for_me") result = result.filter(t =>
+      t.assignedTo?.includes(currentUser.name) &&
+      t.createdBy !== currentUser.name
+    );
     else if (filter.startsWith("person:")) {
       const personName = filter.replace("person:", "");
       result = result.filter(t => t.assignedTo?.includes(personName));
@@ -4001,6 +4189,10 @@ export default function App() {
     const visibleActive = activeTasks.filter(t => !(t.showFrom && daysDiff(t.showFrom) > 0));
     return {
       my: visibleActive.filter(t => t.assignedTo?.includes(currentUser.name)).length,
+      forMe: visibleActive.filter(t =>
+        t.assignedTo?.includes(currentUser.name) &&
+        t.createdBy !== currentUser.name
+      ).length,
       assigned: visibleActive.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name)).length,
       shared: visibleActive.filter(t => t.assignTo === "both").length,
       planned: plannedCount,
@@ -4214,6 +4406,7 @@ export default function App() {
             color: theme.accent, fontWeight: 600,
           }}>
             <option value="my">Moje ({stats.my})</option>
+            <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
             {users.filter(u => u.name !== currentUser.name).map(u => (
               <option key={u.name} value={`person:${u.name}`}>{u.name}</option>
             ))}
