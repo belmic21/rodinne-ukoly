@@ -110,6 +110,21 @@ function shiftDueDate(currentDueDate, shiftDays) {
   return date.toISOString().slice(0, 10);
 }
 
+// Format a timestamp as compact Czech time trace: "dnes 8:15", "včera 13:50", "3.4. 18:30"
+function formatTimeTrace(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const that = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dayDiff = Math.round((today - that) / 86400000);
+  const hm = d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
+  if (dayDiff === 0) return `dnes ${hm}`;
+  if (dayDiff === 1) return `včera ${hm}`;
+  if (dayDiff > 1 && dayDiff < 7) return `před ${dayDiff} dny ${hm}`;
+  return `${d.getDate()}.${d.getMonth() + 1}. ${hm}`;
+}
+
 function autoDetectCategory(title) {
   const lower = title.toLowerCase();
   for (const cat of CATEGORIES) {
@@ -1274,137 +1289,39 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       <div style={{ marginTop: "10px", paddingLeft: "32px", animation: "fadeIn 0.12s" }}
            onClick={e => e.stopPropagation()}>
 
-        {/* Top bar: Close + Edit button */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px",
-        }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onClose && onClose(); }}
-            title="Zavřít detail"
-            style={{
-              ...buttonStyle(),
-              padding: "6px 10px", fontSize: "12px",
-              background: theme.inputBg, color: theme.textSub,
-              border: `1px solid ${theme.inputBorder}`,
-              display: "flex", alignItems: "center", gap: "4px",
-            }}>
-            ← Zavřít
-          </button>
-          <span style={{ flex: 1 }} />
-          {task.status !== "deleted" && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
-              title="Upravit úkol"
-              style={{
-                ...buttonStyle(),
-                padding: "6px 12px", fontSize: "12px", fontWeight: 600,
-                background: theme.accentSoft, color: theme.accent,
-                border: `1px solid ${theme.accentBorder}`,
-                display: "flex", alignItems: "center", gap: "5px",
-              }}>
-              ✏️ Upravit
-            </button>
-          )}
-        </div>
-
-        {/* Title (read-only) */}
-        <div style={{
-          fontSize: "16px", fontWeight: 700, color: theme.text,
-          marginBottom: "8px", lineHeight: 1.3,
-          textDecoration: taskIsDone ? "line-through" : "none",
-          opacity: taskIsDone ? 0.6 : 1,
-        }}>
-          {task.title}
-        </div>
-
-        {/* Info pills: priority + from + due date + category */}
-        <div style={{
-          display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "10px",
-          alignItems: "center",
-        }}>
-          {/* Priority */}
-          <span style={{
-            fontSize: "11px", fontWeight: 800,
-            color: priTheme.text, background: priTheme.bg,
-            padding: "2px 8px", borderRadius: "6px",
-            border: `1px solid ${priTheme.border}`,
+        {/* Compact time trace: when completed / deleted / due / deferred */}
+        {(task.completedAt || task.deletedAt || task.dueDate || (task.showFrom && daysDiff(task.showFrom) > 0) || task.recDays > 0) && (
+          <div style={{
+            display: "flex", gap: "8px", flexWrap: "wrap",
+            marginBottom: "8px", fontSize: "11px", color: theme.textSub,
           }}>
-            {priObj.sym} {priObj.label}
-          </span>
-
-          {/* Od koho */}
-          {isForMe && (
-            <span style={{
-              fontSize: "11px", fontWeight: 700,
-              color: theme.accent, background: theme.accentSoft,
-              padding: "2px 8px", borderRadius: "10px",
-              border: `1px solid ${theme.accentBorder}`,
-            }}>
-              📥 od {task.createdBy}
-            </span>
-          )}
-
-          {/* Category */}
-          {task.category && task.category !== "other" && (
-            <span style={{
-              fontSize: "11px", color: theme.textSub,
-              padding: "2px 8px", borderRadius: "6px",
-              background: theme.inputBg,
-              border: `1px solid ${theme.inputBorder}`,
-            }}>
-              {cat.icon} {cat.label}
-            </span>
-          )}
-
-          {/* Due date */}
-          {task.dueDate && (
-            <span style={{
-              fontSize: "11px", fontWeight: 600,
-              color: overdue ? theme.red : theme.textSub,
-              background: overdue ? `${theme.red}10` : theme.inputBg,
-              padding: "2px 8px", borderRadius: "6px",
-              border: `1px solid ${overdue ? theme.red + "30" : theme.inputBorder}`,
-            }}>
-              📅 {formatDate(task.dueDate)}
-            </span>
-          )}
-
-          {/* Recurrence */}
-          {task.recDays > 0 && (
-            <span style={{
-              fontSize: "11px", color: theme.purple,
-              padding: "2px 8px", borderRadius: "6px",
-              background: `${theme.purple}10`,
-              border: `1px solid ${theme.purple}30`,
-            }}>
-              🔄 {RECURRENCE_OPTIONS.find(r => r.value === task.recDays)?.label || `${task.recDays}d`}
-            </span>
-          )}
-
-          {/* Deferred */}
-          {task.showFrom && daysDiff(task.showFrom) > 0 && (
-            <span style={{
-              fontSize: "11px", color: theme.purple,
-              padding: "2px 8px", borderRadius: "6px",
-              background: `${theme.purple}10`,
-              border: `1px solid ${theme.purple}30`,
-            }}>
-              ⏰ odloženo do {formatDate(task.showFrom)}
-            </span>
-          )}
-
-          {/* Assigned to */}
-          {task.assignedTo && task.assignedTo.length > 0 && task.assignTo !== "self" && (
-            <span style={{
-              fontSize: "11px", color: theme.textSub,
-              padding: "2px 8px", borderRadius: "6px",
-              background: theme.inputBg,
-              border: `1px solid ${theme.inputBorder}`,
-            }}>
-              👤 {task.assignTo === "both" ? "Společné" : task.assignedTo.join(", ")}
-            </span>
-          )}
-        </div>
+            {task.completedAt && (
+              <span style={{ color: theme.green }}>
+                ✓ Splněno {formatTimeTrace(task.completedAt)}{task.completedByUser ? ` — ${task.completedByUser}` : ""}
+              </span>
+            )}
+            {task.deletedAt && (
+              <span style={{ color: theme.red }}>
+                🗑 Smazáno {formatTimeTrace(task.deletedAt)}
+              </span>
+            )}
+            {task.dueDate && !taskIsDone && (
+              <span style={{ color: overdue ? theme.red : theme.textSub, fontWeight: 600 }}>
+                📅 Termín: {formatDate(task.dueDate)}
+              </span>
+            )}
+            {task.showFrom && daysDiff(task.showFrom) > 0 && (
+              <span style={{ color: theme.purple }}>
+                ⏰ Odloženo do {formatDate(task.showFrom)}
+              </span>
+            )}
+            {task.recDays > 0 && (
+              <span style={{ color: theme.purple }}>
+                🔄 {RECURRENCE_OPTIONS.find(r => r.value === task.recDays)?.label || `${task.recDays}d`}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Note (if exists) — read-only */}
         {task.note && task.note.trim() && (
@@ -1477,6 +1394,33 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 </div>
               );
             })}
+            {/* Splnit vše button — pod seznamem, jen když nejsou všechny splněné */}
+            {!taskIsDone && canAct && !task.checklist.every(i => i.done) && (
+              <button
+                onClick={() => {
+                  // Mark all items done
+                  const updated = task.checklist.map(item => ({
+                    ...item,
+                    done: true,
+                    doneBy: item.doneBy || currentUser.name,
+                    doneAt: item.doneAt || new Date().toISOString(),
+                  }));
+                  onUpdate(task.id, { checklist: updated });
+                  // Auto-complete the whole task (same as clicking "Hotovo")
+                  setTimeout(() => onStatusChange(task.id, "complete"), 100);
+                }}
+                style={{
+                  ...buttonStyle(),
+                  width: "100%", padding: "8px",
+                  marginTop: "4px",
+                  background: `${theme.green}15`, color: theme.green,
+                  border: `1px solid ${theme.green}30`,
+                  fontSize: "12px", fontWeight: 600,
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: "4px",
+                }}>
+                ✓ Splnit vše
+              </button>
+            )}
           </div>
         )}
 
@@ -1511,20 +1455,26 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             marginTop: "12px", paddingTop: "10px",
             borderTop: `1px solid ${theme.cardBorder}`,
           }}>
-            {/* Completion action — depends on state */}
-            {canAct && !taskIsDone && (
+            {/* Completion action — jen u JEDNODUCHÝCH úkolů (ne s checklistem, tam je Splnit vše pod seznamem) */}
+            {canAct && !taskIsDone && (!task.checklist || task.checklist.length === 0) && (
               <>
                 {task.assignTo === "both" && task.doneBy?.includes(currentUser.name) ? (
                   <ActionButton label="↩ Odškrnout" onClick={() => onStatusChange(task.id, "unmark")} theme={theme} subtle />
                 ) : (
                   <ActionButton
-                    label={allChecked ? "✓ Splnit všechno" : (task.assignTo === "both" ? "✓ Splnil(a) jsem já" : "✓ Hotovo")}
+                    label={task.assignTo === "both" ? "✓ Splnil(a) jsem já" : "✓ Hotovo"}
                     onClick={() => onStatusChange(task.id, "complete")}
                     theme={theme}
                     green
                   />
                 )}
               </>
+            )}
+
+            {/* U úkolů s checklistem — akce pro společné úkoly (pokud už jsem zaškrtl checkliste items ale chci potvrdit) */}
+            {canAct && !taskIsDone && task.checklist && task.checklist.length > 0 &&
+             task.assignTo === "both" && task.doneBy?.includes(currentUser.name) && (
+              <ActionButton label="↩ Odškrnout mě" onClick={() => onStatusChange(task.id, "unmark")} theme={theme} subtle />
             )}
 
             {taskIsDone && (
@@ -1588,6 +1538,22 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             {/* Delete */}
             {onDelete && (
               <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />
+            )}
+
+            {/* Edit button */}
+            {task.status !== "deleted" && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
+                title="Upravit úkol"
+                style={{
+                  ...buttonStyle(),
+                  padding: "6px 12px", fontSize: "12px",
+                  background: theme.accentSoft, color: theme.accent,
+                  border: `1px solid ${theme.accentBorder}`,
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                }}>
+                ✏️ Upravit
+              </button>
             )}
           </div>
         )}
@@ -2134,6 +2100,16 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               textOverflow: "ellipsis",
             } : {}),
           }}>
+            {/* Priority symbol inline — only for important/urgent, no text */}
+            {task.priority && task.priority !== "low" && (
+              <span style={{
+                fontWeight: 900, marginRight: "6px",
+                color: priorityTheme.text,
+                fontSize: "15px",
+              }}>
+                {priority.sym}
+              </span>
+            )}
             {task.title}
           </div>
 
@@ -2141,17 +2117,6 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             display: "flex", alignItems: "center", gap: "6px",
             marginTop: "4px", flexWrap: "wrap",
           }}>
-            {/* Priority with STRONG visual */}
-            <span style={{
-              fontSize: "11px", fontWeight: 800,
-              color: priorityTheme.text, letterSpacing: "0.5px",
-              background: priorityTheme.bg,
-              padding: "1px 6px", borderRadius: "4px",
-              border: `1px solid ${priorityTheme.border}`,
-            }}>
-              {priority.sym} {priority.label}
-            </span>
-
             {/* "Od koho" indicator — task created by someone else and assigned to me */}
             {task.createdBy &&
              task.createdBy !== currentUser.name &&
@@ -2217,7 +2182,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 ⏰ od {formatDate(task.showFrom)}
               </span>
             )}
-            {task.dueDate && (
+            {task.dueDate && !taskIsDone && !isDeleted(task) && (
               <span style={{
                 fontSize: "10px", fontWeight: 600,
                 color: overdue ? theme.red : soon ? theme.yellow : theme.textMid,
@@ -2225,8 +2190,17 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 {overdue ? "⚠ " : ""}{formatDate(task.dueDate)}
               </span>
             )}
-            {taskIsDone && task.completedByUser && (
-              <span style={{ fontSize: "10px", color: theme.textMid }}>✓ {task.completedByUser}</span>
+            {/* Time trace for completed */}
+            {taskIsDone && task.completedAt && (
+              <span style={{ fontSize: "10px", color: theme.green, fontWeight: 600 }}>
+                ✓ {formatTimeTrace(task.completedAt)}{task.completedByUser ? ` — ${task.completedByUser}` : ""}
+              </span>
+            )}
+            {/* Time trace for deleted */}
+            {isDeleted(task) && task.deletedAt && (
+              <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600 }}>
+                🗑 {formatTimeTrace(task.deletedAt)}
+              </span>
             )}
           </div>
         </div>
@@ -4440,14 +4414,15 @@ export default function App() {
     if (viewStatus === "active") {
       const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
       result = result.filter(t => {
-        if (isDeleted(t)) return false;
-        if (!isDone(t)) {
+        if (!isDone(t) && !isDeleted(t)) {
           // In active view, hide planned (future showFrom) tasks UNLESS showDeferred is on
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
         // Show recently completed tasks (within 24h) crossed out
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
+        // Show recently deleted tasks (within 24h) for undo possibility — user wanted this
+        if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
         return false;
       });
     }
@@ -4490,12 +4465,14 @@ export default function App() {
     else if (sortMode === "date") result = [...result].sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate));
     else if (sortMode === "created") result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // In active view, push completed to bottom, sorted newest first
+    // In active view, push completed to bottom, then deleted below completed
     if (viewStatus === "active") {
-      const active = result.filter(t => !isDone(t));
+      const active = result.filter(t => !isDone(t) && !isDeleted(t));
       const recentlyDone = result.filter(t => isDone(t))
         .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
-      result = [...active, ...recentlyDone];
+      const recentlyDeleted = result.filter(t => isDeleted(t))
+        .sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt));
+      result = [...active, ...recentlyDone, ...recentlyDeleted];
     }
 
     return result;
@@ -4785,13 +4762,16 @@ export default function App() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
             {(() => {
-              let shownSeparator = false;
+              let shownDoneSep = false;
+              let shownDelSep = false;
               return filteredTasks.map(task => {
-                const showSep = viewStatus === "active" && isDone(task) && !shownSeparator;
-                if (showSep) shownSeparator = true;
+                const showDoneSep = viewStatus === "active" && isDone(task) && !isDeleted(task) && !shownDoneSep;
+                if (showDoneSep) shownDoneSep = true;
+                const showDelSep = viewStatus === "active" && isDeleted(task) && !shownDelSep;
+                if (showDelSep) shownDelSep = true;
                 return (
                   <div key={task.id}>
-                    {showSep && (
+                    {showDoneSep && (
                       <div style={{
                         display: "flex", alignItems: "center", gap: "8px",
                         margin: "12px 0 8px",
@@ -4803,6 +4783,22 @@ export default function App() {
                           whiteSpace: "nowrap",
                         }}>
                           ✓ Dnes hotovo
+                        </span>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                      </div>
+                    )}
+                    {showDelSep && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: "8px",
+                        margin: "12px 0 8px",
+                      }}>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                        <span style={{
+                          fontSize: "10px", color: theme.red, fontWeight: 700,
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          🗑 Dnes smazáno (v koši)
                         </span>
                         <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
                       </div>
