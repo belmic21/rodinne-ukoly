@@ -736,7 +736,7 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
                   {item.text}
                   {item.done && item.doneBy && (
                     <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
-                      — {item.doneBy}
+                      — {item.doneBy}{item.doneAt ? `, ${formatTimeTrace(item.doneAt)}` : ""}
                     </span>
                   )}
                 </span>
@@ -1034,7 +1034,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
    TASK COMMENTS — chat panel shown inside TaskDetail
    ═══════════════════════════════════════════════════════ */
 
-function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, onMarkSeen, theme }) {
+function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, onMarkSeen, onEdit, onDelete, theme }) {
   const [input, setInput] = useState("");
 
   // Separate comments from reactions
@@ -1078,8 +1078,11 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
         💬 Komentáře {textComments.length > 0 && `(${textComments.length})`}
       </div>
 
-      {/* Reaction bar */}
-      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "8px" }}>
+      {/* Reaction bar + Edit/Delete buttons on the right */}
+      <div style={{
+        display: "flex", gap: "4px", flexWrap: "wrap",
+        marginBottom: "8px", alignItems: "center",
+      }}>
         {REACTION_EMOJIS.map(emoji => {
           const list = reactionsByEmoji[emoji] || [];
           const mine = list.some(r => r.author === currentUser.name);
@@ -1103,6 +1106,33 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
             </button>
           );
         })}
+        {/* Spacer pushes action buttons to the right */}
+        <span style={{ flex: 1 }} />
+        {/* Edit + Delete — compact, next to reactions */}
+        {onEdit && task.status !== "deleted" && (
+          <button onClick={onEdit} title="Upravit úkol" style={{
+            ...buttonStyle(),
+            padding: "3px 8px", fontSize: "12px",
+            background: theme.accentSoft, color: theme.accent,
+            border: `1px solid ${theme.accentBorder}`,
+            borderRadius: "12px",
+            display: "inline-flex", alignItems: "center", gap: "3px",
+          }}>
+            ✏️
+          </button>
+        )}
+        {onDelete && task.status !== "deleted" && (
+          <button onClick={onDelete} title="Smazat úkol" style={{
+            ...buttonStyle(),
+            padding: "3px 8px", fontSize: "12px",
+            background: `${theme.red}08`, color: theme.red,
+            border: `1px solid ${theme.red}25`,
+            borderRadius: "12px",
+            display: "inline-flex", alignItems: "center", gap: "3px",
+          }}>
+            🗑
+          </button>
+        )}
       </div>
 
       {/* Comments list */}
@@ -1251,11 +1281,11 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   const commitImmediate = (key, value) => onUpdate(task.id, { [key]: value });
 
   const quickDates = [
-    { label: "Dnes",   value: addDays(0) },
-    { label: "Zítra",  value: addDays(1) },
-    { label: "3d",     value: addDays(3) },
+    { label: "Ihned",  value: addDays(0) },
+    { label: "1 den",  value: addDays(1) },
+    { label: "3 dny",  value: addDays(3) },
     { label: "Týden",  value: addDays(7) },
-    { label: "14d",    value: addDays(14) },
+    { label: "14 dní", value: addDays(14) },
     { label: "Měsíc",  value: addDays(30) },
   ];
 
@@ -1377,7 +1407,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     {item.text}
                     {item.done && item.doneBy && (
                       <span style={{ fontSize: "10px", color: theme.textMid, marginLeft: "6px" }}>
-                        — {item.doneBy}
+                        — {item.doneBy}{item.doneAt ? `, ${formatTimeTrace(item.doneAt)}` : ""}
                       </span>
                     )}
                   </span>
@@ -1448,112 +1478,22 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
-        {/* ── ACTIONS ── */}
-        {task.status !== "deleted" && (
+        {/* ── ACTIONS — pouze pro speciální případy (splněno → vrátit, společné → odškrnout) ── */}
+        {task.status !== "deleted" && (canAct && (
+          (taskIsDone) ||
+          (task.assignTo === "both" && task.doneBy?.includes(currentUser.name))
+        )) && (
           <div style={{
             display: "flex", gap: "5px", flexWrap: "wrap",
-            marginTop: "12px", paddingTop: "10px",
-            borderTop: `1px solid ${theme.cardBorder}`,
+            marginTop: "10px",
           }}>
-            {/* Completion action — jen u JEDNODUCHÝCH úkolů (ne s checklistem, tam je Splnit vše pod seznamem) */}
-            {canAct && !taskIsDone && (!task.checklist || task.checklist.length === 0) && (
-              <>
-                {task.assignTo === "both" && task.doneBy?.includes(currentUser.name) ? (
-                  <ActionButton label="↩ Odškrnout" onClick={() => onStatusChange(task.id, "unmark")} theme={theme} subtle />
-                ) : (
-                  <ActionButton
-                    label={task.assignTo === "both" ? "✓ Splnil(a) jsem já" : "✓ Hotovo"}
-                    onClick={() => onStatusChange(task.id, "complete")}
-                    theme={theme}
-                    green
-                  />
-                )}
-              </>
-            )}
-
             {/* U úkolů s checklistem — akce pro společné úkoly (pokud už jsem zaškrtl checkliste items ale chci potvrdit) */}
-            {canAct && !taskIsDone && task.checklist && task.checklist.length > 0 &&
-             task.assignTo === "both" && task.doneBy?.includes(currentUser.name) && (
+            {canAct && !taskIsDone && task.assignTo === "both" && task.doneBy?.includes(currentUser.name) && (
               <ActionButton label="↩ Odškrnout mě" onClick={() => onStatusChange(task.id, "unmark")} theme={theme} subtle />
             )}
 
             {taskIsDone && (
               <ActionButton label="↩ Vrátit zpět" onClick={() => onStatusChange(task.id, "reopen")} theme={theme} subtle />
-            )}
-
-            {/* Snooze menu — quick buttons for common delays */}
-            {!taskIsDone && (
-              <div style={{ position: "relative" }}>
-                <details style={{ display: "inline-block" }}>
-                  <summary style={{
-                    ...buttonStyle(),
-                    padding: "6px 12px", fontSize: "12px",
-                    background: "transparent", color: theme.textSub,
-                    border: `1px solid ${theme.cardBorder}`,
-                    borderRadius: "6px", cursor: "pointer",
-                    listStyle: "none",
-                    display: "inline-flex", alignItems: "center", gap: "4px",
-                  }}>
-                    ⏰ Odložit
-                  </summary>
-                  <div style={{
-                    position: "absolute", top: "calc(100% + 4px)", left: 0,
-                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
-                    borderRadius: "8px", padding: "4px",
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-                    zIndex: 30, minWidth: "140px",
-                  }}>
-                    {[
-                      { label: "Zítra", shiftDays: 1 },
-                      { label: "3 dny", shiftDays: 3 },
-                      { label: "Týden", shiftDays: 7 },
-                      { label: "Měsíc", shiftDays: 30 },
-                    ].map(opt => (
-                      <button key={opt.label}
-                        onClick={() => {
-                          const patch = { showFrom: addDays(opt.shiftDays) };
-                          if (task.dueDate) {
-                            patch.dueDate = shiftDueDate(task.dueDate, opt.shiftDays);
-                          }
-                          onUpdate(task.id, patch);
-                          onClose && onClose();
-                        }}
-                        style={{
-                          ...buttonStyle(),
-                          width: "100%", padding: "7px 10px", fontSize: "12px",
-                          background: "transparent", color: theme.text,
-                          border: "none", textAlign: "left", borderRadius: "6px",
-                          display: "block",
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </details>
-              </div>
-            )}
-
-            {/* Delete */}
-            {onDelete && (
-              <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />
-            )}
-
-            {/* Edit button */}
-            {task.status !== "deleted" && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
-                title="Upravit úkol"
-                style={{
-                  ...buttonStyle(),
-                  padding: "6px 12px", fontSize: "12px",
-                  background: theme.accentSoft, color: theme.accent,
-                  border: `1px solid ${theme.accentBorder}`,
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                }}>
-                ✏️ Upravit
-              </button>
             )}
           </div>
         )}
@@ -1570,7 +1510,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
-        {/* Komentáře (always) */}
+        {/* Komentáře + Edit/Delete buttons */}
         <TaskComments
           task={task}
           comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
@@ -1578,6 +1518,8 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
           onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
           onMarkSeen={onMarkCommentsSeen}
+          onEdit={() => setIsEditing(true)}
+          onDelete={onDelete ? () => onDelete(task.id) : null}
           theme={theme}
         />
       </div>
@@ -2217,9 +2159,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               title="Odložit úkol"
               style={{
                 ...buttonStyle(),
-                width: "26px", height: "26px", padding: "0",
+                width: "34px", height: "34px", padding: "0",
                 background: snoozeMenuOpen ? theme.accentSoft : "transparent",
-                color: theme.textSub, fontSize: "13px",
+                color: theme.textSub, fontSize: "17px",
                 border: `1px solid ${snoozeMenuOpen ? theme.accentBorder : "transparent"}`,
                 borderRadius: "6px",
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -2254,7 +2196,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 Odložit do
               </div>
               {[
-                { label: "Zítra",  value: addDays(1),  shiftDays: 1 },
+                { label: "1 den",  value: addDays(1),  shiftDays: 1 },
                 { label: "3 dny",  value: addDays(3),  shiftDays: 3 },
                 { label: "Týden",  value: addDays(7),  shiftDays: 7 },
                 { label: "Měsíc", value: addDays(30), shiftDays: 30 },
@@ -2425,11 +2367,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   };
 
   const quickDates = [
-    { label: "Dnes", value: addDays(0) },
-    { label: "Zítra", value: addDays(1) },
-    { label: "3d", value: addDays(3) },
+    { label: "Ihned", value: addDays(0) },
+    { label: "1 den", value: addDays(1) },
+    { label: "3 dny", value: addDays(3) },
     { label: "Týden", value: addDays(7) },
-    { label: "14d", value: addDays(14) },
+    { label: "14 dní", value: addDays(14) },
     { label: "Měsíc", value: addDays(30) },
   ];
 
