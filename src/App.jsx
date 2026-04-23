@@ -350,6 +350,17 @@ const GLOBAL_CSS = `
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.15); opacity: 0.85; }
 }
+@keyframes completePulse {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.25); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@keyframes completeCardGlow {
+  0% { box-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+  30% { box-shadow: 0 0 40px rgba(16, 185, 129, 0.5), 0 4px 20px rgba(16, 185, 129, 0.4); }
+  100% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.25), 0 4px 16px rgba(16, 185, 129, 0.2); }
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
 body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
@@ -1993,11 +2004,39 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     if (opening && isNew) onMarkSeen(task.id);
   };
 
+  // Completion animation state — shows a bright green pulse before status change fires
+  const [completing, setCompleting] = useState(false);
+
   const handleQuickComplete = (e) => {
     e.stopPropagation();
+    if (completing) return; // prevent double-click during animation
     setIsOpen(false); // Close detail if open
-    if (task.assignTo === "both") onStatusChange(task.id, "done_my");
-    else onStatusChange(task.id, "done");
+
+    // Smart: if task has checklist items, mark them all as done first
+    const hasChecklist = task.checklist && task.checklist.length > 0;
+    const hasUnchecked = hasChecklist && task.checklist.some(i => !i.done);
+
+    // Start the animation — gives user time to notice
+    setCompleting(true);
+
+    setTimeout(() => {
+      if (hasUnchecked) {
+        const now = new Date().toISOString();
+        const allDone = task.checklist.map(item => ({
+          ...item,
+          done: true,
+          doneBy: item.doneBy || currentUser.name,
+          doneAt: item.doneAt || now,
+        }));
+        onUpdate(task.id, { checklist: allDone });
+      }
+      // Fire status change after checklist update
+      if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+      else onStatusChange(task.id, "done");
+      // completing resets automatically when task disappears from active list
+      // but reset locally in case component stays mounted
+      setTimeout(() => setCompleting(false), 100);
+    }, 550); // 550ms animation window
   };
 
   // Assignment label
@@ -2062,19 +2101,21 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-      background: cardBackground,
-      border: `1px solid ${cardBorderColor}`,
+      background: completing ? `${theme.green}15` : cardBackground,
+      border: `1px solid ${completing ? theme.green : cardBorderColor}`,
       borderRadius: "12px",
-      borderLeft: `5px solid ${leftBorderColor}`,
+      borderLeft: `5px solid ${completing ? theme.green : leftBorderColor}`,
       padding: "11px 13px",
       opacity: taskIsDone ? 0.35 : 1,
       cursor: "pointer",
       position: "relative",
-      animation: isNew ? "glow 2s ease 3, slideUp 0.3s ease"
+      animation: completing ? "completeCardGlow 0.55s ease-out"
+        : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
-      transform: `translateX(${swipeX}px)`,
+      transform: `translateX(${swipeX}px) ${completing ? "scale(1.02)" : ""}`,
       transition: isSwiping ? "none" : "transform 0.25s ease, all 0.2s",
+      boxShadow: completing ? `0 0 30px ${theme.green}40, 0 4px 16px ${theme.green}30` : "none",
       touchAction: "pan-y",  // allow vertical scroll, our JS handles horizontal swipe
       userSelect: "none",
       WebkitUserSelect: "none",
@@ -2108,17 +2149,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         {/* Quick complete checkbox */}
         {!taskIsDone && canAct ? (
           <button onClick={handleQuickComplete} style={{
-            width: "32px", height: "32px", minWidth: "32px",
+            width: completing ? "40px" : "32px",
+            height: completing ? "40px" : "32px",
+            minWidth: completing ? "40px" : "32px",
             borderRadius: "8px",
-            border: `2.5px solid ${inProgress ? theme.yellow : priorityTheme.text}`,
-            background: inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`,
-            cursor: "pointer",
+            border: `2.5px solid ${completing ? theme.green : (inProgress ? theme.yellow : priorityTheme.text)}`,
+            background: completing ? theme.green : (inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`),
+            cursor: completing ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
-            color: inProgress ? theme.yellow : priorityTheme.text,
-            fontSize: "14px", fontWeight: 700,
-            transition: "all 0.15s",
+            color: completing ? "#fff" : (inProgress ? theme.yellow : priorityTheme.text),
+            fontSize: completing ? "22px" : "14px",
+            fontWeight: 700,
+            transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            boxShadow: completing ? `0 0 0 10px ${theme.green}25, 0 4px 20px ${theme.green}60` : "none",
+            animation: completing ? "completePulse 0.55s ease-out" : "none",
           }} title="Splnit">
-            {inProgress ? "◐" : "○"}
+            {completing ? "✓" : (inProgress ? "◐" : "○")}
           </button>
         ) : (
           <button onClick={(e) => {
