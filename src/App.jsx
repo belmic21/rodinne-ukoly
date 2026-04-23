@@ -592,6 +592,9 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
   const [itemCommentInput, setItemCommentInput] = useState("");
   const [editingItem, setEditingItem] = useState(null);     // ID položky v editaci
   const [editText, setEditText] = useState("");
+  // Track when edit was saved — used to prevent phantom delete click
+  // (✓ Save button and 🗑 Delete button share same screen position)
+  const lastSaveTimeRef = useRef(0);
 
   const addItem = () => {
     if (!newItemText.trim()) return;
@@ -620,14 +623,18 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
     onChange(updated);
     setEditingItem(null);
     setEditText("");
+    lastSaveTimeRef.current = Date.now();
   };
 
   const cancelEdit = () => {
     setEditingItem(null);
     setEditText("");
+    lastSaveTimeRef.current = Date.now(); // also block phantom delete after cancel
   };
 
   const deleteItem = (itemId) => {
+    // Ignore delete if we just saved an edit (<500ms ago) — phantom click
+    if (Date.now() - lastSaveTimeRef.current < 500) return;
     if (!confirm("Smazat položku?")) return;
     onChange(items.filter(i => i.id !== itemId));
     if (expandedItem === itemId) setExpandedItem(null);
@@ -1609,17 +1616,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         }}
       />
 
-      {/* ── Save button — only visible when changes exist ── */}
-      {hasPendingChanges && (
-        <button onClick={saveAllChanges} style={{
-          ...buttonStyle(), width: "100%", padding: "8px",
-          background: theme.accent, color: "#fff", fontSize: "13px",
-          marginBottom: "8px",
-        }}>
-          💾 Uložit změny
-        </button>
-      )}
-
       {!taskIsDone && (
         <>
           {/* ── Type toggle + Pro koho ── */}
@@ -1891,8 +1887,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const [swipeX, setSwipeX] = useState(0);           // current drag offset in pixels
   const [isSwiping, setIsSwiping] = useState(false); // finger is down
   const touchStartRef = useRef({ x: 0, y: 0, time: 0 });
-  const SWIPE_THRESHOLD = 80; // px — need this much to trigger action
-  const SWIPE_MAX = 140;      // px — max visible drag
+  const SWIPE_THRESHOLD = 60; // px — need this much to trigger action
+  const SWIPE_MAX = 180;      // px — max visible drag
   const taskIsDone = isDone(task);
   const taskIsDeleted = task.status === "deleted";
 
@@ -1930,15 +1926,27 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     if (swipeX <= -SWIPE_THRESHOLD && onDelete) {
       // Swipe left = delete
       setSwipeX(-300); // slide out animation
+      touchStartRef.current.time = Date.now(); // mark so click guard works
       setTimeout(() => { onDelete(task.id); setSwipeX(0); }, 200);
     } else if (swipeX >= SWIPE_THRESHOLD && !taskIsDone) {
       // Swipe right = complete
       setSwipeX(300); // slide out animation
+      touchStartRef.current.time = Date.now();
       setTimeout(() => { onStatusChange(task.id, "complete"); setSwipeX(0); }, 200);
     } else {
       // Not enough swipe — snap back
       setSwipeX(0);
     }
+  };
+
+  // Block accidental click after swipe (touch → click fires even after touchend)
+  const clickGuard = (e) => {
+    if (Math.abs(swipeX) > 5) {
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+    handleClick();
   };
 
   // Auto-open when user navigated from UpdatesPanel
@@ -2049,7 +2057,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       )}
 
     <div
-      onClick={handleClick}
+      onClick={clickGuard}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -2067,7 +2075,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         : "slideUp 0.3s ease",
       transform: `translateX(${swipeX}px)`,
       transition: isSwiping ? "none" : "transform 0.25s ease, all 0.2s",
-      touchAction: "pan-y",  // allow vertical scroll, handle horizontal swipe
+      touchAction: "pan-y",  // allow vertical scroll, our JS handles horizontal swipe
+      userSelect: "none",
+      WebkitUserSelect: "none",
     }}>
       {/* Badges */}
       {isNew && (
@@ -2146,8 +2156,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               textOverflow: "ellipsis",
             } : {}),
           }}>
-            {/* Priority symbol inline — only for important/urgent, no text */}
-            {task.priority && task.priority !== "low" && (
+            {/* Priority symbol inline — only for important/urgent, no text. Hidden on progress cards. */}
+            {!progressItem && task.priority && task.priority !== "low" && (
               <span style={{
                 fontWeight: 900, marginRight: "6px",
                 color: priorityTheme.text,
@@ -2156,7 +2166,17 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 {priority.sym}
               </span>
             )}
-            {task.title}
+            {progressItem ? (
+              <>
+                <span style={{ color: theme.accent, fontWeight: 700, marginRight: "4px" }}>✓</span>
+                {progressItem.text}
+                <span style={{ color: theme.textMid, fontWeight: 400, fontSize: "12px" }}>
+                  {" "}z úkolu "{task.title}"
+                </span>
+              </>
+            ) : (
+              task.title
+            )}
           </div>
 
           <div style={{
@@ -2258,8 +2278,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 border: `1px solid ${theme.accentBorder}`,
                 display: "inline-flex", alignItems: "center", gap: "4px",
               }}>
-                ✓ {progressItem.text}
-                {progressItem.doneAt && ` · ${formatTimeTrace(progressItem.doneAt)}`}
+                ⏰ {progressItem.doneAt ? formatTimeTrace(progressItem.doneAt) : ""}
                 {progressItem.doneBy && ` — ${progressItem.doneBy}`}
               </span>
             )}
