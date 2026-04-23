@@ -1882,9 +1882,64 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
+
+  // ── SWIPE state & handlers ──
+  // Swipe left = delete, swipe right = complete
+  const [swipeX, setSwipeX] = useState(0);           // current drag offset in pixels
+  const [isSwiping, setIsSwiping] = useState(false); // finger is down
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0 });
+  const SWIPE_THRESHOLD = 80; // px — need this much to trigger action
+  const SWIPE_MAX = 140;      // px — max visible drag
+  const taskIsDone = isDone(task);
+  const taskIsDeleted = task.status === "deleted";
+
+  const handleTouchStart = (e) => {
+    // Don't swipe if interacting with interactive elements inside card
+    const tag = e.target.tagName?.toLowerCase();
+    if (tag === "button" || tag === "input" || tag === "select" || tag === "textarea") return;
+    if (isOpen) return;          // no swiping when detail is open
+    if (taskIsDeleted) return;   // no swiping on deleted cards
+    if (progressItem) return;    // no swiping on progress cards (they redirect to main)
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY, time: Date.now() };
+    setIsSwiping(true);
+  };
+
+  const handleTouchMove = (e) => {
+    if (!isSwiping) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touchStartRef.current.x;
+    const dy = t.clientY - touchStartRef.current.y;
+    // Only horizontal swipe — if vertical drag is bigger, bail out
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
+      setIsSwiping(false);
+      setSwipeX(0);
+      return;
+    }
+    // Clamp the drag to SWIPE_MAX
+    const clamped = Math.max(-SWIPE_MAX, Math.min(SWIPE_MAX, dx));
+    setSwipeX(clamped);
+  };
+
+  const handleTouchEnd = () => {
+    if (!isSwiping) return;
+    setIsSwiping(false);
+    if (swipeX <= -SWIPE_THRESHOLD && onDelete) {
+      // Swipe left = delete
+      setSwipeX(-300); // slide out animation
+      setTimeout(() => { onDelete(task.id); setSwipeX(0); }, 200);
+    } else if (swipeX >= SWIPE_THRESHOLD && !taskIsDone) {
+      // Swipe right = complete
+      setSwipeX(300); // slide out animation
+      setTimeout(() => { onStatusChange(task.id, "complete"); setSwipeX(0); }, 200);
+    } else {
+      // Not enough swipe — snap back
+      setSwipeX(0);
+    }
+  };
 
   // Auto-open when user navigated from UpdatesPanel
   useEffect(() => {
@@ -1902,7 +1957,6 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const overdue = daysDiff(task.dueDate) < 0 && !isDone(task);
   const soon = !overdue && daysDiff(task.dueDate) >= 0 && daysDiff(task.dueDate) <= 3 && !isDone(task);
   const forgotten = isForgotten(task);
-  const taskIsDone = isDone(task);
   const inProgress = task.status === "in_progress" ||
     (task.assignTo === "both" && (task.doneBy?.length || 0) > 0 && task.status !== "done");
 
@@ -1915,6 +1969,16 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const allChecked = checklistTotal > 0 && checklistDone === checklistTotal;
 
   const handleClick = () => {
+    // If this is a progress card, scroll to the main active card and open it there
+    if (progressItem) {
+      const mainCard = document.getElementById(`task-${task.id}`);
+      if (mainCard) {
+        mainCard.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Simulate click on main card by triggering its handleClick
+        setTimeout(() => mainCard.click(), 300);
+      }
+      return;
+    }
     // Don't toggle if task was just reopened (status change closes detail)
     const opening = !isOpen;
     setIsOpen(opening);
@@ -1942,6 +2006,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (isNew) { cardBackground = theme.unreadBg; cardBorderColor = theme.unreadBorder; }
   if (overdue && !taskIsDone) { cardBackground = `${theme.red}0c`; cardBorderColor = theme.red; }
   if (taskIsDone) { cardBackground = theme.card; cardBorderColor = theme.cardBorder; }
+  // Progress card — lighter accent tint
+  if (progressItem) { cardBackground = theme.accentSoft; cardBorderColor = theme.accentBorder; }
 
   // Left border color — priority color by default, overridden by state
   let leftBorderColor = priorityTheme.text;
@@ -1949,9 +2015,45 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (soon) leftBorderColor = theme.yellow;
   if (overdue) leftBorderColor = theme.red;
   if (isNew) leftBorderColor = theme.green;
+  if (progressItem) leftBorderColor = theme.accent;
 
   return (
-    <div id={`task-${task.id}`} onClick={handleClick} style={{
+    <div id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
+      position: "relative",
+      borderRadius: "12px",
+      overflow: "hidden",
+      // Red for delete (left) / green for complete (right) backgrounds
+      background: swipeX < 0 ? theme.red : swipeX > 0 ? theme.green : "transparent",
+      transition: isSwiping ? "none" : "background 0.15s",
+    }}>
+      {/* Swipe action icons (visible when user drags) */}
+      {swipeX < -10 && (
+        <div style={{
+          position: "absolute", top: 0, bottom: 0, right: 0,
+          display: "flex", alignItems: "center", justifyContent: "flex-end",
+          paddingRight: "20px", color: "#fff", fontWeight: 700, fontSize: "14px",
+          pointerEvents: "none",
+        }}>
+          🗑 Smazat
+        </div>
+      )}
+      {swipeX > 10 && (
+        <div style={{
+          position: "absolute", top: 0, bottom: 0, left: 0,
+          display: "flex", alignItems: "center", justifyContent: "flex-start",
+          paddingLeft: "20px", color: "#fff", fontWeight: 700, fontSize: "14px",
+          pointerEvents: "none",
+        }}>
+          ✓ Hotovo
+        </div>
+      )}
+
+    <div
+      onClick={handleClick}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{
       background: cardBackground,
       border: `1px solid ${cardBorderColor}`,
       borderRadius: "12px",
@@ -1963,7 +2065,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       animation: isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
-      transition: "all 0.2s",
+      transform: `translateX(${swipeX}px)`,
+      transition: isSwiping ? "none" : "transform 0.25s ease, all 0.2s",
+      touchAction: "pan-y",  // allow vertical scroll, handle horizontal swipe
     }}>
       {/* Badges */}
       {isNew && (
@@ -2144,6 +2248,21 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 🗑 {formatTimeTrace(task.deletedAt)}
               </span>
             )}
+            {/* Progress indicator — this card shows a completed checklist item */}
+            {progressItem && (
+              <span style={{
+                fontSize: "10px", fontWeight: 700,
+                color: theme.accent,
+                background: theme.accentSoft,
+                padding: "2px 8px", borderRadius: "10px",
+                border: `1px solid ${theme.accentBorder}`,
+                display: "inline-flex", alignItems: "center", gap: "4px",
+              }}>
+                ✓ {progressItem.text}
+                {progressItem.doneAt && ` · ${formatTimeTrace(progressItem.doneAt)}`}
+                {progressItem.doneBy && ` — ${progressItem.doneBy}`}
+              </span>
+            )}
           </div>
         </div>
 
@@ -2229,8 +2348,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         </div>
       </div>
 
-      {/* Expanded detail */}
-      {isOpen && (
+      {/* Expanded detail — never on progress cards (they redirect to main) */}
+      {isOpen && !progressItem && (
         <TaskDetail
           task={task}
           currentUser={currentUser}
@@ -2249,6 +2368,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onMarkCommentsSeen={onMarkCommentsSeen}
         />
       )}
+    </div>
     </div>
   );
 }
@@ -4074,10 +4194,16 @@ export default function App() {
           return { ...task, status: "in_progress" };
         case "cancelled":
           return { ...task, status: "cancelled", completedAt: now, completedByUser: currentUser.name };
+        case "complete":
         case "done": {
           const updated = { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
           if (task.createdBy && task.createdBy !== currentUser.name) completedTaskForNotify = updated;
           return updated;
+        }
+        case "unmark": {
+          // Remove current user from doneBy (for shared tasks)
+          const newDoneBy = (task.doneBy || []).filter(n => n !== currentUser.name);
+          return { ...task, doneBy: newDoneBy, status: task.status === "done" ? "active" : task.status };
         }
         case "done_my": {
           const newDoneBy = [...new Set([...(task.doneBy || []), currentUser.name])];
@@ -4420,6 +4546,60 @@ export default function App() {
     return result;
   }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred]);
 
+  // Render items — mixed list of task cards + checklist progress cards
+  // Only in "active" view, we show completed checklist items from still-active tasks
+  const renderItems = useMemo(() => {
+    if (viewStatus !== "active") {
+      // Other views: just tasks
+      return filteredTasks.map(task => ({ type: "task", task, key: task.id }));
+    }
+
+    const items = [];
+    const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+    // Active tasks first, then done, then deleted
+    const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t));
+    const doneTasks = filteredTasks.filter(t => isDone(t));
+    const deletedTasks = filteredTasks.filter(t => isDeleted(t));
+
+    // Push active tasks
+    activeTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+
+    // For each active task, collect its recently-done checklist items (done within 24h)
+    // They go into the "Dnes hotovo" section as progress cards
+    const progressCards = [];
+    activeTasks.forEach(task => {
+      (task.checklist || []).forEach(item => {
+        if (item.done && item.doneAt && new Date(item.doneAt).getTime() > recentCutoff) {
+          progressCards.push({
+            type: "progress",
+            task,
+            checklistItem: item,
+            key: `progress-${task.id}-${item.id}`,
+            sortTime: new Date(item.doneAt).getTime(),
+          });
+        }
+      });
+    });
+
+    // Done tasks with sortTime
+    const doneCards = doneTasks.map(task => ({
+      type: "task",
+      task,
+      key: task.id,
+      sortTime: task.completedAt ? new Date(task.completedAt).getTime() : 0,
+    }));
+
+    // Merge progress + done, sort newest first (by sortTime)
+    const combined = [...progressCards, ...doneCards].sort((a, b) => b.sortTime - a.sortTime);
+    items.push(...combined);
+
+    // Finally deleted
+    deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+
+    return items;
+  }, [filteredTasks, viewStatus]);
+
   const stats = useMemo(() => {
     if (!currentUser) return {};
     // Active = not done, not deleted
@@ -4706,13 +4886,20 @@ export default function App() {
             {(() => {
               let shownDoneSep = false;
               let shownDelSep = false;
-              return filteredTasks.map(task => {
-                const showDoneSep = viewStatus === "active" && isDone(task) && !isDeleted(task) && !shownDoneSep;
+              return renderItems.map(item => {
+                const task = item.task;
+                // Show "Dnes hotovo" separator when we encounter first done task OR first progress item
+                const isDoneSection =
+                  (item.type === "task" && isDone(task) && !isDeleted(task)) ||
+                  item.type === "progress";
+                const showDoneSep = viewStatus === "active" && isDoneSection && !shownDoneSep;
                 if (showDoneSep) shownDoneSep = true;
-                const showDelSep = viewStatus === "active" && isDeleted(task) && !shownDelSep;
+
+                const showDelSep = viewStatus === "active" && item.type === "task" && isDeleted(task) && !shownDelSep;
                 if (showDelSep) shownDelSep = true;
+
                 return (
-                  <div key={task.id}>
+                  <div key={item.key}>
                     {showDoneSep && (
                       <div style={{
                         display: "flex", alignItems: "center", gap: "8px",
@@ -4761,6 +4948,7 @@ export default function App() {
                       onToggleReaction={toggleReaction}
                       onMarkCommentsSeen={markCommentsSeen}
                       autoOpen={scrollToTaskId === task.id}
+                      progressItem={item.type === "progress" ? item.checklistItem : null}
                     />
                   </div>
                 );
