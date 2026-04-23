@@ -356,10 +356,10 @@ const GLOBAL_CSS = `
   60% { transform: scale(1.12); }
   100% { transform: scale(1); }
 }
-@keyframes completeCardGlow {
-  0% { box-shadow: 0 0 0 rgba(16, 185, 129, 0); }
-  30% { box-shadow: 0 0 40px rgba(16, 185, 129, 0.5), 0 4px 20px rgba(16, 185, 129, 0.4); }
-  100% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.25), 0 4px 16px rgba(16, 185, 129, 0.2); }
+@keyframes actionCardGlow {
+  0% { box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
+  30% { box-shadow: 0 0 40px currentColor, 0 4px 20px currentColor; }
+  100% { box-shadow: 0 0 30px currentColor, 0 4px 16px currentColor; }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
@@ -1528,18 +1528,61 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
-        {/* Komentáře + Edit/Delete buttons */}
-        <TaskComments
-          task={task}
-          comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
-          currentUser={currentUser}
-          onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
-          onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
-          onMarkSeen={onMarkCommentsSeen}
-          onEdit={() => setIsEditing(true)}
-          onDelete={onDelete ? () => onDelete(task.id) : null}
-          theme={theme}
-        />
+        {/* Komentáře + Edit/Delete buttons — komentáře skryté u osobních úkolů (self-created + self-assigned) */}
+        {(() => {
+          const isPersonalMonolog =
+            task.createdBy === currentUser.name &&
+            task.assignTo === "self" &&
+            (task.assignedTo || []).every(n => n === currentUser.name);
+          if (isPersonalMonolog) {
+            // Just show the Edit + Delete buttons, no comments/reactions
+            return (
+              <div style={{
+                display: "flex", gap: "4px", marginTop: "12px",
+                paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
+                justifyContent: "flex-end",
+              }}>
+                {task.status !== "deleted" && (
+                  <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
+                    ...buttonStyle(),
+                    padding: "3px 10px", fontSize: "12px",
+                    background: theme.accentSoft, color: theme.accent,
+                    border: `1px solid ${theme.accentBorder}`,
+                    borderRadius: "12px",
+                    display: "inline-flex", alignItems: "center", gap: "3px",
+                  }}>
+                    ✏️ Upravit
+                  </button>
+                )}
+                {onDelete && task.status !== "deleted" && (
+                  <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
+                    ...buttonStyle(),
+                    padding: "3px 10px", fontSize: "12px",
+                    background: `${theme.red}08`, color: theme.red,
+                    border: `1px solid ${theme.red}25`,
+                    borderRadius: "12px",
+                    display: "inline-flex", alignItems: "center", gap: "3px",
+                  }}>
+                    🗑 Smazat
+                  </button>
+                )}
+              </div>
+            );
+          }
+          return (
+            <TaskComments
+              task={task}
+              comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
+              currentUser={currentUser}
+              onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
+              onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
+              onMarkSeen={onMarkCommentsSeen}
+              onEdit={() => setIsEditing(true)}
+              onDelete={onDelete ? () => onDelete(task.id) : null}
+              theme={theme}
+            />
+          );
+        })()}
       </div>
     );
   }
@@ -1935,15 +1978,37 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     if (!isSwiping) return;
     setIsSwiping(false);
     if (swipeX <= -SWIPE_THRESHOLD && onDelete) {
-      // Swipe left = delete
-      setSwipeX(-300); // slide out animation
-      touchStartRef.current.time = Date.now(); // mark so click guard works
-      setTimeout(() => { onDelete(task.id); setSwipeX(0); }, 200);
-    } else if (swipeX >= SWIPE_THRESHOLD && !taskIsDone) {
-      // Swipe right = complete
-      setSwipeX(300); // slide out animation
+      // Swipe left = delete — slide out, then trigger delete animation
+      setSwipeX(-300);
       touchStartRef.current.time = Date.now();
-      setTimeout(() => { onStatusChange(task.id, "complete"); setSwipeX(0); }, 200);
+      setTimeout(() => {
+        setSwipeX(0);
+        runWithAnimation("delete", () => onDelete(task.id));
+      }, 200);
+    } else if (swipeX >= SWIPE_THRESHOLD && !taskIsDone) {
+      // Swipe right = complete — slide out, then trigger complete animation
+      setSwipeX(300);
+      touchStartRef.current.time = Date.now();
+      setTimeout(() => {
+        setSwipeX(0);
+        // Use smart complete for consistency
+        const hasChecklist = task.checklist && task.checklist.length > 0;
+        const hasUnchecked = hasChecklist && task.checklist.some(i => !i.done);
+        runWithAnimation("complete", () => {
+          if (hasUnchecked) {
+            const now = new Date().toISOString();
+            const allDone = task.checklist.map(item => ({
+              ...item,
+              done: true,
+              doneBy: item.doneBy || currentUser.name,
+              doneAt: item.doneAt || now,
+            }));
+            onUpdate(task.id, { checklist: allDone });
+          }
+          if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+          else onStatusChange(task.id, "done");
+        });
+      }, 200);
     } else {
       // Not enough swipe — snap back
       setSwipeX(0);
@@ -2004,22 +2069,30 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     if (opening && isNew) onMarkSeen(task.id);
   };
 
-  // Completion animation state — shows a bright green pulse before status change fires
-  const [completing, setCompleting] = useState(false);
+  // Action animation state — shows a colored pulse before an irreversible action fires
+  // Types: "complete" (green), "delete" (red), "restore" (blue/accent), "reopen" (blue/accent)
+  const [actionAnim, setActionAnim] = useState(null); // null | {type, color}
+
+  // Triggers animation then fires the action after 550ms
+  const runWithAnimation = (type, onFire) => {
+    if (actionAnim) return; // prevent double-click during animation
+    setIsOpen(false); // close detail if open
+    setActionAnim(type);
+    setTimeout(() => {
+      onFire();
+      setTimeout(() => setActionAnim(null), 100);
+    }, 550);
+  };
 
   const handleQuickComplete = (e) => {
     e.stopPropagation();
-    if (completing) return; // prevent double-click during animation
-    setIsOpen(false); // Close detail if open
+    if (actionAnim) return;
 
     // Smart: if task has checklist items, mark them all as done first
     const hasChecklist = task.checklist && task.checklist.length > 0;
     const hasUnchecked = hasChecklist && task.checklist.some(i => !i.done);
 
-    // Start the animation — gives user time to notice
-    setCompleting(true);
-
-    setTimeout(() => {
+    runWithAnimation("complete", () => {
       if (hasUnchecked) {
         const now = new Date().toISOString();
         const allDone = task.checklist.map(item => ({
@@ -2030,14 +2103,17 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         }));
         onUpdate(task.id, { checklist: allDone });
       }
-      // Fire status change after checklist update
       if (task.assignTo === "both") onStatusChange(task.id, "done_my");
       else onStatusChange(task.id, "done");
-      // completing resets automatically when task disappears from active list
-      // but reset locally in case component stays mounted
-      setTimeout(() => setCompleting(false), 100);
-    }, 550); // 550ms animation window
+    });
   };
+
+  // Derived animation properties — used by card + circle
+  const animColor = actionAnim === "delete" ? theme.red
+    : actionAnim === "complete" ? theme.green
+    : actionAnim === "restore" || actionAnim === "reopen" ? theme.accent
+    : null;
+  const completing = actionAnim === "complete"; // legacy alias
 
   // Assignment label
   let assignLabel = "";
@@ -2101,21 +2177,21 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-      background: completing ? `${theme.green}15` : cardBackground,
-      border: `1px solid ${completing ? theme.green : cardBorderColor}`,
+      background: actionAnim ? `${animColor}15` : cardBackground,
+      border: `1px solid ${actionAnim ? animColor : cardBorderColor}`,
       borderRadius: "12px",
-      borderLeft: `5px solid ${completing ? theme.green : leftBorderColor}`,
+      borderLeft: `5px solid ${actionAnim ? animColor : leftBorderColor}`,
       padding: "11px 13px",
-      opacity: taskIsDone ? 0.35 : 1,
+      opacity: taskIsDone && !actionAnim ? 0.35 : 1,
       cursor: "pointer",
       position: "relative",
-      animation: completing ? "completeCardGlow 0.55s ease-out"
+      animation: actionAnim ? "actionCardGlow 0.55s ease-out"
         : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
-      transform: `translateX(${swipeX}px) ${completing ? "scale(1.02)" : ""}`,
+      transform: `translateX(${swipeX}px) ${actionAnim ? "scale(1.02)" : ""}`,
       transition: isSwiping ? "none" : "transform 0.25s ease, all 0.2s",
-      boxShadow: completing ? `0 0 30px ${theme.green}40, 0 4px 16px ${theme.green}30` : "none",
+      boxShadow: actionAnim ? `0 0 30px ${animColor}60, 0 4px 16px ${animColor}45` : "none",
       touchAction: "pan-y",  // allow vertical scroll, our JS handles horizontal swipe
       userSelect: "none",
       WebkitUserSelect: "none",
@@ -2169,17 +2245,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         ) : (
           <button onClick={(e) => {
             e.stopPropagation();
-            onStatusChange(task.id, "reopen");
+            runWithAnimation("reopen", () => onStatusChange(task.id, "reopen"));
           }} style={{
-            width: "32px", height: "32px", minWidth: "32px",
+            width: actionAnim === "reopen" ? "40px" : "32px",
+            height: actionAnim === "reopen" ? "40px" : "32px",
+            minWidth: actionAnim === "reopen" ? "40px" : "32px",
             borderRadius: "8px",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "16px", fontWeight: 700,
-            background: task.status === "cancelled" ? `${theme.priority.low.text}15` : `${theme.green}20`,
-            color: task.status === "cancelled" ? theme.priority.low.text : theme.green,
-            border: `2.5px solid ${task.status === "cancelled" ? theme.priority.low.text + "40" : theme.green + "50"}`,
-            cursor: "pointer",
-            transition: "all 0.15s",
+            fontSize: actionAnim === "reopen" ? "22px" : "16px",
+            fontWeight: 700,
+            background: actionAnim === "reopen" ? theme.accent : (task.status === "cancelled" ? `${theme.priority.low.text}15` : `${theme.green}20`),
+            color: actionAnim === "reopen" ? "#fff" : (task.status === "cancelled" ? theme.priority.low.text : theme.green),
+            border: `2.5px solid ${actionAnim === "reopen" ? theme.accent : (task.status === "cancelled" ? theme.priority.low.text + "40" : theme.green + "50")}`,
+            cursor: actionAnim ? "default" : "pointer",
+            transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            boxShadow: actionAnim === "reopen" ? `0 0 0 10px ${theme.accent}25, 0 4px 20px ${theme.accent}60` : "none",
+            animation: actionAnim === "reopen" ? "completePulse 0.55s ease-out" : "none",
           }} title="Vrátit zpět do aktivních">
             {task.status === "done" ? "↩" : "⊘"}
           </button>
@@ -2420,8 +2501,15 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           currentUser={currentUser}
           users={users}
           onUpdate={onUpdate}
-          onStatusChange={onStatusChange}
-          onDelete={onDelete}
+          onStatusChange={(taskId, action) => {
+            // Wrap reopen so it shows animation on the card
+            if (action === "reopen") {
+              runWithAnimation("reopen", () => onStatusChange(taskId, action));
+            } else {
+              onStatusChange(taskId, action);
+            }
+          }}
+          onDelete={onDelete ? (taskId) => runWithAnimation("delete", () => onDelete(taskId)) : null}
           onRestore={onRestore}
           onPermanentDelete={onPermanentDelete}
           theme={theme}
