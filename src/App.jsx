@@ -162,6 +162,47 @@ function smartSort(a, b) {
   return new Date(b.createdAt) - new Date(a.createdAt);
 }
 
+// ═══════════════════════════════════════════════════════
+// URGENCY SCORE — numerical priority for "Today" view
+// Higher score = more urgent. Used to sort Today view sensibly.
+// Unread-from-others gets BIG boost so new assignments stand out.
+// ═══════════════════════════════════════════════════════
+function urgencyScore(task, currentUserName) {
+  if (isDone(task) || isDeleted(task)) return 0;
+  let score = 0;
+
+  // 1) Unread from others = highest priority (don't miss new assignments)
+  const isUnread = task.seenBy && !task.seenBy.includes(currentUserName) && task.createdBy !== currentUserName;
+  if (isUnread) score += 200;
+
+  // 2) Overdue — strong boost per day
+  const daysUntil = daysDiff(task.dueDate);
+  if (task.dueDate && daysUntil < 0) {
+    score += 100 + Math.min(Math.abs(daysUntil) * 5, 50); // cap at 150 for very overdue
+  }
+
+  // 3) Due today / tomorrow
+  if (task.dueDate && daysUntil === 0) score += 60;
+  else if (task.dueDate && daysUntil === 1) score += 35;
+  else if (task.dueDate && daysUntil >= 2 && daysUntil <= 3) score += 15;
+
+  // 4) Priority
+  if (task.priority === "urgent") score += 30;
+  else if (task.priority === "important") score += 15;
+
+  // 5) Forgotten (7+ days untouched)
+  if (isForgotten(task)) score += 20;
+
+  // 6) In progress — slight boost (keep momentum)
+  if (task.status === "in_progress") score += 10;
+
+  // 7) Small boost for newer tasks (tiebreaker)
+  const ageHours = (Date.now() - new Date(task.createdAt).getTime()) / 3600000;
+  score += Math.max(0, 5 - ageHours / 24); // <1 day old = +5, fades after
+
+  return score;
+}
+
 function notify(title, body) {
   if ("Notification" in window && Notification.permission === "granted") {
     try { new Notification(title, { body, icon: "/icon-192.png" }); } catch (e) {}
@@ -4646,7 +4687,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
   const [filter, setFilter] = useState("my");
-  const [viewStatus, setViewStatus] = useState("active");
+  const [viewStatus, setViewStatus] = useState("today");
   const [sortMode, setSortMode] = useState("smart");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
@@ -5206,17 +5247,17 @@ export default function App() {
     let result = tasks;
 
     // Status filter
-    if (viewStatus === "active") {
+    if (viewStatus === "today" || viewStatus === "active") {
       const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
       result = result.filter(t => {
         if (!isDone(t) && !isDeleted(t)) {
-          // In active view, hide planned (future showFrom) tasks UNLESS showDeferred is on
+          // Hide planned (future showFrom) tasks UNLESS showDeferred is on
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
         // Show recently completed tasks (within 24h) crossed out
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
-        // Show recently deleted tasks (within 24h) for undo possibility — user wanted this
+        // Show recently deleted tasks (within 24h) for undo possibility
         if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
         return false;
       });
@@ -5255,13 +5296,17 @@ export default function App() {
     if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
 
     // Sort — completed tasks always at bottom in active view
-    if (sortMode === "smart") result = [...result].sort(smartSort);
+    if (viewStatus === "today") {
+      // Today view = urgencyScore descending (new-from-others at very top)
+      result = [...result].sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
+    }
+    else if (sortMode === "smart") result = [...result].sort(smartSort);
     else if (sortMode === "priority") result = [...result].sort((a, b) => getPriority(a.priority).weight - getPriority(b.priority).weight);
     else if (sortMode === "date") result = [...result].sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate));
     else if (sortMode === "created") result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // In active view, push completed to bottom, then deleted below completed
-    if (viewStatus === "active") {
+    // In active/today view, push completed to bottom, then deleted below completed
+    if (viewStatus === "active" || viewStatus === "today") {
       const active = result.filter(t => !isDone(t) && !isDeleted(t));
       const recentlyDone = result.filter(t => isDone(t))
         .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
@@ -5274,9 +5319,9 @@ export default function App() {
   }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred]);
 
   // Render items — mixed list of task cards + checklist progress cards
-  // Only in "active" view, we show completed checklist items from still-active tasks
+  // Only in "active"/"today" views, we show completed checklist items from still-active tasks
   const renderItems = useMemo(() => {
-    if (viewStatus !== "active") {
+    if (viewStatus !== "active" && viewStatus !== "today") {
       // Other views: just tasks
       return filteredTasks.map(task => ({ type: "task", task, key: task.id }));
     }
@@ -5646,10 +5691,13 @@ export default function App() {
             {/* Status */}
             <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
               ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: "transparent", border: `1px solid ${theme.inputBorder}`,
-              color: theme.textSub,
+              background: viewStatus === "today" ? theme.accentSoft : "transparent",
+              border: `1px solid ${viewStatus === "today" ? theme.accentBorder : theme.inputBorder}`,
+              color: viewStatus === "today" ? theme.accent : theme.textSub,
+              fontWeight: viewStatus === "today" ? 700 : 400,
             }}>
-              <option value="active">⚡ Aktivní ({stats.active || 0})</option>
+              <option value="today">🎯 Dnes ({stats.active || 0})</option>
+              <option value="active">📋 Vše aktivní ({stats.active || 0})</option>
               <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
               <option value="done">✓ Splněné ({stats.done || 0})</option>
               <option value="trash">🗑 Koš ({stats.trash || 0})</option>
@@ -5691,22 +5739,80 @@ export default function App() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
             {(() => {
+              let shownUnreadSep = false;
               let shownDoneSep = false;
               let shownDelSep = false;
+              // Find if there is at least 1 unread-from-others task
+              const hasUnread = renderItems.some(it =>
+                it.type === "task" && it.task.seenBy &&
+                !it.task.seenBy.includes(currentUser.name) &&
+                it.task.createdBy !== currentUser.name &&
+                !isDone(it.task) && !isDeleted(it.task)
+              );
+              // Track when we've passed all unreads (to show normal section header after)
+              let passedUnread = false;
+
               return renderItems.map(item => {
                 const task = item.task;
+                const isUnread = task.seenBy &&
+                  !task.seenBy.includes(currentUser.name) &&
+                  task.createdBy !== currentUser.name &&
+                  !isDone(task) && !isDeleted(task);
+
+                // "🆕 NOVÉ OD DRUHÝCH" separator — first unread task (todo view)
+                const showUnreadSep = hasUnread && isUnread && !shownUnreadSep && (viewStatus === "today" || viewStatus === "active");
+                if (showUnreadSep) shownUnreadSep = true;
+
+                // After last unread, show normal section header
+                const showNormalSep = hasUnread && !isUnread && !passedUnread &&
+                  item.type === "task" && !isDone(task) && !isDeleted(task) &&
+                  (viewStatus === "today" || viewStatus === "active");
+                if (showNormalSep) passedUnread = true;
+
                 // Show "Dnes hotovo" separator when we encounter first done task OR first progress item
                 const isDoneSection =
                   (item.type === "task" && isDone(task) && !isDeleted(task)) ||
                   item.type === "progress";
-                const showDoneSep = viewStatus === "active" && isDoneSection && !shownDoneSep;
+                const showDoneSep = (viewStatus === "active" || viewStatus === "today") && isDoneSection && !shownDoneSep;
                 if (showDoneSep) shownDoneSep = true;
 
-                const showDelSep = viewStatus === "active" && item.type === "task" && isDeleted(task) && !shownDelSep;
+                const showDelSep = (viewStatus === "active" || viewStatus === "today") && item.type === "task" && isDeleted(task) && !shownDelSep;
                 if (showDelSep) shownDelSep = true;
 
                 return (
                   <div key={item.key}>
+                    {showUnreadSep && (
+                      <div style={{
+                        margin: "4px 0 8px",
+                        padding: "8px 12px",
+                        background: `${theme.green}15`,
+                        border: `2px solid ${theme.green}`,
+                        borderRadius: "8px",
+                        display: "flex", alignItems: "center", gap: "6px",
+                      }}>
+                        <span style={{
+                          fontSize: "11px", color: theme.green, fontWeight: 800,
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                        }}>
+                          🆕 Nové od druhých — přečti
+                        </span>
+                      </div>
+                    )}
+                    {showNormalSep && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: "8px",
+                        margin: "10px 0 6px",
+                      }}>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                        <span style={{
+                          fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                        }}>
+                          {viewStatus === "today" ? "🎯 Dnes — podle urgency" : "📋 Ostatní"}
+                        </span>
+                        <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
+                      </div>
+                    )}
                     {showDoneSep && (
                       <div style={{
                         display: "flex", alignItems: "center", gap: "8px",
