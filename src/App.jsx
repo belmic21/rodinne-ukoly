@@ -673,6 +673,129 @@ async function apiDeleteComment(commentId) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   SCRATCH PAD INLINE — pracovní deník, append-only
+   Zobrazeno v TaskDetail View módu, funkčně stejné jako ve Focus
+   ═══════════════════════════════════════════════════════ */
+
+function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
+  const [input, setInput] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const hasEntries = task.scratchPad && task.scratchPad.length > 0;
+
+  const addEntry = () => {
+    if (!input.trim()) return;
+    const entry = {
+      id: "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      text: input.trim(),
+      createdAt: new Date().toISOString(),
+      author: currentUser.name,
+    };
+    const newPad = [entry, ...(task.scratchPad || [])];
+    onUpdate(task.id, { scratchPad: newPad });
+    setInput("");
+  };
+
+  const deleteEntry = (entryId) => {
+    const newPad = (task.scratchPad || []).filter(e => e.id !== entryId);
+    onUpdate(task.id, { scratchPad: newPad });
+  };
+
+  // Auto-expand pokud máme zápisy
+  useEffect(() => {
+    if (hasEntries && !expanded) setExpanded(true);
+  }, [hasEntries]);
+
+  return (
+    <div style={{
+      marginBottom: "10px",
+      background: hasEntries ? `${theme.accent}06` : "transparent",
+      border: hasEntries ? `1px solid ${theme.accentBorder}` : `1px dashed ${theme.inputBorder}`,
+      borderRadius: "8px",
+      padding: "8px 10px",
+    }}>
+      {/* Header with toggle */}
+      <div
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          cursor: "pointer", marginBottom: expanded ? "8px" : 0,
+        }}>
+        <span style={{
+          fontSize: "10px", color: theme.textMid, fontWeight: 700,
+          textTransform: "uppercase", letterSpacing: "0.3px",
+        }}>
+          📝 Pracovní deník {hasEntries && `(${task.scratchPad.length})`}
+        </span>
+        <span style={{ fontSize: "10px", color: theme.textMid }}>
+          {expanded ? "▲" : "▼"}
+        </span>
+      </div>
+
+      {expanded && (
+        <>
+          {/* Input */}
+          <div style={{ display: "flex", gap: "4px", marginBottom: hasEntries ? "8px" : 0 }}>
+            <input
+              type="text"
+              placeholder="Co jsem zjistil / potřebuji..."
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") addEntry(); }}
+              style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px", flex: 1 }}
+            />
+            <button onClick={addEntry} disabled={!input.trim()} style={{
+              ...buttonStyle(), padding: "6px 12px", fontSize: "12px",
+              background: input.trim() ? theme.accent : theme.inputBg,
+              color: input.trim() ? "#fff" : theme.textDim,
+              border: "none",
+            }}>
+              +
+            </button>
+          </div>
+
+          {/* Entries */}
+          {hasEntries && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              {task.scratchPad.map(entry => (
+                <div key={entry.id} style={{
+                  padding: "6px 8px",
+                  background: theme.card,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                  display: "flex", gap: "6px", alignItems: "flex-start",
+                }}>
+                  <span style={{
+                    fontSize: "9px", color: theme.textMid, fontWeight: 600,
+                    whiteSpace: "nowrap", marginTop: "2px",
+                  }}>
+                    {formatTimeTrace(entry.createdAt)}
+                    {entry.author !== currentUser.name && ` · ${entry.author}`}
+                  </span>
+                  <span style={{ flex: 1, color: theme.text, lineHeight: 1.3 }}>
+                    {entry.text}
+                  </span>
+                  {entry.author === currentUser.name && (
+                    <button onClick={() => deleteEntry(entry.id)}
+                      title="Smazat"
+                      style={{
+                        background: "none", border: "none",
+                        color: theme.textDim, cursor: "pointer", fontSize: "11px",
+                      }}>
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    CHECKLIST COMPONENT
    ═══════════════════════════════════════════════════════ */
 
@@ -1478,6 +1601,14 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
+        {/* ── Scratch pad (pracovní deník) — always visible in View mode ── */}
+        <ScratchPadInline
+          task={task}
+          currentUser={currentUser}
+          onUpdate={onUpdate}
+          theme={theme}
+        />
+
         {/* Checklist — FUNCTIONAL checkboxes (not edit mode!)  */}
         {task.checklist && task.checklist.length > 0 && (
           <div style={{ marginBottom: "10px" }}>
@@ -2117,7 +2248,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
 
@@ -2588,6 +2719,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {assignLabel && <span style={{ fontSize: "10px", color: theme.textMid }}>{assignLabel}</span>}
             {task.recDays > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>🔄</span>}
             {task.images?.length > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>📷</span>}
+            {task.scratchPad?.length > 0 && (
+              <span style={{ fontSize: "10px", color: theme.accent, fontWeight: 600 }}>
+                📝 {task.scratchPad.length}
+              </span>
+            )}
             {task.showFrom && daysDiff(task.showFrom) > 0 && (
               <span style={{ fontSize: "10px", fontWeight: 600, color: theme.purple }}>
                 ⏰ od {formatDate(task.showFrom)}
@@ -2632,6 +2768,35 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 
         {/* Right side: quick snooze + chevron */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginTop: "3px", marginLeft: "4px", position: "relative" }}>
+          {/* Focus button — jump straight into Focus mode with this task */}
+          {!taskIsDone && !taskIsDeleted && !progressItem && canAct && onStartFocus && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartFocus(task.id);
+              }}
+              title="Soustředit se na tento úkol (Focus mode)"
+              style={{
+                ...buttonStyle(),
+                width: "34px", height: "34px", padding: "0",
+                background: "transparent",
+                color: theme.accent, fontSize: "16px",
+                border: `1px solid transparent`,
+                borderRadius: "6px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = theme.accentSoft;
+                e.currentTarget.style.borderColor = theme.accentBorder;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}>
+              🎯
+            </button>
+          )}
           {/* Quick snooze icon — visible only for active non-deferred tasks */}
           {!taskIsDone && canAct && (
             <button
@@ -4055,7 +4220,7 @@ const PARK_TEMPLATES = [
   { id: "custom", label: "✏️ Vlastní důvod", template: "" },
 ];
 
-function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpdate, onStatusChange, onAddComment, onToggleReaction }) {
+function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpdate, onStatusChange, onAddComment, onToggleReaction, initialTaskId }) {
   // Load settings from localStorage
   const [timerEnabled, setTimerEnabled] = useState(() => {
     const saved = localStorage.getItem("ft_focus_timer_enabled");
@@ -4085,8 +4250,14 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
       .sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
   }, [tasks, currentUser.name]);
 
-  // Current task index
-  const [currentIdx, setCurrentIdx] = useState(0);
+  // Current task index — start at initialTaskId if provided, otherwise 0
+  const [currentIdx, setCurrentIdx] = useState(() => {
+    if (initialTaskId) {
+      const idx = todaysTasks.findIndex(t => t.id === initialTaskId);
+      return idx >= 0 ? idx : 0;
+    }
+    return 0;
+  });
   const currentTask = todaysTasks[currentIdx];
 
   // Timer state (per current task, resets when switching)
@@ -5356,6 +5527,7 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
+  const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
   const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
   const undoTimerRef = useRef();
@@ -6254,8 +6426,10 @@ export default function App() {
             users={users}
             comments={comments}
             theme={theme}
+            initialTaskId={focusInitialTask}
             onClose={(allDone) => {
               setShowFocus(false);
+              setFocusInitialTask(null); // reset for next time
               if (allDone) {
                 setFocusSummaryAfter(Date.now());
                 setTimeout(() => setFocusSummaryAfter(null), 5000);
@@ -6567,6 +6741,10 @@ export default function App() {
                       onMarkCommentsSeen={markCommentsSeen}
                       autoOpen={scrollToTaskId === task.id}
                       progressItem={item.type === "progress" ? item.checklistItem : null}
+                      onStartFocus={(taskId) => {
+                        setFocusInitialTask(taskId);
+                        setShowFocus(true);
+                      }}
                     />
                   </div>
                 );
