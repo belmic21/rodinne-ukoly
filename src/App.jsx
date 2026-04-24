@@ -2251,6 +2251,30 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
+  const cardRef = useRef(null);
+
+  // Auto-close detail/snooze when user clicks outside the card
+  useEffect(() => {
+    if (!isOpen && !snoozeMenuOpen) return;
+    const handleClickOutside = (e) => {
+      if (cardRef.current && !cardRef.current.contains(e.target)) {
+        // Ignore clicks on portals/modals (e.g., confirm dialogs) that live outside card
+        // Simple: any click outside the card closes the detail
+        if (snoozeMenuOpen) setSnoozeMenuOpen(false);
+        if (isOpen) setIsOpen(false);
+      }
+    };
+    // Use "click" (bubbling) with timeout 0 so current click event finishes first
+    const timer = setTimeout(() => {
+      document.addEventListener("click", handleClickOutside);
+      document.addEventListener("touchstart", handleClickOutside);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("click", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+  }, [isOpen, snoozeMenuOpen]);
 
   // ── SWIPE state & handlers ──
   // Swipe left = delete, swipe right = complete
@@ -2460,7 +2484,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (taskIsDeleted) leftBorderColor = theme.textDim; // muted gray left border
 
   return (
-    <div id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
+    <div ref={cardRef} id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
       position: "relative",
       borderRadius: "12px",
       // Elevate this card above siblings when a dropdown or detail is open,
@@ -6808,6 +6832,23 @@ export default function App() {
                     </div>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                       <button onClick={() => {
+                        // Odstraň parking + otevři Focus s tímto úkolem
+                        updateTask(task.id, {
+                          parkedReason: null,
+                          parkedAt: null,
+                          parkedBy: null,
+                        });
+                        // Po chvilce (až se DB update propíše) otevři Focus
+                        setFocusInitialTask(task.id);
+                        setTimeout(() => setShowFocus(true), 150);
+                      }}
+                        style={{
+                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                          background: theme.green, color: "#fff", border: "none",
+                        }}>
+                        ✓ Pokračovat ve Focusu
+                      </button>
+                      <button onClick={() => {
                         updateTask(task.id, {
                           parkedReason: null,
                           parkedAt: null,
@@ -6815,10 +6856,11 @@ export default function App() {
                         });
                       }}
                         style={{
-                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                          background: theme.green, color: "#fff", border: "none",
+                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
+                          background: theme.inputBg, color: theme.textSub,
+                          border: `1px solid ${theme.inputBorder}`,
                         }}>
-                        ✓ Odblokováno
+                        ↩ Jen odblokovat
                       </button>
                       <button onClick={() => { setScrollToTaskId(task.id); }}
                         style={{
