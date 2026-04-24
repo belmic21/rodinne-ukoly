@@ -2291,7 +2291,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     <div id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
       position: "relative",
       borderRadius: "12px",
-      overflow: "hidden",
+      // Overflow: only clip during swipe (to hide red/green backgrounds)
+      // Otherwise visible, so dropdowns (snooze menu) can extend beyond card edges
+      overflow: isSwiping || swipeX !== 0 ? "hidden" : "visible",
       // Red for delete (left) / green for complete (right) backgrounds
       background: swipeX < 0 ? theme.red : swipeX > 0 ? theme.green : "transparent",
       transition: isSwiping ? "none" : "background 0.15s",
@@ -2620,7 +2622,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 background: theme.card, border: `1px solid ${theme.cardBorder}`,
                 borderRadius: "10px", padding: "6px",
                 boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
-                zIndex: 20,
+                zIndex: 50,
                 display: "flex", flexDirection: "column", gap: "2px",
                 minWidth: "120px",
                 animation: "slideUp 0.15s",
