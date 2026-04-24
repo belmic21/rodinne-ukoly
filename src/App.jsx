@@ -4036,6 +4036,652 @@ function LoginScreen({ users, onLogin, themeName }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FOCUS MODE — fullscreen single-task workflow
+// Features:
+//   - Stopwatch (optional, configurable)
+//   - Scratch pad (append-only work log with timestamps)
+//   - Checklist (big, tappable)
+//   - Park task with reason (blocker templates)
+//   - Complete → auto-advance to next by urgency
+//   - Settings panel (timer on/off, auto-next on/off)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PARK_TEMPLATES = [
+  { id: "waiting", label: "⏳ Čekám na někoho", template: "Čekám na " },
+  { id: "material", label: "📦 Chybí materiál", template: "Potřebuji koupit/zajistit: " },
+  { id: "info", label: "❓ Chybí informace", template: "Potřebuji zjistit: " },
+  { id: "time", label: "🕐 Vyhradit čas", template: "Udělám až budu mít čas na: " },
+  { id: "custom", label: "✏️ Vlastní důvod", template: "" },
+];
+
+function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpdate, onStatusChange, onAddComment, onToggleReaction }) {
+  // Load settings from localStorage
+  const [timerEnabled, setTimerEnabled] = useState(() => {
+    const saved = localStorage.getItem("ft_focus_timer_enabled");
+    return saved === null ? true : saved === "true";
+  });
+  const [autoNext, setAutoNext] = useState(() => {
+    const saved = localStorage.getItem("ft_focus_auto_next");
+    return saved === null ? true : saved === "true";
+  });
+  useEffect(() => localStorage.setItem("ft_focus_timer_enabled", String(timerEnabled)), [timerEnabled]);
+  useEffect(() => localStorage.setItem("ft_focus_auto_next", String(autoNext)), [autoNext]);
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [showParkModal, setShowParkModal] = useState(false);
+  const [parkTemplate, setParkTemplate] = useState(null);
+  const [parkReason, setParkReason] = useState("");
+
+  // Compute today's task list sorted by urgency
+  const todaysTasks = useMemo(() => {
+    return tasks
+      .filter(t =>
+        !isDone(t) && !isDeleted(t) &&
+        !t.parkedReason && // not parked
+        t.assignedTo?.includes(currentUser.name) &&
+        !(t.showFrom && daysDiff(t.showFrom) > 0) // not deferred
+      )
+      .sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
+  }, [tasks, currentUser.name]);
+
+  // Current task index
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const currentTask = todaysTasks[currentIdx];
+
+  // Timer state (per current task, resets when switching)
+  const [seconds, setSeconds] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    // Reset timer when switching task
+    setSeconds(0);
+    setTimerRunning(timerEnabled);
+  }, [currentTask?.id, timerEnabled]);
+
+  useEffect(() => {
+    if (timerRunning && timerEnabled) {
+      timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [timerRunning, timerEnabled]);
+
+  // Save accumulated time when leaving task
+  const saveTimeSpent = () => {
+    if (!currentTask || seconds < 30) return; // skip micro-sessions
+    const addedMin = Math.floor(seconds / 60);
+    if (addedMin === 0) return;
+    const newTotal = (currentTask.timeSpentMin || 0) + addedMin;
+    onUpdate(currentTask.id, { timeSpentMin: newTotal });
+  };
+
+  const formatTime = (s) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  };
+
+  // Add scratch pad entry
+  const [scratchInput, setScratchInput] = useState("");
+  const addScratchEntry = () => {
+    if (!currentTask || !scratchInput.trim()) return;
+    const entry = {
+      id: "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      text: scratchInput.trim(),
+      createdAt: new Date().toISOString(),
+      author: currentUser.name,
+    };
+    const newPad = [entry, ...(currentTask.scratchPad || [])];
+    onUpdate(currentTask.id, { scratchPad: newPad });
+    setScratchInput("");
+  };
+
+  const deleteScratchEntry = (entryId) => {
+    if (!currentTask) return;
+    const newPad = (currentTask.scratchPad || []).filter(e => e.id !== entryId);
+    onUpdate(currentTask.id, { scratchPad: newPad });
+  };
+
+  // Toggle checklist item
+  const toggleChecklistItem = (itemId) => {
+    if (!currentTask) return;
+    const updated = (currentTask.checklist || []).map(item => {
+      if (item.id !== itemId) return item;
+      return {
+        ...item,
+        done: !item.done,
+        doneBy: !item.done ? currentUser.name : null,
+        doneAt: !item.done ? new Date().toISOString() : null,
+      };
+    });
+    onUpdate(currentTask.id, { checklist: updated });
+  };
+
+  // Actions
+  const goNext = () => {
+    saveTimeSpent();
+    if (currentIdx + 1 < todaysTasks.length) {
+      setCurrentIdx(currentIdx + 1);
+    } else {
+      // No more tasks → close focus mode
+      onClose(true); // true = all done, show summary
+    }
+  };
+
+  const goPrevious = () => {
+    saveTimeSpent();
+    if (currentIdx > 0) setCurrentIdx(currentIdx - 1);
+  };
+
+  const completeTask = () => {
+    if (!currentTask) return;
+    saveTimeSpent();
+    // Smart complete — if checklist, mark all done
+    if (currentTask.checklist && currentTask.checklist.length > 0) {
+      const now = new Date().toISOString();
+      const allDone = currentTask.checklist.map(item => ({
+        ...item,
+        done: true,
+        doneBy: item.doneBy || currentUser.name,
+        doneAt: item.doneAt || now,
+      }));
+      onUpdate(currentTask.id, { checklist: allDone });
+    }
+    if (currentTask.assignTo === "both") onStatusChange(currentTask.id, "done_my");
+    else onStatusChange(currentTask.id, "done");
+    // Auto-advance or close
+    if (autoNext) {
+      setTimeout(goNext, 300);
+    } else {
+      onClose(false);
+    }
+  };
+
+  const parkTask = () => {
+    if (!currentTask || !parkReason.trim()) return;
+    saveTimeSpent();
+    onUpdate(currentTask.id, {
+      parkedReason: parkReason.trim(),
+      parkedAt: new Date().toISOString(),
+      parkedBy: currentUser.name,
+    });
+    // System comment (for activity log)
+    if (onAddComment) {
+      onAddComment(currentTask.id, `⏸ Zaparkováno: ${parkReason.trim()}`, null, "system");
+    }
+    setShowParkModal(false);
+    setParkTemplate(null);
+    setParkReason("");
+    if (autoNext) setTimeout(goNext, 300);
+    else onClose(false);
+  };
+
+  // Empty state — no tasks for today
+  if (!currentTask) {
+    return (
+      <div style={{
+        position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+        background: theme.bg, zIndex: 100,
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        padding: "40px 20px", textAlign: "center",
+      }}>
+        <div style={{ fontSize: "72px", marginBottom: "16px" }}>🎉</div>
+        <div style={{ fontSize: "22px", fontWeight: 800, color: theme.text, marginBottom: "8px" }}>
+          Všechno hotovo na dnes!
+        </div>
+        <div style={{ fontSize: "14px", color: theme.textSub, marginBottom: "24px" }}>
+          Nic aktivního není k dokončení.
+        </div>
+        <button onClick={() => onClose(false)} style={{
+          ...buttonStyle(), padding: "12px 24px", fontSize: "14px", fontWeight: 700,
+          background: theme.accent, color: "#fff", border: "none",
+        }}>
+          Zavřít
+        </button>
+      </div>
+    );
+  }
+
+  const priObj = getPriority(currentTask.priority || "low");
+  const priTheme = theme.priority[currentTask.priority || "low"] || theme.priority.low;
+  const overdue = daysDiff(currentTask.dueDate) < 0;
+  const taskComments = comments.filter(c => c.taskId === currentTask.id && !c.checklistItemId);
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+      background: theme.bg, zIndex: 100,
+      display: "flex", flexDirection: "column",
+      overflow: "auto",
+    }}>
+      {/* Header */}
+      <div style={{
+        position: "sticky", top: 0, zIndex: 10,
+        padding: "12px 16px",
+        background: theme.card,
+        borderBottom: `1px solid ${theme.cardBorder}`,
+        display: "flex", alignItems: "center", gap: "8px",
+      }}>
+        <button onClick={() => { saveTimeSpent(); onClose(false); }}
+          title="Zavřít Focus"
+          style={{
+            ...buttonStyle(), padding: "6px 10px", fontSize: "13px",
+            background: theme.inputBg, color: theme.textSub,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>
+          ← Zavřít
+        </button>
+        <span style={{ flex: 1, fontSize: "12px", color: theme.textSub, textAlign: "center" }}>
+          🎯 Fokus — úkol {currentIdx + 1} / {todaysTasks.length}
+        </span>
+        <button onClick={() => setShowSettings(!showSettings)} title="Nastavení"
+          style={{
+            ...buttonStyle(), padding: "6px 10px", fontSize: "14px",
+            background: showSettings ? theme.accentSoft : "transparent",
+            color: theme.textSub, border: "none",
+          }}>
+          ⚙
+        </button>
+      </div>
+
+      {/* Settings panel */}
+      {showSettings && (
+        <div style={{
+          padding: "12px 16px",
+          background: theme.inputBg,
+          borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", flexDirection: "column", gap: "8px",
+        }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", cursor: "pointer" }}>
+            <input type="checkbox" checked={timerEnabled} onChange={e => setTimerEnabled(e.target.checked)} />
+            <span>⏱ Zobrazit stopky</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", cursor: "pointer" }}>
+            <input type="checkbox" checked={autoNext} onChange={e => setAutoNext(e.target.checked)} />
+            <span>→ Automaticky na další po Hotovo / Parknutí</span>
+          </label>
+        </div>
+      )}
+
+      {/* Main content */}
+      <div style={{ flex: 1, padding: "16px", maxWidth: "700px", margin: "0 auto", width: "100%" }}>
+        {/* Timer */}
+        {timerEnabled && (
+          <div style={{
+            padding: "12px", marginBottom: "12px",
+            background: timerRunning ? `${theme.green}15` : theme.inputBg,
+            border: `2px solid ${timerRunning ? theme.green : theme.inputBorder}`,
+            borderRadius: "10px",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
+          }}>
+            <span style={{
+              fontSize: "28px", fontWeight: 800, fontVariantNumeric: "tabular-nums",
+              color: timerRunning ? theme.green : theme.textSub,
+              letterSpacing: "1px",
+            }}>
+              ⏱ {formatTime(seconds)}
+            </span>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button onClick={() => setTimerRunning(!timerRunning)} style={{
+                ...buttonStyle(), padding: "6px 12px", fontSize: "12px",
+                background: timerRunning ? theme.inputBg : theme.green,
+                color: timerRunning ? theme.textSub : "#fff",
+                border: "none",
+              }}>
+                {timerRunning ? "⏸ Pauza" : "▶ Start"}
+              </button>
+              <button onClick={() => { setSeconds(0); setTimerRunning(false); }} style={{
+                ...buttonStyle(), padding: "6px 10px", fontSize: "12px",
+                background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`,
+              }}>
+                ⟲ Reset
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Task card */}
+        <div style={{
+          background: theme.card,
+          border: `1px solid ${theme.cardBorder}`,
+          borderLeft: `6px solid ${priTheme.text}`,
+          borderRadius: "12px",
+          padding: "20px",
+          marginBottom: "12px",
+        }}>
+          {/* Priority + Due date badges */}
+          <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
+            {(currentTask.priority === "urgent" || currentTask.priority === "important") && (
+              <span style={{
+                fontSize: "11px", fontWeight: 800,
+                color: priTheme.text, background: priTheme.bg,
+                padding: "3px 10px", borderRadius: "12px",
+                border: `1px solid ${priTheme.border}`,
+              }}>
+                {priObj.sym} {priObj.label}
+              </span>
+            )}
+            {currentTask.dueDate && (
+              <span style={{
+                fontSize: "11px", fontWeight: 600,
+                color: overdue ? theme.red : theme.textSub,
+                background: overdue ? `${theme.red}10` : theme.inputBg,
+                padding: "3px 10px", borderRadius: "12px",
+                border: `1px solid ${overdue ? theme.red + "30" : theme.inputBorder}`,
+              }}>
+                📅 {formatDate(currentTask.dueDate)} {overdue && "(po termínu)"}
+              </span>
+            )}
+            {currentTask.createdBy !== currentUser.name && (
+              <span style={{
+                fontSize: "11px", fontWeight: 700,
+                color: theme.accent, background: theme.accentSoft,
+                padding: "3px 10px", borderRadius: "12px",
+              }}>
+                📥 od {currentTask.createdBy}
+              </span>
+            )}
+            {currentTask.timeSpentMin > 0 && (
+              <span style={{
+                fontSize: "11px", color: theme.textSub,
+                padding: "3px 10px", borderRadius: "12px",
+                background: theme.inputBg,
+                border: `1px solid ${theme.inputBorder}`,
+              }}>
+                ⏱ celkem {Math.floor(currentTask.timeSpentMin / 60)}h {currentTask.timeSpentMin % 60}min
+              </span>
+            )}
+          </div>
+
+          {/* Title */}
+          <div style={{
+            fontSize: "22px", fontWeight: 800, color: theme.text,
+            lineHeight: 1.3, marginBottom: "10px",
+          }}>
+            {currentTask.title}
+          </div>
+
+          {/* Note (read-only) */}
+          {currentTask.note && (
+            <div style={{
+              padding: "10px", marginBottom: "10px",
+              background: theme.inputBg,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: "8px",
+              fontSize: "13px", color: theme.text, lineHeight: 1.5,
+              whiteSpace: "pre-wrap",
+            }}>
+              {currentTask.note}
+            </div>
+          )}
+
+          {/* Checklist */}
+          {currentTask.checklist && currentTask.checklist.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: "11px", color: theme.textMid, fontWeight: 700,
+                marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.3px",
+              }}>
+                Seznam ({currentTask.checklist.filter(i => i.done).length}/{currentTask.checklist.length})
+              </div>
+              {currentTask.checklist.map(item => (
+                <div key={item.id} style={{
+                  display: "flex", alignItems: "center", gap: "10px",
+                  padding: "10px 12px", marginBottom: "4px",
+                  background: item.done ? `${theme.green}08` : theme.inputBg,
+                  border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
+                  borderRadius: "8px", cursor: "pointer",
+                }}
+                onClick={() => toggleChecklistItem(item.id)}>
+                  <div style={{
+                    width: "28px", height: "28px", minWidth: "28px",
+                    borderRadius: "6px",
+                    border: `2px solid ${item.done ? theme.green : theme.textDim}`,
+                    background: item.done ? theme.green : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    color: "#fff", fontSize: "14px", fontWeight: 800,
+                  }}>
+                    {item.done && "✓"}
+                  </div>
+                  <span style={{
+                    flex: 1, fontSize: "14px",
+                    color: item.done ? theme.textSub : theme.text,
+                    textDecoration: item.done ? "line-through" : "none",
+                  }}>
+                    {item.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Scratch Pad */}
+        <div style={{
+          background: theme.card,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: "12px",
+          padding: "14px",
+          marginBottom: "12px",
+        }}>
+          <div style={{
+            fontSize: "11px", color: theme.textMid, fontWeight: 700,
+            marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.3px",
+          }}>
+            📝 Pracovní deník {currentTask.scratchPad?.length > 0 && `(${currentTask.scratchPad.length})`}
+          </div>
+
+          {/* Input */}
+          <div style={{ display: "flex", gap: "6px", marginBottom: "10px" }}>
+            <input
+              type="text"
+              placeholder="Co jsem právě zjistil, co potřebuji..."
+              value={scratchInput}
+              onChange={e => setScratchInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") addScratchEntry(); }}
+              style={{ ...inputStyle(theme), fontSize: "13px", padding: "8px 12px", flex: 1 }}
+            />
+            <button onClick={addScratchEntry} disabled={!scratchInput.trim()} style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: "13px",
+              background: scratchInput.trim() ? theme.accent : theme.inputBg,
+              color: scratchInput.trim() ? "#fff" : theme.textDim,
+              border: "none",
+            }}>
+              Přidat
+            </button>
+          </div>
+
+          {/* Entries */}
+          {currentTask.scratchPad && currentTask.scratchPad.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+              {currentTask.scratchPad.map(entry => (
+                <div key={entry.id} style={{
+                  padding: "8px 10px",
+                  background: theme.inputBg,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  display: "flex", gap: "8px", alignItems: "flex-start",
+                }}>
+                  <span style={{
+                    fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                    whiteSpace: "nowrap", marginTop: "2px",
+                  }}>
+                    {formatTimeTrace(entry.createdAt)}
+                    {entry.author !== currentUser.name && ` · ${entry.author}`}
+                  </span>
+                  <span style={{ flex: 1, color: theme.text, lineHeight: 1.4 }}>
+                    {entry.text}
+                  </span>
+                  {entry.author === currentUser.name && (
+                    <button onClick={() => deleteScratchEntry(entry.id)}
+                      title="Smazat"
+                      style={{
+                        background: "none", border: "none",
+                        color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                      }}>
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Comments inline — quick access */}
+        {taskComments.length > 0 && (
+          <div style={{
+            background: theme.card,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "12px",
+            padding: "14px", marginBottom: "12px",
+          }}>
+            <div style={{
+              fontSize: "11px", color: theme.textMid, fontWeight: 700,
+              marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.3px",
+            }}>
+              💬 Komentáře ({taskComments.filter(c => c.type !== "reaction").length})
+            </div>
+            {taskComments.filter(c => c.type !== "reaction").slice(-3).map(c => (
+              <div key={c.id} style={{
+                padding: "6px 10px", marginBottom: "3px",
+                background: theme.inputBg, borderRadius: "6px",
+                fontSize: "12px",
+              }}>
+                <strong style={{ color: theme.accent }}>{c.author}:</strong> {c.content}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bottom action bar — sticky */}
+      <div style={{
+        position: "sticky", bottom: 0, zIndex: 10,
+        background: theme.card,
+        borderTop: `1px solid ${theme.cardBorder}`,
+        padding: "12px 16px",
+        display: "flex", gap: "6px", flexWrap: "wrap",
+      }}>
+        {currentIdx > 0 && (
+          <button onClick={goPrevious} style={{
+            ...buttonStyle(), padding: "10px 14px", fontSize: "13px",
+            background: "transparent", color: theme.textSub,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>
+            ←
+          </button>
+        )}
+        <button onClick={completeTask} style={{
+          ...buttonStyle(), flex: 1, padding: "12px", fontSize: "14px", fontWeight: 700,
+          background: theme.green, color: "#fff", border: "none",
+        }}>
+          ✓ Hotovo
+        </button>
+        <button onClick={() => setShowParkModal(true)} style={{
+          ...buttonStyle(), padding: "12px 14px", fontSize: "13px", fontWeight: 600,
+          background: `${theme.yellow}20`, color: theme.yellow,
+          border: `1px solid ${theme.yellow}40`,
+        }}>
+          ⏸ Parknout
+        </button>
+        {currentIdx + 1 < todaysTasks.length && (
+          <button onClick={goNext} style={{
+            ...buttonStyle(), padding: "10px 14px", fontSize: "13px",
+            background: "transparent", color: theme.textSub,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>
+            →
+          </button>
+        )}
+      </div>
+
+      {/* Park modal */}
+      {showParkModal && (
+        <div
+          onClick={() => setShowParkModal(false)}
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(0,0,0,0.5)", zIndex: 200,
+            display: "flex", alignItems: "flex-end", justifyContent: "center",
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: theme.card, width: "100%", maxWidth: "500px",
+              borderRadius: "16px 16px 0 0",
+              padding: "20px",
+              animation: "slideUp 0.2s",
+            }}>
+            <div style={{ fontSize: "16px", fontWeight: 700, color: theme.text, marginBottom: "12px" }}>
+              ⏸ Proč parkuješ úkol?
+            </div>
+            <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "12px" }}>
+              Úkol se přesune do sekce "Čekám na..." a vrátí se, až zrušíš blocker.
+            </div>
+
+            {/* Templates */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "12px" }}>
+              {PARK_TEMPLATES.map(t => (
+                <button key={t.id}
+                  onClick={() => {
+                    setParkTemplate(t.id);
+                    setParkReason(t.template);
+                  }}
+                  style={{
+                    ...buttonStyle(), padding: "10px", fontSize: "13px",
+                    background: parkTemplate === t.id ? theme.accentSoft : theme.inputBg,
+                    color: parkTemplate === t.id ? theme.accent : theme.text,
+                    border: `1px solid ${parkTemplate === t.id ? theme.accentBorder : theme.inputBorder}`,
+                    textAlign: "left",
+                  }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Reason input */}
+            <input
+              type="text"
+              placeholder="Důvod (povinný)..."
+              value={parkReason}
+              autoFocus={parkTemplate !== null}
+              onChange={e => setParkReason(e.target.value)}
+              style={{ ...inputStyle(theme), fontSize: "14px", padding: "10px", marginBottom: "12px" }}
+            />
+
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button onClick={() => { setShowParkModal(false); setParkTemplate(null); setParkReason(""); }}
+                style={{
+                  ...buttonStyle(), flex: 1, padding: "10px", fontSize: "13px",
+                  background: theme.inputBg, color: theme.textSub,
+                  border: `1px solid ${theme.inputBorder}`,
+                }}>
+                Zrušit
+              </button>
+              <button onClick={parkTask} disabled={!parkReason.trim()}
+                style={{
+                  ...buttonStyle(), flex: 2, padding: "10px", fontSize: "13px", fontWeight: 700,
+                  background: parkReason.trim() ? theme.yellow : theme.inputBg,
+                  color: parkReason.trim() ? "#fff" : theme.textDim,
+                  border: "none",
+                }}>
+                ⏸ Zaparkovat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NotificationPanel({ currentUser, onClose, theme }) {
   const [permission, setPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
@@ -4709,6 +5355,8 @@ export default function App() {
   });
   const [showAdmin, setShowAdmin] = useState(false);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [showFocus, setShowFocus] = useState(false);
+  const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
   const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
   const undoTimerRef = useRef();
 
@@ -5253,6 +5901,8 @@ export default function App() {
         if (!isDone(t) && !isDeleted(t)) {
           // Hide planned (future showFrom) tasks UNLESS showDeferred is on
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+          // Hide parked tasks from main view — they have their own "Čekám na..." section
+          if (t.parkedReason && viewStatus === "today") return false;
           return true;
         }
         // Show recently completed tasks (within 24h) crossed out
@@ -5538,6 +6188,21 @@ export default function App() {
               ⚙️
             </button>
           )}
+          {/* Focus mode trigger */}
+          <button onClick={() => setShowFocus(true)}
+            title="Spustit Focus mode — projet úkoly jeden po druhém"
+            style={{
+              background: theme.accentSoft,
+              border: `1px solid ${theme.accentBorder}`,
+              borderRadius: "6px",
+              padding: "4px 8px",
+              color: theme.accent,
+              cursor: "pointer",
+              fontSize: "13px", fontWeight: 700,
+              display: "inline-flex", alignItems: "center", gap: "3px",
+            }}>
+            🎯 Fokus
+          </button>
           {/* Notification diagnostic panel */}
           <button onClick={() => setShowNotifPanel(!showNotifPanel)}
             title="Nastavení notifikací"
@@ -5579,6 +6244,42 @@ export default function App() {
             onClose={() => setShowNotifPanel(false)}
             theme={theme}
           />
+        )}
+
+        {/* Focus mode — fullscreen overlay */}
+        {showFocus && (
+          <FocusMode
+            tasks={tasks}
+            currentUser={currentUser}
+            users={users}
+            comments={comments}
+            theme={theme}
+            onClose={(allDone) => {
+              setShowFocus(false);
+              if (allDone) {
+                setFocusSummaryAfter(Date.now());
+                setTimeout(() => setFocusSummaryAfter(null), 5000);
+              }
+            }}
+            onUpdate={updateTask}
+            onStatusChange={changeStatus}
+            onAddComment={addComment}
+            onToggleReaction={toggleReaction}
+          />
+        )}
+
+        {/* Summary banner after focus ends with all done */}
+        {focusSummaryAfter && (
+          <div style={{
+            position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)",
+            background: theme.green, color: "#fff",
+            padding: "12px 20px", borderRadius: "10px",
+            fontSize: "13px", fontWeight: 700,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            zIndex: 1000,
+          }}>
+            🎉 Focus session dokončena!
+          </div>
         )}
 
         <UpdatesPanel
@@ -5873,6 +6574,89 @@ export default function App() {
             })()}
           </div>
         )}
+
+        {/* Parked tasks section — "Čekám na..." */}
+        {viewStatus === "today" && (() => {
+          const parkedTasks = tasks.filter(t =>
+            t.parkedReason && !isDone(t) && !isDeleted(t) &&
+            (t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name)
+          );
+          if (parkedTasks.length === 0) return null;
+          return (
+            <div style={{ marginTop: "16px", marginBottom: "10px" }}>
+              <div style={{
+                margin: "0 0 8px",
+                padding: "8px 12px",
+                background: `${theme.yellow}10`,
+                border: `2px solid ${theme.yellow}40`,
+                borderRadius: "8px",
+                display: "flex", alignItems: "center", gap: "6px",
+              }}>
+                <span style={{
+                  fontSize: "11px", color: theme.yellow, fontWeight: 800,
+                  textTransform: "uppercase", letterSpacing: "0.3px",
+                }}>
+                  ⏸ Čekám na... ({parkedTasks.length})
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {parkedTasks.map(task => (
+                  <div key={task.id}
+                    style={{
+                      background: theme.inputBg,
+                      border: `1px solid ${theme.inputBorder}`,
+                      borderLeft: `4px solid ${theme.yellow}`,
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      opacity: 0.85,
+                    }}>
+                    <div style={{
+                      fontSize: "13px", fontWeight: 600, color: theme.text, marginBottom: "4px",
+                    }}>
+                      {task.title}
+                    </div>
+                    <div style={{
+                      fontSize: "12px", color: theme.textSub, marginBottom: "6px",
+                      display: "flex", gap: "6px", alignItems: "center",
+                    }}>
+                      <span>⏸</span>
+                      <span style={{ flex: 1 }}>{task.parkedReason}</span>
+                    </div>
+                    <div style={{
+                      fontSize: "10px", color: theme.textMid, marginBottom: "8px",
+                    }}>
+                      Zaparkováno {task.parkedAt ? formatTimeTrace(task.parkedAt) : ""}
+                      {task.parkedBy && ` — ${task.parkedBy}`}
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                      <button onClick={() => {
+                        updateTask(task.id, {
+                          parkedReason: null,
+                          parkedAt: null,
+                          parkedBy: null,
+                        });
+                      }}
+                        style={{
+                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                          background: theme.green, color: "#fff", border: "none",
+                        }}>
+                        ✓ Odblokováno
+                      </button>
+                      <button onClick={() => { setScrollToTaskId(task.id); }}
+                        style={{
+                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
+                          background: theme.inputBg, color: theme.textSub,
+                          border: `1px solid ${theme.inputBorder}`,
+                        }}>
+                        📝 Detail
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         <Legend theme={theme} />
       </div>
