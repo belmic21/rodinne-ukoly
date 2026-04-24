@@ -1724,8 +1724,8 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 
       {!taskIsDone && (
         <>
-          {/* ── Type toggle + Pro koho ── */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
+          {/* ── Typ + Priorita (řádek 1) ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "6px", marginBottom: "8px", alignItems: "start" }}>
             <div>
               <div style={labelStyle}>Typ</div>
               <div style={{
@@ -1754,28 +1754,113 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 </button>
               </div>
             </div>
+            {/* Priorita jako přepínatelná ikona: — → ! → ‼ → — */}
             <div>
-              <div style={labelStyle}>Pro koho</div>
-              <select
-                value={editAssignTo === "person" ? "person" : editAssignTo}
-                onChange={e => {
-                  const val = e.target.value;
-                  if (val === "self") {
-                    setEditAssignedTo([currentUser.name]);
-                    setEditAssignTo("self");
-                  } else if (val === "both") {
-                    setEditAssignedTo(users.map(u => u.name));
+              <div style={labelStyle}>Priorita</div>
+              {(() => {
+                const priObj = getPriority(editPriority);
+                const priTheme = theme.priority[editPriority] || theme.priority.low;
+                const isDefault = editPriority === "low";
+                const cycleNext = () => {
+                  const next = editPriority === "low" ? "important"
+                             : editPriority === "important" ? "urgent"
+                             : "low";
+                  setEditPriority(next);
+                };
+                return (
+                  <button
+                    onClick={cycleNext}
+                    title={`${priObj.label} (klikni pro změnu)`}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "8px 14px", fontSize: "16px", fontWeight: 900,
+                      background: isDefault ? "transparent" : priTheme.cardBg,
+                      color: isDefault ? theme.textDim : priTheme.text,
+                      border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
+                      borderRadius: "8px",
+                      minWidth: "70px",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
+                      transition: "all 0.2s",
+                    }}>
+                    <span style={{ fontSize: "18px" }}>{priObj.sym}</span>
+                    <span style={{ fontSize: "11px", fontWeight: 700 }}>{priObj.label}</span>
+                  </button>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ── Kategorie (dropdown) ── */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Kategorie</div>
+            <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
+              style={{ ...inputStyle(theme), padding: "8px", fontSize: "13px", width: "100%" }}>
+              {CATEGORIES.map(c => (
+                <option key={c.id} value={c.id}>{c.icon} {c.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* ── Pro koho (chipy) ── */}
+          <div style={{ marginBottom: "8px" }}>
+            <div style={labelStyle}>Pro koho</div>
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+              {users.map(u => {
+                const isSelected = editAssignedTo?.includes(u.name);
+                return (
+                  <button
+                    key={u.name}
+                    onClick={() => {
+                      let newList;
+                      if (isSelected) {
+                        // Odebrat (ale nesmíme nechat prázdné)
+                        newList = editAssignedTo.filter(n => n !== u.name);
+                        if (newList.length === 0) return; // neprázdněno
+                      } else {
+                        newList = [...(editAssignedTo || []), u.name];
+                      }
+                      setEditAssignedTo(newList);
+                      // Dopočítáme assignTo
+                      if (newList.length === 1 && newList[0] === currentUser.name) {
+                        setEditAssignTo("self");
+                      } else if (newList.length === users.length) {
+                        setEditAssignTo("both");
+                      } else {
+                        setEditAssignTo("person");
+                      }
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                      background: isSelected ? theme.accentSoft : theme.inputBg,
+                      color: isSelected ? theme.accent : theme.textSub,
+                      border: `1px solid ${isSelected ? theme.accentBorder : theme.inputBorder}`,
+                      borderRadius: "14px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                    {isSelected ? "✓" : "○"} {u.name}
+                  </button>
+                );
+              })}
+              {/* Všichni shortcut */}
+              {users.length > 1 && (
+                <button
+                  onClick={() => {
+                    const all = users.map(u => u.name);
+                    setEditAssignedTo(all);
                     setEditAssignTo("both");
-                  } else if (otherUsers[0]) {
-                    setEditAssignedTo([otherUsers[0].name]);
-                    setEditAssignTo("person");
-                  }
-                }}
-                style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
-                <option value="self">Pro mě</option>
-                {otherUsers.map(o => <option key={o.name} value="person">Pro {o.name}</option>)}
-                <option value="both">Pro všechny</option>
-              </select>
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                    background: editAssignedTo?.length === users.length ? theme.accent : "transparent",
+                    color: editAssignedTo?.length === users.length ? "#fff" : theme.textSub,
+                    border: `1px dashed ${theme.inputBorder}`,
+                    borderRadius: "14px",
+                  }}>
+                  👥 Všichni
+                </button>
+              )}
             </div>
           </div>
 
