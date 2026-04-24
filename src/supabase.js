@@ -24,7 +24,7 @@ export const dbToTask = (r) => ({
   dueDate: r.due_date,
   showFrom: r.show_from,
   recDays: r.rec_days,
-  recurrenceRule: r.recurrence_rule || null,    // NEW: advanced recurrence
+  recurrenceRule: r.recurrence_rule || null,    // advanced recurrence
   activeMo: r.active_months || [],
   assignTo: r.assign_to,
   assignedTo: r.assigned_to || [],
@@ -37,6 +37,12 @@ export const dbToTask = (r) => ({
   completedAt: r.completed_at,
   completedByUser: r.completed_by_user,
   deletedAt: r.deleted_at,
+  // ─ Iterace B: Focus mode ─
+  scratchPad: r.scratch_pad || [],
+  parkedReason: r.parked_reason || null,
+  parkedAt: r.parked_at,
+  parkedBy: r.parked_by || null,
+  timeSpentMin: r.time_spent_min || 0,
 })
 
 export const taskToDb = (t) => ({
@@ -50,7 +56,7 @@ export const taskToDb = (t) => ({
   due_date: t.dueDate,
   show_from: t.showFrom,
   rec_days: t.recDays,
-  recurrence_rule: t.recurrenceRule || null,    // NEW: advanced recurrence
+  recurrence_rule: t.recurrenceRule || null,    // advanced recurrence
   active_months: t.activeMo,
   assign_to: t.assignTo,
   assigned_to: t.assignedTo,
@@ -63,6 +69,12 @@ export const taskToDb = (t) => ({
   completed_at: t.completedAt,
   completed_by_user: t.completedByUser,
   deleted_at: t.deletedAt,
+  // ─ Iterace B: Focus mode ─
+  scratch_pad: t.scratchPad || [],
+  parked_reason: t.parkedReason || null,
+  parked_at: t.parkedAt || null,
+  parked_by: t.parkedBy || null,
+  time_spent_min: t.timeSpentMin || 0,
 })
 
 // ─────────── User mapping ───────────
