@@ -2291,6 +2291,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     <div id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
       position: "relative",
       borderRadius: "12px",
+      // Elevate this card above siblings when a dropdown or detail is open,
+      // so popouts aren't hidden behind the next card in the list.
+      zIndex: snoozeMenuOpen || isOpen ? 30 : 1,
       // Overflow: only clip during swipe (to hide red/green backgrounds)
       // Otherwise visible, so dropdowns (snooze menu) can extend beyond card edges
       overflow: isSwiping || swipeX !== 0 ? "hidden" : "visible",
