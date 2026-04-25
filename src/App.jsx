@@ -429,6 +429,23 @@ const GLOBAL_CSS = `
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.15); opacity: 0.85; }
 }
+@keyframes newTaskHighlight {
+  0% {
+    transform: scale(0.97);
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.6);
+  }
+  20% {
+    transform: scale(1.02);
+    opacity: 1;
+    box-shadow: 0 0 0 8px rgba(52,211,153,0.3);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0);
+  }
+}
 @keyframes completePulse {
   0% { transform: scale(1); }
   30% { transform: scale(1.25); }
@@ -673,6 +690,51 @@ async function apiDeleteComment(commentId) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   COPY TASK BUTTON — copies task title + note to clipboard
+   ═══════════════════════════════════════════════════════ */
+
+function CopyTaskButton({ task, theme }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    const text = task.note?.trim()
+      ? `${task.title}\n\n${task.note}`
+      : task.title;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      // Fallback for older browsers
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      style={{
+        ...buttonStyle(),
+        padding: "5px 10px", fontSize: "11px", marginBottom: "8px",
+        background: copied ? `${theme.green}15` : theme.inputBg,
+        color: copied ? theme.green : theme.textSub,
+        border: `1px solid ${copied ? theme.green + "40" : theme.inputBorder}`,
+        display: "inline-flex", alignItems: "center", gap: "4px",
+        transition: "all 0.2s",
+      }}>
+      {copied ? "✓ Zkopírováno" : "📋 Kopírovat"}
+    </button>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    SCRATCH PAD INLINE — pracovní deník, append-only
    Zobrazeno v TaskDetail View módu, funkčně stejné jako ve Focus
    ═══════════════════════════════════════════════════════ */
@@ -680,6 +742,8 @@ async function apiDeleteComment(commentId) {
 function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   const [input, setInput] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
   const hasEntries = task.scratchPad && task.scratchPad.length > 0;
 
   const addEntry = () => {
@@ -696,8 +760,35 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   };
 
   const deleteEntry = (entryId) => {
+    if (!confirm("Smazat tento zápis?")) return;
     const newPad = (task.scratchPad || []).filter(e => e.id !== entryId);
     onUpdate(task.id, { scratchPad: newPad });
+  };
+
+  const startEdit = (entry) => {
+    setEditingId(entry.id);
+    setEditText(entry.text);
+  };
+
+  const saveEdit = () => {
+    if (!editText.trim() || !editingId) {
+      setEditingId(null);
+      setEditText("");
+      return;
+    }
+    const newPad = (task.scratchPad || []).map(e =>
+      e.id === editingId
+        ? { ...e, text: editText.trim(), editedAt: new Date().toISOString() }
+        : e
+    );
+    onUpdate(task.id, { scratchPad: newPad });
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
   };
 
   // Auto-expand pokud máme zápisy
@@ -771,19 +862,54 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
                   }}>
                     {formatTimeTrace(entry.createdAt)}
                     {entry.author !== currentUser.name && ` · ${entry.author}`}
+                    {entry.editedAt && (
+                      <span style={{ color: theme.textDim, fontStyle: "italic" }}> · upraveno</span>
+                    )}
                   </span>
-                  <span style={{ flex: 1, color: theme.text, lineHeight: 1.3 }}>
-                    {entry.text}
-                  </span>
-                  {entry.author === currentUser.name && (
-                    <button onClick={() => deleteEntry(entry.id)}
-                      title="Smazat"
+                  {editingId === entry.id ? (
+                    <input
+                      type="text"
+                      value={editText}
+                      onChange={e => setEditText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") saveEdit();
+                        if (e.key === "Escape") cancelEdit();
+                      }}
+                      onBlur={saveEdit}
+                      autoFocus
                       style={{
-                        background: "none", border: "none",
-                        color: theme.textDim, cursor: "pointer", fontSize: "11px",
-                      }}>
-                      ×
-                    </button>
+                        flex: 1, padding: "2px 6px", fontSize: "12px",
+                        border: `1px solid ${theme.accent}`,
+                        background: theme.card, color: theme.text,
+                        borderRadius: "4px", outline: "none",
+                      }}
+                    />
+                  ) : (
+                    <span style={{ flex: 1, color: theme.text, lineHeight: 1.3 }}>
+                      {entry.text}
+                    </span>
+                  )}
+                  {entry.author === currentUser.name && editingId !== entry.id && (
+                    <>
+                      <button onClick={() => startEdit(entry)}
+                        title="Upravit"
+                        style={{
+                          background: "none", border: "none",
+                          color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                          padding: "0 3px",
+                        }}>
+                        ✏️
+                      </button>
+                      <button onClick={() => deleteEntry(entry.id)}
+                        title="Smazat"
+                        style={{
+                          background: "none", border: "none",
+                          color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                          padding: "0 3px",
+                        }}>
+                        🗑
+                      </button>
+                    </>
                   )}
                 </div>
               ))}
@@ -1587,6 +1713,9 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
+        {/* Copy button — copies title + note to clipboard */}
+        <CopyTaskButton task={task} theme={theme} />
+
         {/* Note (if exists) — read-only */}
         {task.note && task.note.trim() && (
           <div style={{
@@ -1596,6 +1725,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             borderRadius: "6px",
             fontSize: "13px", color: theme.text, lineHeight: 1.4,
             whiteSpace: "pre-wrap", wordBreak: "break-word",
+            userSelect: "text",
           }}>
             {task.note}
           </div>
@@ -2248,7 +2378,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus, justCreated }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -2406,8 +2536,21 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     // Don't toggle if task was just reopened (status change closes detail)
     const opening = !isOpen;
     setIsOpen(opening);
-    if (opening && isNew) onMarkSeen(task.id);
+    // Note: markSeen is now called on CLOSE (see useEffect below) instead of OPEN,
+    // so the task doesn't reorder while user is reading it.
   };
+
+  // Mark as seen when detail CLOSES (not opens) — keeps task in place while user reads it
+  const wasOpenedRef = useRef(false);
+  useEffect(() => {
+    if (isOpen) {
+      wasOpenedRef.current = true;
+    } else if (wasOpenedRef.current && isNew && onMarkSeen) {
+      // Detail just closed and task was unread — now mark it as seen
+      onMarkSeen(task.id);
+      wasOpenedRef.current = false;
+    }
+  }, [isOpen, isNew, task.id, onMarkSeen]);
 
   // Action animation state — shows a colored pulse before an irreversible action fires
   // Types: "complete" (green), "delete" (red), "restore" (blue/accent), "reopen" (blue/accent)
@@ -2534,6 +2677,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       cursor: "pointer",
       position: "relative",
       animation: actionAnim ? "actionCardGlow 0.55s ease-out"
+        : justCreated ? "newTaskHighlight 1.5s ease-out"
         : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
@@ -5288,10 +5432,20 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
   // Quick reply state — single text field when user decides to reply
   const [replyTo, setReplyTo] = useState(null); // taskId or null
   const [replyText, setReplyText] = useState("");
+  const [justSent, setJustSent] = useState(null); // taskId — show "Odesláno ✓" briefly
 
   const sendReply = () => {
     if (replyTo && replyText.trim() && onQuickReply) {
-      onQuickReply(replyTo, replyText.trim());
+      const taskId = replyTo;
+      onQuickReply(taskId, replyText.trim());
+      // Auto-mark all comments on this task as seen (because we replied)
+      const taskComments = byTask[taskId] || [];
+      if (taskComments.length > 0 && onMarkSeen) {
+        onMarkSeen(taskComments.map(c => c.id));
+      }
+      // Show "Odesláno ✓" feedback briefly
+      setJustSent(taskId);
+      setTimeout(() => setJustSent(null), 1500);
       setReplyText("");
       setReplyTo(null);
     }
@@ -5484,6 +5638,23 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                       }}>✓ Přečteno</button>
                   </div>
                 )}
+
+                {/* "Odesláno ✓" feedback */}
+                {justSent === taskId && (
+                  <div style={{
+                    marginTop: "6px",
+                    padding: "6px 10px",
+                    background: `${theme.green}15`,
+                    border: `1px solid ${theme.green}40`,
+                    borderRadius: "6px",
+                    fontSize: "11px", fontWeight: 600,
+                    color: theme.green,
+                    display: "flex", alignItems: "center", gap: "4px",
+                    animation: "slideUp 0.2s",
+                  }}>
+                    ✓ Odesláno a označeno jako přečtené
+                  </div>
+                )}
               </div>
             );
           })}
@@ -5550,6 +5721,7 @@ export default function App() {
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
   const [scrollToTaskId, setScrollToTaskId] = useState(null);
+  const [justCreatedTaskId, setJustCreatedTaskId] = useState(null); // task ID that was just added — for highlight animation
 
   // Clear scrollToTaskId after a short delay so autoOpen doesn't re-trigger
   useEffect(() => {
@@ -5791,6 +5963,9 @@ export default function App() {
     setTasks(prev => [task, ...prev]);
     await apiCreateTask(task);
     setPendingCount(getOfflineQueue().length);
+    // Visual feedback — highlight the new task briefly
+    setJustCreatedTaskId(task.id);
+    setTimeout(() => setJustCreatedTaskId(null), 2500);
     if (task.assignTo !== "self") {
       notify(`📋 Nový od ${task.createdBy}`, task.title);
       // Trigger push notification to other users
@@ -6854,6 +7029,7 @@ export default function App() {
                       onMarkCommentsSeen={markCommentsSeen}
                       autoOpen={scrollToTaskId === task.id}
                       progressItem={item.type === "progress" ? item.checklistItem : null}
+                      justCreated={justCreatedTaskId === task.id}
                       onStartFocus={(taskId) => {
                         setFocusInitialTask(taskId);
                         setShowFocus(true);
