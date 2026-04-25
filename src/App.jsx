@@ -2748,6 +2748,18 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 📝 {task.scratchPad.length}
               </span>
             )}
+            {/* Created at + by badge */}
+            {task.createdAt && (
+              <span style={{
+                fontSize: "10px", color: theme.textMid,
+                display: "inline-flex", alignItems: "center", gap: "3px",
+              }}>
+                📅 {formatTimeTrace(task.createdAt)}
+                {task.createdBy && task.createdBy !== currentUser.name && (
+                  <span> — {task.createdBy}</span>
+                )}
+              </span>
+            )}
             {task.showFrom && daysDiff(task.showFrom) > 0 && (
               <span style={{ fontSize: "10px", fontWeight: 600, color: theme.purple }}>
                 ⏰ od {formatDate(task.showFrom)}
@@ -5529,9 +5541,11 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [filter, setFilter] = useState("my");
   const [viewStatus, setViewStatus] = useState("today");
-  const [sortMode, setSortMode] = useState("smart");
+  const [sortMode, setSortMode] = useState("created");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
+  const [createdWhenFilter, setCreatedWhenFilter] = useState("all"); // "all" | "today" | "yesterday" | "week" | "month"
+  const [createdByFilter, setCreatedByFilter] = useState("all"); // "all" | "<user.name>"
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
@@ -6138,6 +6152,30 @@ export default function App() {
     // Priority filter
     if (priorityFilter !== "all") result = result.filter(t => (t.priority || "low") === priorityFilter);
 
+    // Created-when filter — when was the task added
+    if (createdWhenFilter !== "all") {
+      const now = Date.now();
+      const oneDay = 24 * 60 * 60 * 1000;
+      result = result.filter(t => {
+        if (!t.createdAt) return false;
+        const createdMs = new Date(t.createdAt).getTime();
+        const ageMs = now - createdMs;
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+        if (createdWhenFilter === "today") return createdMs >= todayStart.getTime();
+        if (createdWhenFilter === "yesterday") return createdMs >= yesterdayStart.getTime() && createdMs < todayStart.getTime();
+        if (createdWhenFilter === "week") return ageMs <= 7 * oneDay;
+        if (createdWhenFilter === "month") return ageMs <= 30 * oneDay;
+        if (createdWhenFilter === "older") return ageMs > 30 * oneDay;
+        return true;
+      });
+    }
+
+    // Created-by filter — kdo úkol přidal
+    if (createdByFilter !== "all") {
+      result = result.filter(t => t.createdBy === createdByFilter);
+    }
+
     // Search
     if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
 
@@ -6162,7 +6200,7 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter]);
 
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
@@ -6256,9 +6294,28 @@ export default function App() {
       if (!skip.includes("priority")) {
         if (priorityFilter !== "all" && (t.priority || "low") !== priorityFilter) return false;
       }
+      // Created-when filter
+      if (!skip.includes("createdWhen") && createdWhenFilter !== "all") {
+        if (!t.createdAt) return false;
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000;
+        const createdMs = new Date(t.createdAt).getTime();
+        const ageMs = now - createdMs;
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+        if (createdWhenFilter === "today" && createdMs < todayStart.getTime()) return false;
+        if (createdWhenFilter === "yesterday" && (createdMs < yesterdayStart.getTime() || createdMs >= todayStart.getTime())) return false;
+        if (createdWhenFilter === "week" && ageMs > 7 * oneDay) return false;
+        if (createdWhenFilter === "month" && ageMs > 30 * oneDay) return false;
+        if (createdWhenFilter === "older" && ageMs <= 30 * oneDay) return false;
+      }
+      // Created-by filter
+      if (!skip.includes("createdBy") && createdByFilter !== "all") {
+        if (t.createdBy !== createdByFilter) return false;
+      }
       return true;
     }).length;
-  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, showDeferred]);
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, showDeferred, createdWhenFilter, createdByFilter]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -6608,10 +6665,42 @@ export default function App() {
               background: "transparent", border: `1px solid ${theme.inputBorder}`,
               color: theme.textSub,
             }}>
+              <option value="created">↕ Nejnovější</option>
               <option value="smart">↕ Chytré</option>
               <option value="priority">↕ Priorita</option>
               <option value="date">↕ Termín</option>
-              <option value="created">↕ Nejnovější</option>
+            </select>
+
+            {/* Created-when filter */}
+            <select value={createdWhenFilter} onChange={e => setCreatedWhenFilter(e.target.value)} style={{
+              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+              background: createdWhenFilter !== "all" ? theme.accentSoft : "transparent",
+              border: `1px solid ${createdWhenFilter !== "all" ? theme.accentBorder : theme.inputBorder}`,
+              color: createdWhenFilter !== "all" ? theme.accent : theme.textSub,
+              fontWeight: createdWhenFilter !== "all" ? 600 : 400,
+            }}>
+              <option value="all">📅 Přidáno kdy</option>
+              <option value="today">🆕 Dnes přidáno</option>
+              <option value="yesterday">Včera přidáno</option>
+              <option value="week">Tento týden</option>
+              <option value="month">Tento měsíc</option>
+              <option value="older">Starší</option>
+            </select>
+
+            {/* Created-by filter */}
+            <select value={createdByFilter} onChange={e => setCreatedByFilter(e.target.value)} style={{
+              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
+              background: createdByFilter !== "all" ? theme.accentSoft : "transparent",
+              border: `1px solid ${createdByFilter !== "all" ? theme.accentBorder : theme.inputBorder}`,
+              color: createdByFilter !== "all" ? theme.accent : theme.textSub,
+              fontWeight: createdByFilter !== "all" ? 600 : 400,
+            }}>
+              <option value="all">✏️ Kdo přidal</option>
+              {users.map(u => (
+                <option key={u.name} value={u.name}>
+                  {u.name === currentUser.name ? "Já" : u.name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
