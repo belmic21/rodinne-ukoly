@@ -3963,12 +3963,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           {type === "complex" && (
             <div style={{
               marginBottom: "10px", padding: "10px",
-              background: theme.inputBg, borderRadius: "8px",
-              border: `2px solid ${theme.inputBorder}`,
+              background: `${theme.purple}08`,
+              borderRadius: "8px",
+              border: `2px solid ${theme.purple}40`,
             }}>
               <div style={{
                 ...labelStyle, fontSize: "10px", fontWeight: 800,
-                color: theme.textSub, textTransform: "uppercase",
+                color: theme.purple, textTransform: "uppercase",
                 letterSpacing: "0.5px", marginBottom: "8px",
                 display: "flex", alignItems: "center", gap: "4px",
               }}>
@@ -4059,9 +4060,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     setChecklistInput("");
                   }
                 }} style={{
-                  ...buttonStyle(), padding: "7px 14px",
-                  background: theme.accent, color: "#fff", fontSize: "14px",
-                }}>+</button>
+                  ...buttonStyle(),
+                  padding: "7px 16px",
+                  background: checklistInput.trim() ? theme.purple : theme.inputBg,
+                  color: checklistInput.trim() ? "#fff" : theme.textDim,
+                  border: `1px solid ${checklistInput.trim() ? theme.purple : theme.inputBorder}`,
+                  fontSize: "14px", fontWeight: 700,
+                  cursor: checklistInput.trim() ? "pointer" : "default",
+                  transition: "all 0.15s",
+                }}>+ Přidat</button>
               </div>
             </div>
           )}
@@ -4172,11 +4179,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
           <div style={{ display: "flex", gap: "8px" }}>
             <button onClick={fullSubmit} style={{
-              ...buttonStyle(), flex: 1, padding: "11px",
-              background: theme.accent, color: "#fff", fontSize: "14px",
-            }}>Přidat úkol</button>
+              ...buttonStyle(), flex: 1, padding: "13px",
+              background: theme.green, color: "#fff",
+              fontSize: "15px", fontWeight: 700,
+              border: `2px solid ${theme.green}`,
+              boxShadow: `0 2px 8px ${theme.green}40`,
+            }}>✓ Vytvořit úkol</button>
             <button onClick={resetForm} style={{
-              ...buttonStyle(), padding: "11px 16px",
+              ...buttonStyle(), padding: "13px 16px",
               background: "transparent", color: theme.textSub,
               border: `1px solid ${theme.cardBorder}`, fontSize: "14px",
             }}>Storno</button>
@@ -4238,7 +4248,7 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
 
   return (
     <div style={{ ...cardStyle(theme), padding: "12px 14px", marginBottom: "14px" }}>
-      <div style={{ display: "flex", gap: "4px", marginBottom: perUserWeek.length > 1 ? "8px" : "0" }}>
+      <div style={{ display: "flex", gap: "4px", marginBottom: (perUserWeek.length > 1 && currentUser.admin) ? "8px" : "0" }}>
         {stats.map((stat) => {
           const isActive = activeStatId === stat.id;
           return (
@@ -4265,7 +4275,7 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
           );
         })}
       </div>
-      {perUserWeek.length > 1 && (
+      {perUserWeek.length > 1 && currentUser.admin && (
         <div style={{
           display: "flex", gap: "12px", justifyContent: "center",
           paddingTop: "6px", borderTop: `1px solid ${theme.cardBorder}`,
