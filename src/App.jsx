@@ -2756,24 +2756,50 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             ↩
           </button>
         ) : !taskIsDone && canAct ? (
-          <button onClick={handleQuickComplete} style={{
-            width: completing ? "40px" : "32px",
-            height: completing ? "40px" : "32px",
-            minWidth: completing ? "40px" : "32px",
-            borderRadius: "8px",
-            border: `2.5px solid ${completing ? theme.green : (inProgress ? theme.yellow : priorityTheme.text)}`,
-            background: completing ? theme.green : (inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`),
-            cursor: completing ? "default" : "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: completing ? "#fff" : (inProgress ? theme.yellow : priorityTheme.text),
-            fontSize: completing ? "22px" : "14px",
-            fontWeight: 700,
-            transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
-            boxShadow: completing ? `0 0 0 10px ${theme.green}25, 0 4px 20px ${theme.green}60` : "none",
-            animation: completing ? "completePulse 0.55s ease-out" : "none",
-          }} title="Splnit">
-            {completing ? "✓" : (inProgress ? "◐" : "○")}
-          </button>
+          <>
+            <button onClick={handleQuickComplete} style={{
+              width: completing ? "40px" : "32px",
+              height: completing ? "40px" : "32px",
+              minWidth: completing ? "40px" : "32px",
+              borderRadius: "8px",
+              border: `2.5px solid ${completing ? theme.green : (inProgress ? theme.yellow : priorityTheme.text)}`,
+              background: completing ? theme.green : (inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`),
+              cursor: completing ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: completing ? "#fff" : (inProgress ? theme.yellow : priorityTheme.text),
+              fontSize: completing ? "22px" : "14px",
+              fontWeight: 700,
+              transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
+              boxShadow: completing ? `0 0 0 10px ${theme.green}25, 0 4px 20px ${theme.green}60` : "none",
+              animation: completing ? "completePulse 0.55s ease-out" : "none",
+            }} title="Splnit">
+              {completing ? "✓" : (inProgress ? "◐" : "○")}
+            </button>
+
+            {/* Toggle in_progress button — only visible when not in_progress yet */}
+            {!inProgress && !completing && (
+              <button onClick={(e) => {
+                e.stopPropagation();
+                onStatusChange(task.id, "in_progress");
+              }} title="Rozpracovat" style={{
+                width: "26px", height: "26px", minWidth: "26px",
+                borderRadius: "6px",
+                border: `2px dashed ${theme.yellow}80`,
+                background: `${theme.yellow}10`,
+                cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: theme.yellow,
+                fontSize: "13px", fontWeight: 700,
+                marginLeft: "-2px", marginTop: "3px",
+                transition: "all 0.15s",
+                opacity: 0.65,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; e.currentTarget.style.background = `${theme.yellow}25`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.65; e.currentTarget.style.background = `${theme.yellow}10`; }}>
+                ◐
+              </button>
+            )}
+          </>
         ) : (
           <button onClick={(e) => {
             e.stopPropagation();
