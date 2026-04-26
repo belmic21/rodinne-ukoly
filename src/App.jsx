@@ -5407,14 +5407,13 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
     !c.seenBy?.includes(currentUser.name)
   );
 
-  // Only comments relevant to me: task is assigned to me, created by me, or it's on a shared task
+  // Only comments relevant to me: task is assigned to me, or created by me
   const relevantComments = unseenComments.filter(c => {
     const task = tasks.find(t => t.id === c.taskId);
     if (!task) return false;
     return (
       task.createdBy === currentUser.name ||
-      task.assignedTo?.includes(currentUser.name) ||
-      task.assignTo === "both"
+      task.assignedTo?.includes(currentUser.name)
     );
   });
 
@@ -6279,6 +6278,17 @@ export default function App() {
     if (!currentUser) return [];
     let result = tasks;
 
+    // ═══ VISIBILITY FILTER (per-user privacy) ═══
+    // Admin vidí všechno. Ostatní uživatelé vidí pouze:
+    //   - úkoly které vytvořili sami
+    //   - úkoly kde jsou v assignedTo[]
+    if (!currentUser.admin) {
+      result = result.filter(t =>
+        t.createdBy === currentUser.name ||
+        (t.assignedTo && t.assignedTo.includes(currentUser.name))
+      );
+    }
+
     // Status filter
     if (viewStatus === "today" || viewStatus === "active") {
       const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
@@ -6437,6 +6447,12 @@ export default function App() {
     if (!currentUser) return 0;
     return tasks.filter(t => {
       if (!predicate(t)) return false;
+      // ═══ VISIBILITY FILTER (per-user privacy) ═══
+      if (!currentUser.admin) {
+        const isVisible = t.createdBy === currentUser.name ||
+          (t.assignedTo && t.assignedTo.includes(currentUser.name));
+        if (!isVisible) return false;
+      }
       // Status filter (viewStatus) — skip if counting statuses
       if (!skip.includes("status")) {
         if (viewStatus === "active" && (isDone(t) || isDeleted(t))) return false;
