@@ -125,6 +125,22 @@ function formatTimeTrace(iso) {
   return `${d.getDate()}.${d.getMonth() + 1}. ${hm}`;
 }
 
+// Format duration in human-friendly way:
+// <1min: "<1 min", 1-59min: "5 min", 1-23hod: "4 hod", 1-29 dní: "10 dní", 30+ dní: "měsíc+"
+function formatDuration(fromIso) {
+  if (!fromIso) return "";
+  const ms = Date.now() - new Date(fromIso).getTime();
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "<1 min";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hod`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} ${days === 1 ? "den" : (days < 5 ? "dny" : "dní")}`;
+  const months = Math.floor(days / 30);
+  return `${months} ${months === 1 ? "měsíc" : (months < 5 ? "měsíce" : "měsíců")}`;
+}
+
 function autoDetectCategory(title) {
   const lower = title.toLowerCase();
   for (const cat of CATEGORIES) {
@@ -452,6 +468,10 @@ const GLOBAL_CSS = `
   60% { transform: scale(1.12); }
   100% { transform: scale(1); }
 }
+@keyframes inProgressPulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15), 0 2px 8px rgba(245, 158, 11, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.30), 0 2px 12px rgba(245, 158, 11, 0.6); }
+}
 @keyframes actionCardGlow {
   0% { box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
   30% { box-shadow: 0 0 40px currentColor, 0 4px 20px currentColor; }
@@ -757,7 +777,10 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
     const newPad = [entry, ...(task.scratchPad || [])];
     // Pokud má úkol stav 'active' a přidávám zápis → rozpracovat
     const updates = { scratchPad: newPad };
-    if (task.status === "active") updates.status = "in_progress";
+    if (task.status === "active") {
+      updates.status = "in_progress";
+      updates.inProgressAt = new Date().toISOString();
+    }
     onUpdate(task.id, updates);
     setInput("");
   };
@@ -1667,6 +1690,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       // Pokud zatrhnu alespoň 1 (ale ne všechny) a úkol je active → in_progress
       if (someDone && !allDone && task.status === "active") {
         updates.status = "in_progress";
+        updates.inProgressAt = new Date().toISOString();
       }
       onUpdate(task.id, updates);
 
@@ -2689,7 +2713,12 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         : cardBackground,
       border: `1px solid ${actionAnim ? animColor : cardBorderColor}`,
       borderRadius: "12px",
-      borderLeft: `5px solid ${actionAnim ? animColor : recentlyAdded ? theme.green : leftBorderColor}`,
+      borderLeft: `5px solid ${
+        actionAnim ? animColor
+        : recentlyAdded ? theme.green
+        : (inProgress && !taskIsDone && !taskIsDeleted) ? theme.yellow
+        : leftBorderColor
+      }`,
       padding: "8px 11px",
       opacity: actionAnim ? 1
         : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : (recentlyAdded ? 1 - fadeProgress * 0.4 : 1)),
@@ -2763,47 +2792,52 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           </button>
         ) : !taskIsDone && canAct ? (
           <>
+            {/* ─── SPLNIT — prázdný kruh, animace na ✓ ─── */}
             <button onClick={handleQuickComplete} style={{
               width: completing ? "40px" : "32px",
               height: completing ? "40px" : "32px",
               minWidth: completing ? "40px" : "32px",
-              borderRadius: "8px",
-              border: `2.5px solid ${completing ? theme.green : (inProgress ? theme.yellow : priorityTheme.text)}`,
-              background: completing ? theme.green : (inProgress ? `${theme.yellow}20` : `${priorityTheme.text}10`),
+              borderRadius: "50%",
+              border: `2.5px solid ${completing ? theme.green : priorityTheme.text}`,
+              background: completing ? theme.green : "transparent",
               cursor: completing ? "default" : "pointer",
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: completing ? "#fff" : (inProgress ? theme.yellow : priorityTheme.text),
-              fontSize: completing ? "22px" : "14px",
+              color: completing ? "#fff" : priorityTheme.text,
+              fontSize: completing ? "22px" : "16px",
               fontWeight: 700,
               transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
               boxShadow: completing ? `0 0 0 10px ${theme.green}25, 0 4px 20px ${theme.green}60` : "none",
               animation: completing ? "completePulse 0.55s ease-out" : "none",
             }} title="Splnit">
-              {completing ? "✓" : (inProgress ? "◐" : "○")}
+              {completing ? "✓" : ""}
             </button>
 
-            {/* Toggle in_progress button — only visible when not in_progress yet */}
-            {!inProgress && !completing && (
+            {/* ─── ROZPRACOVAT ↔ AKTIVNÍ — částečný kruh ─── */}
+            {!completing && (
               <button onClick={(e) => {
                 e.stopPropagation();
-                onStatusChange(task.id, "in_progress");
-              }} title="Rozpracovat" style={{
-                width: "26px", height: "26px", minWidth: "26px",
-                borderRadius: "6px",
-                border: `2px dashed ${theme.yellow}80`,
-                background: `${theme.yellow}10`,
+                if (inProgress) {
+                  onStatusChange(task.id, "reopen");
+                } else {
+                  onStatusChange(task.id, "in_progress");
+                }
+              }} title={inProgress ? "Pozastavit (vrátit do aktivních)" : "Rozpracovat"} style={{
+                width: "28px", height: "28px", minWidth: "28px",
+                borderRadius: "50%",
+                border: `2px solid ${inProgress ? theme.yellow : theme.yellow + "70"}`,
+                background: inProgress
+                  ? `conic-gradient(${theme.yellow} 0deg 270deg, transparent 270deg 360deg)`
+                  : `conic-gradient(${theme.yellow}50 0deg 90deg, transparent 90deg 360deg)`,
                 cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                color: theme.yellow,
-                fontSize: "13px", fontWeight: 700,
-                marginLeft: "-2px", marginTop: "3px",
-                transition: "all 0.15s",
-                opacity: 0.65,
+                marginLeft: "-2px", marginTop: "2px",
+                transition: "all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)",
+                opacity: inProgress ? 1 : 0.65,
+                boxShadow: inProgress ? `0 0 0 4px ${theme.yellow}25, 0 2px 8px ${theme.yellow}60` : "none",
+                animation: inProgress ? "inProgressPulse 2s ease-in-out infinite" : "none",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; e.currentTarget.style.background = `${theme.yellow}25`; }}
-              onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.65; e.currentTarget.style.background = `${theme.yellow}10`; }}>
-                ◐
-              </button>
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = inProgress ? 1 : 0.65; }} />
             )}
           </>
         ) : (
@@ -2954,6 +2988,16 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {task.showFrom && daysDiff(task.showFrom) > 0 && (
               <span style={{ fontSize: "10px", fontWeight: 600, color: theme.purple }}>
                 ⏰ od {formatDate(task.showFrom)}
+              </span>
+            )}
+            {/* In-progress duration indicator */}
+            {inProgress && task.inProgressAt && !taskIsDone && !taskIsDeleted && (
+              <span style={{
+                fontSize: "10px", fontWeight: 700, color: theme.yellow,
+                background: `${theme.yellow}15`,
+                padding: "1px 6px", borderRadius: "4px",
+              }}>
+                ◐ {formatDuration(task.inProgressAt)}
               </span>
             )}
             {task.dueDate && !taskIsDone && !isDeleted(task) && (
@@ -4573,7 +4617,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
   // Auto-rozpracovat úkol po 10s ve Focus mode (znamená že jsem na něm pracoval)
   useEffect(() => {
     if (seconds >= 10 && currentTask && currentTask.status === "active") {
-      onUpdate(currentTask.id, { status: "in_progress" });
+      onUpdate(currentTask.id, { status: "in_progress", inProgressAt: new Date().toISOString() });
     }
   }, [seconds, currentTask, onUpdate]);
 
@@ -4632,6 +4676,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
     const updates = { checklist: updated };
     if (someDone && !allDone && currentTask.status === "active") {
       updates.status = "in_progress";
+      updates.inProgressAt = new Date().toISOString();
     }
     onUpdate(currentTask.id, updates);
   };
@@ -4690,6 +4735,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
     onUpdate(currentTask.id, {
       scratchPad: newPad,
       status: "in_progress",
+      inProgressAt: currentTask.inProgressAt || new Date().toISOString(),
     });
     // System comment (for activity log)
     if (onAddComment) {
@@ -6136,7 +6182,7 @@ export default function App() {
 
       switch (action) {
         case "in_progress":
-          return { ...task, status: "in_progress" };
+          return { ...task, status: "in_progress", inProgressAt: task.inProgressAt || now };
         case "complete":
         case "done": {
           const updated = { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
@@ -6169,7 +6215,7 @@ export default function App() {
           return updated;
         }
         case "reopen":
-          return { ...task, status: "active", completedAt: null, completedByUser: null, doneBy: [] };
+          return { ...task, status: "active", completedAt: null, completedByUser: null, doneBy: [], inProgressAt: null };
         default:
           return task;
       }
