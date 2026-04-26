@@ -46,7 +46,7 @@ const FONT = "'DM Sans', system-ui, sans-serif";
 const generateId = () => crypto.randomUUID();
 const getPriority = (id) => PRIORITIES.find(p => p.id === id) || PRIORITIES[1];
 const getCategory = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[8];
-const isDone = (task) => task.status === "done" || task.status === "cancelled";
+const isDone = (task) => task.status === "done";
 const isDeleted = (task) => task.status === "deleted";
 
 // 2-letter label for assignee picker — "Michal" → "Mi", "Peťulka" → "Pe"
@@ -755,7 +755,10 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
       author: currentUser.name,
     };
     const newPad = [entry, ...(task.scratchPad || [])];
-    onUpdate(task.id, { scratchPad: newPad });
+    // Pokud má úkol stav 'active' a přidávám zápis → rozpracovat
+    const updates = { scratchPad: newPad };
+    if (task.status === "active") updates.status = "in_progress";
+    onUpdate(task.id, updates);
     setInput("");
   };
 
@@ -1658,10 +1661,17 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           doneAt: !item.done ? new Date().toISOString() : null,
         };
       });
-      onUpdate(task.id, { checklist: updated });
+      const someDone = updated.some(item => item.done);
+      const allDone = updated.length > 0 && updated.every(item => item.done);
+      const updates = { checklist: updated };
+      // Pokud zatrhnu alespoň 1 (ale ne všechny) a úkol je active → in_progress
+      if (someDone && !allDone && task.status === "active") {
+        updates.status = "in_progress";
+      }
+      onUpdate(task.id, updates);
 
       // Auto-complete the whole task when all checklist items are done — with animation
-      if (updated.length > 0 && updated.every(item => item.done)) {
+      if (allDone) {
         if (onTriggerCompleteAnim) {
           // Parent card will show 550ms green pulse then fire the status change
           onTriggerCompleteAnim();
@@ -2776,15 +2786,15 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: actionAnim === "reopen" ? "22px" : "16px",
             fontWeight: 700,
-            background: actionAnim === "reopen" ? theme.accent : (task.status === "cancelled" ? `${theme.priority.low.text}15` : `${theme.green}20`),
-            color: actionAnim === "reopen" ? "#fff" : (task.status === "cancelled" ? theme.priority.low.text : theme.green),
-            border: `2.5px solid ${actionAnim === "reopen" ? theme.accent : (task.status === "cancelled" ? theme.priority.low.text + "40" : theme.green + "50")}`,
+            background: actionAnim === "reopen" ? theme.accent : `${theme.green}20`,
+            color: actionAnim === "reopen" ? "#fff" : theme.green,
+            border: `2.5px solid ${actionAnim === "reopen" ? theme.accent : theme.green + "50"}`,
             cursor: actionAnim ? "default" : "pointer",
             transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
             boxShadow: actionAnim === "reopen" ? `0 0 0 10px ${theme.accent}25, 0 4px 20px ${theme.accent}60` : "none",
             animation: actionAnim === "reopen" ? "completePulse 0.55s ease-out" : "none",
           }} title="Vrátit zpět do aktivních">
-            {task.status === "done" ? "↩" : "⊘"}
+            ↩
           </button>
         )}
 
@@ -4482,7 +4492,6 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
     return tasks
       .filter(t =>
         !isDone(t) && !isDeleted(t) &&
-        !t.parkedReason && // not parked
         t.assignedTo?.includes(currentUser.name) &&
         !(t.showFrom && daysDiff(t.showFrom) > 0) // not deferred
       )
@@ -4516,6 +4525,13 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
     }
     return () => clearInterval(timerRef.current);
   }, [timerRunning, timerEnabled]);
+
+  // Auto-rozpracovat úkol po 10s ve Focus mode (znamená že jsem na něm pracoval)
+  useEffect(() => {
+    if (seconds >= 10 && currentTask && currentTask.status === "active") {
+      onUpdate(currentTask.id, { status: "in_progress" });
+    }
+  }, [seconds, currentTask, onUpdate]);
 
   // Save accumulated time when leaving task
   const saveTimeSpent = () => {
@@ -4567,7 +4583,13 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
         doneAt: !item.done ? new Date().toISOString() : null,
       };
     });
-    onUpdate(currentTask.id, { checklist: updated });
+    const someDone = updated.some(item => item.done);
+    const allDone = updated.length > 0 && updated.every(item => item.done);
+    const updates = { checklist: updated };
+    if (someDone && !allDone && currentTask.status === "active") {
+      updates.status = "in_progress";
+    }
+    onUpdate(currentTask.id, updates);
   };
 
   // Actions
@@ -4613,10 +4635,17 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
   const parkTask = () => {
     if (!currentTask || !parkReason.trim()) return;
     saveTimeSpent();
+    // Přidej parking jako entry do scratch padu
+    const newEntry = {
+      id: "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      text: "⏸ " + parkReason.trim(),
+      createdAt: new Date().toISOString(),
+      author: currentUser.name,
+    };
+    const newPad = [newEntry, ...(currentTask.scratchPad || [])];
     onUpdate(currentTask.id, {
-      parkedReason: parkReason.trim(),
-      parkedAt: new Date().toISOString(),
-      parkedBy: currentUser.name,
+      scratchPad: newPad,
+      status: "in_progress",
     });
     // System comment (for activity log)
     if (onAddComment) {
@@ -6040,7 +6069,7 @@ export default function App() {
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
     const actionLabels = {
       done: "Splněno", done_all: "Splněno", done_my: "Moje část hotová",
-      cancelled: "Nerealizováno", reopen: "Vráceno", in_progress: "Rozpracováno",
+      reopen: "Vráceno", in_progress: "Rozpracováno",
     };
     const message = `${actionLabels[action] || "Změněno"}: ${shortTitle}`;
 
@@ -6054,8 +6083,6 @@ export default function App() {
       switch (action) {
         case "in_progress":
           return { ...task, status: "in_progress" };
-        case "cancelled":
-          return { ...task, status: "cancelled", completedAt: now, completedByUser: currentUser.name };
         case "complete":
         case "done": {
           const updated = { ...task, status: "done", completedAt: now, completedByUser: currentUser.name, doneBy: users.map(u => u.name) };
@@ -6379,8 +6406,6 @@ export default function App() {
         if (!isDone(t) && !isDeleted(t)) {
           // Hide planned (future showFrom) tasks UNLESS showDeferred is on
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
-          // Hide parked tasks from main view — they have their own "Čekám na..." section
-          if (t.parkedReason && viewStatus === "today") return false;
           return true;
         }
         // Show recently completed tasks (within 24h) crossed out
@@ -6389,6 +6414,9 @@ export default function App() {
         if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
         return false;
       });
+    }
+    else if (viewStatus === "in_progress") {
+      result = result.filter(t => t.status === "in_progress" && !isDeleted(t));
     }
     else if (viewStatus === "planned") {
       result = result.filter(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t));
@@ -6557,6 +6585,7 @@ export default function App() {
       if (!skip.includes("status")) {
         if (viewStatus === "active" && (isDone(t) || isDeleted(t))) return false;
         if (viewStatus === "active" && t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+        if (viewStatus === "in_progress" && (t.status !== "in_progress" || isDeleted(t))) return false;
         if (viewStatus === "planned" && !(t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t))) return false;
         if (viewStatus === "done" && t.status !== "done") return false;
         if (viewStatus === "trash" && t.status !== "deleted") return false;
@@ -6630,6 +6659,8 @@ export default function App() {
       trash: countTasks(t => t.status === "deleted", ["status"]),
       // "active" count (for viewStatus "Aktivní")
       active: countTasks(t => !isDone(t) && !isDeleted(t), ["status"]),
+      // "in_progress" count
+      in_progress: countTasks(t => t.status === "in_progress" && !isDeleted(t), ["status"]),
     };
   }, [currentUser, countTasks]);
 
@@ -6968,6 +6999,7 @@ export default function App() {
               fontWeight: viewStatus === "today" ? 700 : 400,
             }}>
               <option value="today">🎯 Dnes ({stats.active || 0})</option>
+              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
               <option value="active">📋 Vše aktivní ({stats.active || 0})</option>
               <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
               <option value="done">✓ Splněné ({stats.done || 0})</option>
@@ -7218,107 +7250,6 @@ export default function App() {
             })()}
           </div>
         )}
-
-        {/* Parked tasks section — "Čekám na..." */}
-        {viewStatus === "today" && (() => {
-          const parkedTasks = tasks.filter(t =>
-            t.parkedReason && !isDone(t) && !isDeleted(t) &&
-            (t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name)
-          );
-          if (parkedTasks.length === 0) return null;
-          return (
-            <div style={{ marginTop: "16px", marginBottom: "10px" }}>
-              <div style={{
-                margin: "0 0 8px",
-                padding: "8px 12px",
-                background: `${theme.yellow}10`,
-                border: `2px solid ${theme.yellow}40`,
-                borderRadius: "8px",
-                display: "flex", alignItems: "center", gap: "6px",
-              }}>
-                <span style={{
-                  fontSize: "11px", color: theme.yellow, fontWeight: 800,
-                  textTransform: "uppercase", letterSpacing: "0.3px",
-                }}>
-                  ⏸ Čekám na... ({parkedTasks.length})
-                </span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                {parkedTasks.map(task => (
-                  <div key={task.id}
-                    style={{
-                      background: theme.inputBg,
-                      border: `1px solid ${theme.inputBorder}`,
-                      borderLeft: `4px solid ${theme.yellow}`,
-                      borderRadius: "8px",
-                      padding: "10px 12px",
-                      opacity: 0.85,
-                    }}>
-                    <div style={{
-                      fontSize: "13px", fontWeight: 600, color: theme.text, marginBottom: "4px",
-                    }}>
-                      {task.title}
-                    </div>
-                    <div style={{
-                      fontSize: "12px", color: theme.textSub, marginBottom: "6px",
-                      display: "flex", gap: "6px", alignItems: "center",
-                    }}>
-                      <span>⏸</span>
-                      <span style={{ flex: 1 }}>{task.parkedReason}</span>
-                    </div>
-                    <div style={{
-                      fontSize: "10px", color: theme.textMid, marginBottom: "8px",
-                    }}>
-                      Zaparkováno {task.parkedAt ? formatTimeTrace(task.parkedAt) : ""}
-                      {task.parkedBy && ` — ${task.parkedBy}`}
-                    </div>
-                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                      <button onClick={() => {
-                        // Odstraň parking + otevři Focus s tímto úkolem
-                        updateTask(task.id, {
-                          parkedReason: null,
-                          parkedAt: null,
-                          parkedBy: null,
-                        });
-                        // Po chvilce (až se DB update propíše) otevři Focus
-                        setFocusInitialTask(task.id);
-                        setTimeout(() => setShowFocus(true), 150);
-                      }}
-                        style={{
-                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                          background: theme.green, color: "#fff", border: "none",
-                        }}>
-                        ✓ Pokračovat ve Focusu
-                      </button>
-                      <button onClick={() => {
-                        updateTask(task.id, {
-                          parkedReason: null,
-                          parkedAt: null,
-                          parkedBy: null,
-                        });
-                      }}
-                        style={{
-                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
-                          background: theme.inputBg, color: theme.textSub,
-                          border: `1px solid ${theme.inputBorder}`,
-                        }}>
-                        ↩ Jen odblokovat
-                      </button>
-                      <button onClick={() => { setScrollToTaskId(task.id); }}
-                        style={{
-                          ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
-                          background: theme.inputBg, color: theme.textSub,
-                          border: `1px solid ${theme.inputBorder}`,
-                        }}>
-                        📝 Detail
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
 
         <Legend theme={theme} />
       </div>
