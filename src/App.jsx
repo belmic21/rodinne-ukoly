@@ -2587,6 +2587,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 
     runWithAnimation("complete", () => {
       if (hasUnchecked) {
+        // Pre-update local task with checklist all done — atomicky před status change.
+        // Aby se předešlo race condition: nejprve nastavíme checklist (jeden update),
+        // pak status v separátním kroku kdy už checklist je v DB.
         const now = new Date().toISOString();
         const allDone = task.checklist.map(item => ({
           ...item,
@@ -2596,8 +2599,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         }));
         onUpdate(task.id, { checklist: allDone });
       }
-      if (task.assignTo === "both") onStatusChange(task.id, "done_my");
-      else onStatusChange(task.id, "done");
+      // setTimeout 0 — ensure checklist update commits first, then status changes
+      setTimeout(() => {
+        if (task.assignTo === "both") onStatusChange(task.id, "done_my");
+        else onStatusChange(task.id, "done");
+      }, 0);
     });
   };
 
@@ -4524,15 +4530,27 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
       .sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
   }, [tasks, currentUser.name]);
 
-  // Current task index — start at initialTaskId if provided, otherwise 0
-  const [currentIdx, setCurrentIdx] = useState(() => {
-    if (initialTaskId) {
-      const idx = todaysTasks.findIndex(t => t.id === initialTaskId);
-      return idx >= 0 ? idx : 0;
+  // Current task — track BY ID, not by index, abychom zachovali stejný úkol i když se změní řazení
+  const [currentTaskId, setCurrentTaskId] = useState(() => {
+    if (initialTaskId && todaysTasks.find(t => t.id === initialTaskId)) {
+      return initialTaskId;
     }
-    return 0;
+    return todaysTasks[0]?.id || null;
   });
-  const currentTask = todaysTasks[currentIdx];
+
+  // Computed currentTask + currentIdx (derived from currentTaskId)
+  const currentIdx = useMemo(() => {
+    if (!currentTaskId) return 0;
+    const idx = todaysTasks.findIndex(t => t.id === currentTaskId);
+    return idx >= 0 ? idx : 0;
+  }, [currentTaskId, todaysTasks]);
+  const currentTask = todaysTasks[currentIdx] || null;
+
+  // Wrap setCurrentIdx to keep API compatible — convert idx → id
+  const setCurrentIdx = useCallback((newIdx) => {
+    const target = todaysTasks[newIdx];
+    if (target) setCurrentTaskId(target.id);
+  }, [todaysTasks]);
 
   // Timer state (per current task, resets when switching)
   const [seconds, setSeconds] = useState(0);
@@ -5818,6 +5836,10 @@ function Snackbar({ message, onUndo, visible, theme }) {
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
+  // Echo prevention — sleduje časy posledních lokálních editů taskID
+  // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
+  // aby nepřepisovaly náš čerstvý lokální stav.
+  const localEditsRef = useRef({}); // { [taskId]: timestamp }
   const [comments, setComments] = useState([]);
   const [users, setUsers] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -6010,6 +6032,10 @@ export default function App() {
         if (payload.eventType === "INSERT") {
           setTasks(prev => prev.find(t => t.id === payload.new.id) ? prev : [dbToTask(payload.new), ...prev]);
         } else if (payload.eventType === "UPDATE") {
+          // Echo prevention — pokud jsme task editovali v posledních 1500ms,
+          // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
+          const lastEdit = localEditsRef.current[payload.new.id] || 0;
+          if (Date.now() - lastEdit < 1500) return;
           setTasks(prev => prev.map(t => t.id === payload.new.id ? dbToTask(payload.new) : t));
         } else if (payload.eventType === "DELETE") {
           setTasks(prev => prev.filter(t => t.id !== payload.old.id));
@@ -6065,6 +6091,8 @@ export default function App() {
   }, [undoState]);
 
   const withUndo = useCallback((message, taskId, updater) => {
+    // Echo prevention
+    localEditsRef.current[taskId] = Date.now();
     setTasks(prev => {
       const next = updater(prev);
       const updated = next.find(t => t.id === taskId);
@@ -6166,6 +6194,8 @@ export default function App() {
   }, [currentUser]);
 
   const updateTask = useCallback(async (taskId, patch) => {
+    // Echo prevention — označ tento task jako právě upravený
+    localEditsRef.current[taskId] = Date.now();
     let updatedTask = null;
     let originalTask = null;
     setTasks(prev => {
