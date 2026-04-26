@@ -2378,7 +2378,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus, justCreated }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -2668,23 +2668,28 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-      background: actionAnim ? `${animColor}15` : cardBackground,
+      background: actionAnim ? `${animColor}15`
+        : recentlyAdded ? `${theme.green}${Math.round((1 - fadeProgress) * 0x14).toString(16).padStart(2, "0")}`
+        : cardBackground,
       border: `1px solid ${actionAnim ? animColor : cardBorderColor}`,
       borderRadius: "12px",
-      borderLeft: `5px solid ${actionAnim ? animColor : leftBorderColor}`,
+      borderLeft: `5px solid ${actionAnim ? animColor : recentlyAdded ? theme.green : leftBorderColor}`,
       padding: "8px 11px",
-      opacity: actionAnim ? 1 : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : 1),
+      opacity: actionAnim ? 1
+        : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : (recentlyAdded ? 1 - fadeProgress * 0.4 : 1)),
       cursor: "pointer",
       position: "relative",
       animation: actionAnim ? "actionCardGlow 0.55s ease-out"
-        : justCreated ? "newTaskHighlight 1.5s ease-out"
+        : recentlyAdded ? "newTaskHighlight 1.5s ease-out"
         : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
       transform: `translateX(${swipeX}px) ${actionAnim ? "scale(1.02)" : ""}`,
       transition: isSwiping ? "none" : "transform 0.25s ease, all 0.2s",
-      boxShadow: actionAnim ? `0 0 30px ${animColor}60, 0 4px 16px ${animColor}45` : "none",
-      touchAction: "pan-y",  // allow vertical scroll, our JS handles horizontal swipe
+      boxShadow: actionAnim ? `0 0 30px ${animColor}60, 0 4px 16px ${animColor}45`
+        : recentlyAdded ? `0 2px 8px ${theme.green}${Math.round((1 - fadeProgress) * 0x40).toString(16).padStart(2, "0")}`
+        : "none",
+      touchAction: "pan-y",
       userSelect: "none",
       WebkitUserSelect: "none",
     }}>
@@ -3225,23 +3230,26 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   return (
     <div style={{ marginBottom: "14px" }}>
-      {/* Always visible quick input */}
+      {/* Always visible quick input. V complex módu se pole stane "hint" - uživatel zadá název dole.  */}
       <div style={{
         ...cardStyle(theme), padding: "6px 8px",
         display: "flex", gap: "6px", alignItems: "center",
+        opacity: (showFull && type === "complex") ? 0.55 : 1,
       }}>
         <span style={{ fontSize: "16px", color: theme.accent, paddingLeft: "4px" }}>+</span>
         <input
           ref={inputRef}
           type="text"
-          placeholder="Napiš úkol a stiskni Enter..."
+          placeholder={(showFull && type === "complex") ? "↓ Zadej název dole" : "Napiš úkol a stiskni Enter..."}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (showFull) fullSubmit(); else quickSubmit(); } }}
+          disabled={showFull && type === "complex"}
           style={{
             background: "transparent", border: "none", color: theme.text,
             padding: "8px 4px", fontSize: "14px", fontFamily: FONT,
             outline: "none", flex: 1, width: "100%",
+            cursor: (showFull && type === "complex") ? "not-allowed" : "text",
           }}
         />
         {/* Confirm button — visible only when text is entered.
@@ -3910,6 +3918,40 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             ))}
           </div>
 
+          {/* Title section — visible jen v complex mode (jednoduchý používá top input) */}
+          {type === "complex" && (
+            <div style={{
+              marginBottom: "10px", padding: "10px",
+              background: `${theme.accent}08`,
+              borderRadius: "8px",
+              border: `2px solid ${theme.accent}30`,
+            }}>
+              <div style={{
+                ...labelStyle, fontSize: "10px", fontWeight: 800,
+                color: theme.accent, textTransform: "uppercase",
+                letterSpacing: "0.5px", marginBottom: "5px",
+                display: "flex", alignItems: "center", gap: "4px",
+              }}>
+                📝 Název úkolu
+              </div>
+              <input
+                type="text"
+                placeholder="Např. Nákup potravin"
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) fullSubmit(); }}
+                autoFocus
+                style={{
+                  ...inputStyle(theme),
+                  fontSize: "15px", fontWeight: 600,
+                  background: theme.card,
+                  border: `1px solid ${theme.accent}40`,
+                  padding: "10px 12px",
+                }}
+              />
+            </div>
+          )}
+
           <textarea placeholder="Poznámka..." value={note} onChange={e => setNote(e.target.value)}
             rows={2} style={{
               ...inputStyle(theme), fontSize: "13px", marginBottom: "8px",
@@ -3922,9 +3964,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <div style={{
               marginBottom: "10px", padding: "10px",
               background: theme.inputBg, borderRadius: "8px",
-              border: `1px solid ${theme.inputBorder}`,
+              border: `2px solid ${theme.inputBorder}`,
             }}>
-              <div style={labelStyle}>Checklist — přidej položky</div>
+              <div style={{
+                ...labelStyle, fontSize: "10px", fontWeight: 800,
+                color: theme.textSub, textTransform: "uppercase",
+                letterSpacing: "0.5px", marginBottom: "8px",
+                display: "flex", alignItems: "center", gap: "4px",
+              }}>
+                ☐ Položky checklistu
+              </div>
               {initialChecklist.map(item => (
                 <div key={item.id} style={{
                   display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px",
@@ -5720,7 +5769,11 @@ export default function App() {
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
   const [scrollToTaskId, setScrollToTaskId] = useState(null);
-  const [justCreatedTaskId, setJustCreatedTaskId] = useState(null); // task ID that was just added — for highlight animation
+  // Recently added tasks — mapa { taskId: addedAtTimestamp }
+  // Tyto úkoly se zobrazí v sekci "✨ Právě přidáno" nahoře po dobu 5 minut.
+  // Vizuálně postupně blednou (fade-out 5 minut).
+  const [recentlyAdded, setRecentlyAdded] = useState({});
+  const [, setRecentTick] = useState(0); // Force re-render every 30s for fade animation
 
   // Clear scrollToTaskId after a short delay so autoOpen doesn't re-trigger
   useEffect(() => {
@@ -5962,9 +6015,8 @@ export default function App() {
     setTasks(prev => [task, ...prev]);
     await apiCreateTask(task);
     setPendingCount(getOfflineQueue().length);
-    // Visual feedback — highlight the new task briefly
-    setJustCreatedTaskId(task.id);
-    setTimeout(() => setJustCreatedTaskId(null), 2500);
+    // Označ úkol jako "právě přidaný" — bude v sekci ✨ Právě přidáno po 5 minut
+    setRecentlyAdded(prev => ({ ...prev, [task.id]: Date.now() }));
     if (task.assignTo !== "self") {
       notify(`📋 Nový od ${task.createdBy}`, task.title);
       // Trigger push notification to other users
@@ -6161,6 +6213,27 @@ export default function App() {
     return () => clearInterval(cleanup);
   }, [tasks]);
 
+  // Tick každých 30s — pro fade animaci recently added úkolů (5 min retention)
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const now = Date.now();
+      const fiveMinAgo = now - 5 * 60 * 1000;
+      // Vyřaď úkoly starší než 5 min
+      setRecentlyAdded(prev => {
+        const next = {};
+        let changed = false;
+        for (const [id, ts] of Object.entries(prev)) {
+          if (ts > fiveMinAgo) next[id] = ts;
+          else changed = true;
+        }
+        return changed ? next : prev;
+      });
+      // Force re-render pro fade opacity
+      setRecentTick(t => t + 1);
+    }, 30000); // 30s
+    return () => clearInterval(tick);
+  }, []);
+
   const permanentlyDeleteTask = useCallback(async (taskId) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
     await supabase.from("tasks").delete().eq("id", taskId);
@@ -6279,8 +6352,8 @@ export default function App() {
     let result = tasks;
 
     // ═══ VISIBILITY FILTER (per-user privacy) ═══
-    // Admin vidí všechno. Ostatní uživatelé vidí pouze:
-    //   - úkoly které vytvořili sami
+    // Admin vidí vše. Ostatní uživatelé vidí pouze:
+    //   - úkoly které sami vytvořili
     //   - úkoly kde jsou v assignedTo[]
     if (!currentUser.admin) {
       result = result.filter(t =>
@@ -6391,23 +6464,43 @@ export default function App() {
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
   const renderItems = useMemo(() => {
     if (viewStatus !== "active" && viewStatus !== "today") {
-      // Other views: just tasks
       return filteredTasks.map(task => ({ type: "task", task, key: task.id }));
     }
 
     const items = [];
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
 
-    // Active tasks first, then done, then deleted
     const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t));
     const doneTasks = filteredTasks.filter(t => isDone(t));
     const deletedTasks = filteredTasks.filter(t => isDeleted(t));
 
-    // Push active tasks
-    activeTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+    // ═══ Recently added (last 5 min) ═══
+    // Úkoly z mapy `recentlyAdded` (přidané v této session) → na vrchol s fade efektem.
+    // Po 5 min se odstraní z mapy a vrátí se mezi ostatní podle defaultní logiky.
+    const now = Date.now();
+    const fiveMinMs = 5 * 60 * 1000;
+    const recentList = activeTasks
+      .filter(t => recentlyAdded[t.id] !== undefined)
+      .sort((a, b) => (recentlyAdded[b.id] || 0) - (recentlyAdded[a.id] || 0));
 
-    // For each active task, collect its recently-done checklist items (done within 24h)
-    // They go into the "Dnes hotovo" section as progress cards
+    const recentIds = new Set(recentList.map(t => t.id));
+    const remainingActive = activeTasks.filter(t => !recentIds.has(t.id));
+
+    if (recentList.length > 0) {
+      items.push({ type: "section_header_recent", key: "section-recent", count: recentList.length });
+      recentList.forEach(task => {
+        const addedAt = recentlyAdded[task.id] || now;
+        const ageMs = now - addedAt;
+        // fadeProgress 0 → čerstvý (plné zvýraznění), 1 → starý (žádné zvýraznění)
+        const fadeProgress = Math.min(ageMs / fiveMinMs, 1);
+        items.push({ type: "task", task, key: task.id, recentlyAdded: true, fadeProgress });
+      });
+      items.push({ type: "section_divider", key: "section-divider-recent" });
+    }
+
+    remainingActive.forEach(task => items.push({ type: "task", task, key: task.id }));
+
+    // Progress + done items
     const progressCards = [];
     activeTasks.forEach(task => {
       (task.checklist || []).forEach(item => {
@@ -6423,7 +6516,6 @@ export default function App() {
       });
     });
 
-    // Done tasks with sortTime
     const doneCards = doneTasks.map(task => ({
       type: "task",
       task,
@@ -6431,15 +6523,13 @@ export default function App() {
       sortTime: task.completedAt ? new Date(task.completedAt).getTime() : 0,
     }));
 
-    // Merge progress + done, sort newest first (by sortTime)
     const combined = [...progressCards, ...doneCards].sort((a, b) => b.sortTime - a.sortTime);
     items.push(...combined);
 
-    // Finally deleted
     deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
 
     return items;
-  }, [filteredTasks, viewStatus]);
+  }, [filteredTasks, viewStatus, currentUser, recentlyAdded]);
 
   // Helper: apply all filters EXCEPT the one being computed for.
   // `skip` parameter: "scope" | "status" | "category" | "priority" — omits that filter from counting.
@@ -6799,18 +6889,42 @@ export default function App() {
           />
 
           {/* Search */}
-          <div style={{ marginBottom: "10px" }}>
+          <div style={{ marginBottom: "10px", position: "relative" }}>
+            <span style={{
+              position: "absolute", left: "12px", top: "50%",
+              transform: "translateY(-50%)",
+              fontSize: "15px", pointerEvents: "none",
+              color: searchQuery ? theme.accent : theme.textSub,
+              zIndex: 1,
+            }}>🔍</span>
             <input
               type="text"
-              placeholder="🔍 Hledat v úkolech..."
+              placeholder="Hledat v úkolech..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               style={{
-                ...inputStyle(theme), fontSize: "13px", padding: "8px 12px",
+                ...inputStyle(theme), fontSize: "13px",
+                padding: "11px 12px 11px 38px",
                 background: searchQuery ? theme.accentSoft : theme.inputBg,
-                border: `1px solid ${searchQuery ? theme.accentBorder : theme.inputBorder}`,
+                border: `2px solid ${searchQuery ? theme.accent : theme.inputBorder}`,
+                fontWeight: 500,
+                boxShadow: searchQuery ? `0 0 0 3px ${theme.accent}20` : `inset 0 1px 2px rgba(0,0,0,0.04)`,
               }}
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                title="Vymazat"
+                style={{
+                  position: "absolute", right: "8px", top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none", border: "none",
+                  fontSize: "16px", cursor: "pointer",
+                  color: theme.textMid, padding: "4px 8px",
+                }}>
+                ×
+              </button>
+            )}
           </div>
 
           {/* Compact filters — one row */}
@@ -6932,6 +7046,42 @@ export default function App() {
               let passedUnread = false;
 
               return renderItems.map(item => {
+                // Section header: "Právě přidáno"
+                if (item.type === "section_header_recent") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "4px 0 8px",
+                      padding: "8px 12px",
+                      background: `${theme.green}10`,
+                      border: `2px solid ${theme.green}`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.green, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.3px",
+                      }}>
+                        ✨ Právě přidáno ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        zmizí během 5 min
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_divider") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "10px 0",
+                      height: "1px",
+                      background: theme.cardBorder,
+                    }} />
+                  );
+                }
+
                 const task = item.task;
                 const isUnread = task.seenBy &&
                   !task.seenBy.includes(currentUser.name) &&
@@ -7045,7 +7195,8 @@ export default function App() {
                       onMarkCommentsSeen={markCommentsSeen}
                       autoOpen={scrollToTaskId === task.id}
                       progressItem={item.type === "progress" ? item.checklistItem : null}
-                      justCreated={justCreatedTaskId === task.id}
+                      recentlyAdded={item.recentlyAdded === true}
+                      fadeProgress={item.fadeProgress || 0}
                       onStartFocus={(taskId) => {
                         setFocusInitialTask(taskId);
                         setShowFocus(true);
