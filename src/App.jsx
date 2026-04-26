@@ -6708,7 +6708,7 @@ export default function App() {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {users.filter(u => u.name !== currentUser.name).map(u =>
+          {currentUser.admin && users.filter(u => u.name !== currentUser.name).map(u =>
             unreadCounts[u.name] > 0 ? (
               <button key={u.name}
                 onClick={() => setFilter(`person:${u.name}`)}
