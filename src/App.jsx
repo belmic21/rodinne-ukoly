@@ -3752,7 +3752,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -3926,25 +3926,49 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
-      {/* ═══ PREDICTIONS CHIPS — pod inputem, jen když uživatel zrovna píše a má krátký text ═══ */}
+      {/* ═══ PREDICTIONS CHIPS — pod inputem, live filter ═══ */}
       {(() => {
         const trimmed = text.trim();
-        // Show predictions when:
-        //   - input is empty (suggestions for first verb / repeated phrase)
-        //   - OR user typed only 1 word (max 12 chars) — suggest completions
-        const showPredictions = !showFull && (trimmed.length === 0 || (trimmed.length <= 12 && !trimmed.includes(" ")));
+        // Show predictions when input is empty, or user typed something short (max 15 chars, 1 word)
+        const showPredictions = !showFull && (trimmed.length === 0 || (trimmed.length <= 15 && !trimmed.includes(" ")));
         if (!showPredictions) return null;
         const predictions = getPredictions(allTasks || [], currentUser.name);
-        if (predictions.topVerbs.length === 0 && predictions.topPhrases.length === 0) return null;
 
-        // Filter — pokud uživatel píše, filtruj predikce které odpovídají
-        const lower = trimmed.toLowerCase();
-        const verbsToShow = trimmed.length > 0
-          ? predictions.topVerbs.filter(v => v.label.toLowerCase().startsWith(lower))
-          : predictions.topVerbs;
-        const phrasesToShow = trimmed.length > 0
-          ? predictions.topPhrases.filter(p => p.title.toLowerCase().includes(lower))
-          : predictions.topPhrases;
+        // Normalize search input
+        const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const qNorm = norm(trimmed);
+
+        let verbsToShow, phrasesToShow;
+
+        if (trimmed.length === 0) {
+          // Empty input — show TOP from history
+          verbsToShow = predictions.topVerbs;
+          phrasesToShow = predictions.topPhrases;
+        } else {
+          // ─── LIVE FILTER ───
+          // Verbs: vezmi CELÝ slovník TAGS a vyfiltruj ty co matchují
+          // Klíčové slovo nebo label začíná na "za"
+          verbsToShow = TAGS.filter(tag => {
+            if (norm(tag.label).startsWith(qNorm)) return true;
+            return tag.keywords.some(kw => norm(kw).startsWith(qNorm));
+          }).map(tag => ({ ...tag, count: 0 }));
+          // Phrases: jakákoli fráze co OBSAHUJE substring (ne jen začíná)
+          phrasesToShow = predictions.topPhrases.filter(p => norm(p.title).includes(qNorm));
+          // Plus přidej i jednou-použité úkoly (pro live search to dává smysl)
+          if (phrasesToShow.length < 4 && allTasks) {
+            const already = new Set(phrasesToShow.map(p => norm(p.title)));
+            const onceUsed = (allTasks || [])
+              .filter(t =>
+                t.status !== "deleted" &&
+                (t.createdBy === currentUser.name || t.assignedTo?.includes(currentUser.name)) &&
+                norm(t.title).includes(qNorm) &&
+                !already.has(norm(t.title))
+              )
+              .slice(0, 4 - phrasesToShow.length)
+              .map(t => ({ title: t.title, count: 1, lastUsed: t.createdAt ? new Date(t.createdAt).getTime() : 0 }));
+            phrasesToShow = [...phrasesToShow, ...onceUsed];
+          }
+        }
 
         if (verbsToShow.length === 0 && phrasesToShow.length === 0) return null;
 
@@ -4269,8 +4293,10 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           </div>
         );
 
+        const visibleCustomLists = customLists.filter(l => l.is_shared || l.created_by_user === currentUser.name);
+
         const tagDropdown = !isTyping && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "300px", overflowY: "auto" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "360px", overflowY: "auto" }}>
             {/* "All" reset */}
             <button onClick={() => {
               onTagFilterChange && onTagFilterChange("all");
@@ -4289,9 +4315,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <span style={{ fontSize: "10px", color: theme.textMid }}>{tagCounts.all}</span>
               )}
             </button>
+
+            {/* AUTO-DETEKCE sekce */}
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              padding: "8px 10px 4px",
+            }}>🤖 Auto-detekce</div>
             {TAGS.map(tag => {
               const count = tagCounts?.[tag.id] || 0;
-              if (count === 0 && tagFilter !== tag.id) return null; // skip empty tags
+              if (count === 0 && tagFilter !== tag.id) return null;
               const isSet = tagFilter === tag.id;
               return (
                 <button key={tag.id}
@@ -4315,6 +4348,62 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 </button>
               );
             })}
+
+            {/* MOJE SEZNAMY sekce */}
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              padding: "8px 10px 4px",
+            }}>📁 Moje seznamy</div>
+            {visibleCustomLists.length === 0 && (
+              <div style={{
+                padding: "6px 10px", fontSize: "11px", color: theme.textDim,
+                fontStyle: "italic",
+              }}>Zatím žádné — vytvoř první níže</div>
+            )}
+            {visibleCustomLists.map(list => {
+              const filterValue = `list:${list.id}`;
+              const isSet = tagFilter === filterValue;
+              return (
+                <button key={list.id}
+                  onClick={() => {
+                    onTagFilterChange && onTagFilterChange(isSet ? "all" : filterValue);
+                    setOpenSegment(null);
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: isSet ? `${list.color}20` : "transparent",
+                    color: isSet ? list.color : theme.text,
+                    border: "none", textAlign: "left", borderRadius: "6px",
+                    display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ width: "16px" }}>{list.emoji || "📁"}</span>
+                  <span style={{ flex: 1 }}>{list.name}</span>
+                  {!list.is_shared && (
+                    <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
+                  )}
+                </button>
+              );
+            })}
+
+            {/* + Vytvořit nový seznam */}
+            <button onClick={() => {
+              setOpenSegment(null);
+              onCreateList && onCreateList();
+            }} style={{
+              ...buttonStyle(),
+              padding: "8px 10px", fontSize: "12px",
+              background: theme.inputBg,
+              color: theme.accent, fontWeight: 600,
+              border: `1px dashed ${theme.accent}50`, borderRadius: "6px",
+              display: "flex", alignItems: "center", gap: "8px",
+              marginTop: "4px",
+            }}>
+              <span>+</span><span>Vytvořit nový seznam</span>
+            </button>
           </div>
         );
 
@@ -4402,15 +4491,26 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
                 theme.accent, !!currentPersonLabel, perDropdown
               )}
-              {!isTyping && (
-                renderSegment("tag",
+              {!isTyping && (() => {
+                let activeLabel = "Tag";
+                if (tagFilter !== "all") {
+                  if (tagFilter.startsWith("list:")) {
+                    const listId = tagFilter.slice(5);
+                    const list = customLists.find(l => l.id === listId);
+                    if (list) {
+                      activeLabel = <><span>{list.emoji || "📁"}</span><span>{list.name}</span></>;
+                    }
+                  } else if (getTagDef(tagFilter)) {
+                    const td = getTagDef(tagFilter);
+                    activeLabel = <><span>{td.emoji}</span><span>{td.label}</span></>;
+                  }
+                }
+                return renderSegment("tag",
                   <><span>🏷</span><span>Tag</span></>,
-                  tagFilter !== "all" && getTagDef(tagFilter)
-                    ? <><span>{getTagDef(tagFilter).emoji}</span><span>{getTagDef(tagFilter).label}</span></>
-                    : "Tag",
+                  activeLabel,
                   theme.purple, tagFilter !== "all", tagDropdown
-                )
-              )}
+                );
+              })()}
 
               {/* Spacer */}
               <span style={{ flex: 1 }} />
@@ -4978,6 +5078,259 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 /* ═══════════════════════════════════════════════════════
    STATISTICS
    ═══════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════
+   CREATE LIST MODAL — modal pro vytvoření vlastního seznamu
+   ═══════════════════════════════════════════════════════ */
+
+function CreateListModal({ theme, currentUser, onClose, onCreate }) {
+  const [name, setName] = useState("");
+  const [emoji, setEmoji] = useState("📁");
+  const [color, setColor] = useState("#3b82f6");
+  const [isShared, setIsShared] = useState(true);
+  const [creating, setCreating] = useState(false);
+
+  const EMOJIS = ["📁", "🏗", "🌴", "🏠", "💼", "🎓", "🎨", "🚗", "💪", "🍽", "🎁", "📚"];
+  const COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#6366f1"];
+
+  const handleCreate = async () => {
+    if (!name.trim()) return;
+    setCreating(true);
+    try {
+      const newList = {
+        name: name.trim(),
+        emoji,
+        color,
+        is_shared: isShared,
+        created_by_user: currentUser.name,
+      };
+      const { data, error } = await supabase.from("custom_lists").insert([newList]).select().single();
+      if (error) throw error;
+      onCreate(data);
+      onClose();
+    } catch (e) {
+      console.error("Vytvoření seznamu selhalo:", e);
+      alert("Nepodařilo se vytvořit seznam: " + (e.message || "neznámá chyba"));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1100, display: "flex", justifyContent: "center", alignItems: "center",
+      animation: "slideUp 0.2s",
+      padding: "16px",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "400px",
+        background: theme.bg, borderRadius: "12px",
+        padding: "20px",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.3)",
+        display: "flex", flexDirection: "column", gap: "14px",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700 }}>
+            {emoji} Nový seznam
+          </h2>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "0 4px",
+          }}>×</button>
+        </div>
+
+        {/* Název */}
+        <div>
+          <label style={{ fontSize: "11px", fontWeight: 700, color: theme.textMid, textTransform: "uppercase" }}>
+            Název
+          </label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)}
+            placeholder="Např. Stavba, Dovolená..."
+            autoFocus
+            style={{ ...inputStyle(theme), marginTop: "4px", padding: "8px 12px", fontSize: "13px" }} />
+        </div>
+
+        {/* Emoji */}
+        <div>
+          <label style={{ fontSize: "11px", fontWeight: 700, color: theme.textMid, textTransform: "uppercase" }}>
+            Ikona
+          </label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
+            {EMOJIS.map(e => (
+              <button key={e} onClick={() => setEmoji(e)} style={{
+                width: "34px", height: "34px",
+                border: `2px solid ${emoji === e ? color : theme.cardBorder}`,
+                background: emoji === e ? `${color}15` : theme.inputBg,
+                borderRadius: "8px", cursor: "pointer",
+                fontSize: "16px",
+              }}>{e}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Color */}
+        <div>
+          <label style={{ fontSize: "11px", fontWeight: 700, color: theme.textMid, textTransform: "uppercase" }}>
+            Barva
+          </label>
+          <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+            {COLORS.map(c => (
+              <button key={c} onClick={() => setColor(c)} style={{
+                width: "28px", height: "28px",
+                background: c, borderRadius: "50%",
+                border: color === c ? `3px solid ${theme.text}` : `1px solid ${theme.cardBorder}`,
+                cursor: "pointer",
+              }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Sdílení */}
+        <div>
+          <label style={{ fontSize: "11px", fontWeight: 700, color: theme.textMid, textTransform: "uppercase" }}>
+            Sdílení
+          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+            <button onClick={() => setIsShared(true)} style={{
+              ...buttonStyle(),
+              padding: "8px 12px", fontSize: "12px", textAlign: "left",
+              background: isShared ? `${color}15` : theme.inputBg,
+              color: isShared ? color : theme.text,
+              border: `1px solid ${isShared ? color : theme.cardBorder}`,
+              fontWeight: 600,
+            }}>👥 Sdílený — vidí všichni v rodině</button>
+            <button onClick={() => setIsShared(false)} style={{
+              ...buttonStyle(),
+              padding: "8px 12px", fontSize: "12px", textAlign: "left",
+              background: !isShared ? `${color}15` : theme.inputBg,
+              color: !isShared ? color : theme.text,
+              border: `1px solid ${!isShared ? color : theme.cardBorder}`,
+              fontWeight: 600,
+            }}>🔒 Soukromý — jen já</button>
+          </div>
+        </div>
+
+        {/* Submit */}
+        <button onClick={handleCreate} disabled={!name.trim() || creating} style={{
+          ...buttonStyle(),
+          padding: "10px", fontSize: "13px", fontWeight: 700,
+          background: name.trim() ? color : theme.inputBg,
+          color: name.trim() ? "#fff" : theme.textDim,
+          border: "none",
+          marginTop: "4px",
+          cursor: name.trim() && !creating ? "pointer" : "default",
+        }}>
+          {creating ? "Vytvářím..." : "Vytvořit seznam"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   MORE FILTERS SHEET — full-screen pro méně používané filtry
+   ═══════════════════════════════════════════════════════ */
+
+function MoreFiltersSheet({ theme, onClose, createdWhenFilter, onCreatedWhenFilterChange, createdByFilter, onCreatedByFilterChange, users, currentUser }) {
+  const whenOptions = [
+    { value: "all", label: "Všechny" },
+    { value: "today", label: "🆕 Dnes přidáno" },
+    { value: "yesterday", label: "Včera přidáno" },
+    { value: "week", label: "Tento týden" },
+    { value: "month", label: "Tento měsíc" },
+    { value: "older", label: "Starší" },
+  ];
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-end",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        background: theme.bg, borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
+        overflow: "auto",
+      }}>
+        <div style={{
+          position: "sticky", top: 0, zIndex: 2, background: theme.bg,
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700 }}>⋯ Více filtrů</h2>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "4px 8px",
+          }}>×</button>
+        </div>
+        <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* Přidáno kdy */}
+          <div>
+            <div style={{
+              fontSize: "11px", fontWeight: 700, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+            }}>📅 Přidáno kdy</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              {whenOptions.map(opt => (
+                <button key={opt.value}
+                  onClick={() => onCreatedWhenFilterChange(opt.value)}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "6px 12px", fontSize: "12px",
+                    background: createdWhenFilter === opt.value ? theme.accentSoft : "transparent",
+                    color: createdWhenFilter === opt.value ? theme.accent : theme.text,
+                    border: `1px solid ${createdWhenFilter === opt.value ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "12px", fontWeight: 600,
+                  }}>{opt.label}</button>
+              ))}
+            </div>
+          </div>
+          {/* Kdo přidal */}
+          <div>
+            <div style={{
+              fontSize: "11px", fontWeight: 700, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+            }}>✏️ Kdo přidal</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              <button onClick={() => onCreatedByFilterChange("all")} style={{
+                ...buttonStyle(),
+                padding: "6px 12px", fontSize: "12px",
+                background: createdByFilter === "all" ? theme.accentSoft : "transparent",
+                color: createdByFilter === "all" ? theme.accent : theme.text,
+                border: `1px solid ${createdByFilter === "all" ? theme.accent : theme.inputBorder}`,
+                borderRadius: "12px", fontWeight: 600,
+              }}>Všichni</button>
+              {users.map(u => (
+                <button key={u.name}
+                  onClick={() => onCreatedByFilterChange(u.name)}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "6px 12px", fontSize: "12px",
+                    background: createdByFilter === u.name ? theme.accentSoft : "transparent",
+                    color: createdByFilter === u.name ? theme.accent : theme.text,
+                    border: `1px solid ${createdByFilter === u.name ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "12px", fontWeight: 600,
+                  }}>{u.name === currentUser.name ? "Já" : u.name}</button>
+              ))}
+            </div>
+          </div>
+          {/* Reset all */}
+          {(createdWhenFilter !== "all" || createdByFilter !== "all") && (
+            <button onClick={() => {
+              onCreatedWhenFilterChange("all");
+              onCreatedByFilterChange("all");
+            }} style={{
+              ...buttonStyle(),
+              padding: "10px", fontSize: "12px", fontWeight: 600,
+              background: theme.inputBg, color: theme.textSub,
+              border: `1px solid ${theme.inputBorder}`,
+            }}>Resetovat všechny filtry</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════
    STATS SHEET — full-screen modal s detailními statistikami
@@ -5845,10 +6198,11 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
   const timerRef = useRef(null);
 
   useEffect(() => {
-    // Reset timer when switching task
+    // Reset timer when switching task — ALE NESPOUŠTÍME automaticky.
+    // Uživatel preferuje ruční start (změna v Balíčku B).
     setSeconds(0);
-    setTimerRunning(timerEnabled);
-  }, [currentTask?.id, timerEnabled]);
+    setTimerRunning(false);
+  }, [currentTask?.id]);
 
   useEffect(() => {
     if (timerRunning && timerEnabled) {
@@ -6081,40 +6435,30 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
 
       {/* Main content */}
       <div style={{ flex: 1, padding: "16px", maxWidth: "700px", margin: "0 auto", width: "100%" }}>
-        {/* Timer */}
+        {/* Timer — maličký v rohu, ručně spouštím */}
         {timerEnabled && (
-          <div style={{
-            padding: "12px", marginBottom: "12px",
-            background: timerRunning ? `${theme.green}15` : theme.inputBg,
-            border: `2px solid ${timerRunning ? theme.green : theme.inputBorder}`,
-            borderRadius: "10px",
-            display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
-          }}>
-            <span style={{
-              fontSize: "28px", fontWeight: 800, fontVariantNumeric: "tabular-nums",
+          <button
+            onClick={() => setTimerRunning(r => !r)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setSeconds(0);
+              setTimerRunning(false);
+            }}
+            title={timerRunning ? "Klik = pauza, pravé tlačítko = reset" : "Klik = start, pravé tlačítko = reset"}
+            style={{
+              position: "fixed", top: "10px", right: "12px", zIndex: 100,
+              ...buttonStyle(),
+              padding: "5px 10px", fontSize: "12px", fontWeight: 700,
+              fontVariantNumeric: "tabular-nums",
+              background: timerRunning ? `${theme.green}15` : theme.inputBg,
               color: timerRunning ? theme.green : theme.textSub,
-              letterSpacing: "1px",
+              border: `1px solid ${timerRunning ? theme.green : theme.inputBorder}`,
+              borderRadius: "16px",
+              cursor: "pointer", letterSpacing: "0.5px",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
             }}>
-              ⏱ {formatTime(seconds)}
-            </span>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <button onClick={() => setTimerRunning(!timerRunning)} style={{
-                ...buttonStyle(), padding: "6px 12px", fontSize: "12px",
-                background: timerRunning ? theme.inputBg : theme.green,
-                color: timerRunning ? theme.textSub : "#fff",
-                border: "none",
-              }}>
-                {timerRunning ? "⏸ Pauza" : "▶ Start"}
-              </button>
-              <button onClick={() => { setSeconds(0); setTimerRunning(false); }} style={{
-                ...buttonStyle(), padding: "6px 10px", fontSize: "12px",
-                background: "transparent", color: theme.textSub,
-                border: `1px solid ${theme.inputBorder}`,
-              }}>
-                ⟲ Reset
-              </button>
-            </div>
-          </div>
+            {timerRunning ? "⏱" : "▶"} {formatTime(seconds)}
+          </button>
         )}
 
         {/* Task card */}
@@ -6914,64 +7258,48 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
     return new Date(iso).toLocaleDateString("cs-CZ", { day: "numeric", month: "short" });
   };
 
-  // Compact header — always visible
-  return (
-    <div style={{
-      ...cardStyle(theme),
-      marginBottom: "14px",
-      overflow: "hidden",
-      animation: hasUpdates ? "slideUp 0.3s" : "none",
-      borderColor: hasUpdates ? theme.accent + "40" : theme.cardBorder,
-      borderWidth: hasUpdates ? "2px" : "1px",
-      boxShadow: hasUpdates ? `0 0 0 3px ${theme.accent}10` : "none",
-    }}>
-      <button
-        onClick={onToggle}
-        style={{
-          ...buttonStyle(),
-          width: "100%", padding: "10px 14px",
-          background: "transparent", color: theme.text,
-          border: "none", textAlign: "left",
-          display: "flex", alignItems: "center", gap: "10px",
-          fontSize: "13px", fontWeight: 600,
-          cursor: hasUpdates ? "pointer" : "default",
-        }}
-        disabled={!hasUpdates}>
-        {/* Bell icon with badge */}
-        <span style={{ position: "relative", fontSize: "17px" }}>
-          🔔
-          {hasUpdates && (
-            <span style={{
-              position: "absolute", top: "-6px", right: "-8px",
-              background: theme.red, color: "#fff",
-              fontSize: "9px", fontWeight: 800,
-              padding: "1px 5px", borderRadius: "8px",
-              minWidth: "16px", textAlign: "center",
-              animation: "pulse 1.5s infinite",
-            }}>
-              {totalCount}
-            </span>
-          )}
-        </span>
-        <span style={{ flex: 1 }}>
-          {hasUpdates
-            ? `${totalCount} ${totalCount === 1 ? "nová zpráva" : totalCount < 5 ? "nové zprávy" : "nových zpráv"} v ${taskCount} ${taskCount === 1 ? "úkolu" : taskCount < 5 ? "úkolech" : "úkolech"}`
-            : "Žádné nové zprávy"
-          }
-        </span>
-        {hasUpdates && (
-          <span style={{ fontSize: "10px", color: theme.textSub }}>
-            {open ? "▲" : "▼"}
-          </span>
-        )}
-      </button>
+  // Sheet UI — full-screen modal
+  // Pokud zavřený nebo žádné zprávy, nezobrazujeme nic v hlavní obrazovce.
+  if (!open) return null;
 
-      {/* Expanded list */}
-      {open && hasUpdates && (
+  return (
+    <div onClick={onToggle} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-end",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        background: theme.bg, borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
+        overflow: "auto",
+        boxShadow: "0 -8px 24px rgba(0,0,0,0.2)",
+      }}>
+        {/* Header */}
         <div style={{
-          borderTop: `1px solid ${theme.cardBorder}`,
-          animation: "slideUp 0.2s",
+          position: "sticky", top: 0, zIndex: 2, background: theme.bg,
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: theme.text }}>
+            🔔 Zprávy {hasUpdates && `(${totalCount})`}
+          </h2>
+          <button onClick={onToggle} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "4px 8px",
+          }}>×</button>
+        </div>
+
+        {!hasUpdates && (
+          <div style={{
+            textAlign: "center", color: theme.textMid,
+            padding: "60px 20px", fontSize: "14px",
+          }}>
+            Žádné nové zprávy 🎉
+          </div>
+        )}
+
+        {hasUpdates && (
+        <div>
           {Array.from(taskIdsWithUpdates).map(taskId => {
             const task = tasks.find(t => t.id === taskId);
             if (!task) return null;
@@ -7171,19 +7499,22 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
           })}
 
           {/* Mark all as seen */}
-          <button
-            onClick={() => onMarkSeen(relevantComments.map(c => c.id))}
-            style={{
-              ...buttonStyle(),
-              width: "100%", padding: "8px",
-              background: theme.inputBg, color: theme.textSub,
-              border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-              fontSize: "11px", fontWeight: 600,
-            }}>
-            ✓ Označit vše jako přečtené
-          </button>
+          {relevantComments.length > 0 && (
+            <button
+              onClick={() => onMarkSeen(relevantComments.map(c => c.id))}
+              style={{
+                ...buttonStyle(),
+                width: "100%", padding: "10px",
+                background: theme.inputBg, color: theme.textSub,
+                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
+                fontSize: "12px", fontWeight: 600,
+              }}>
+              ✓ Označit komentáře jako přečtené
+            </button>
+          )}
         </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -7216,6 +7547,7 @@ function Snackbar({ message, onUndo, visible, theme }) {
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
+  const [customLists, setCustomLists] = useState([]);
   // Echo prevention — sleduje časy posledních lokálních editů taskID
   // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
   // aby nepřepisovaly náš čerstvý lokální stav.
@@ -7260,6 +7592,8 @@ export default function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [showCreateList, setShowCreateList] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
   const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
@@ -7324,6 +7658,15 @@ export default function App() {
       setTasks(sanitized);
       const allUpdates = [...updates, ...sanUpdates];
       if (allUpdates.length > 0) apiUpdateTasks(allUpdates);
+
+      // Load custom lists
+      try {
+        const { data: lists } = await supabase.from("custom_lists").select("*").order("created_at");
+        if (lists) setCustomLists(lists);
+      } catch (e) {
+        console.warn("Custom lists tabulka možná neexistuje, spusť migration_custom_lists.sql:", e);
+      }
+
       setLoading(false);
     })();
 
@@ -7919,7 +8262,15 @@ export default function App() {
     if (priorityFilter !== "all") result = result.filter(t => (t.priority || "low") === priorityFilter);
 
     // Tag filter (auto-detected sloveso)
-    if (tagFilter !== "all") result = result.filter(t => detectTags(t.title).includes(tagFilter));
+    // Tag filter (auto-detected sloveso nebo list:xxx vlastní seznam)
+    if (tagFilter !== "all") {
+      if (tagFilter.startsWith("list:")) {
+        const listId = tagFilter.slice(5);
+        result = result.filter(t => t.category === listId);
+      } else {
+        result = result.filter(t => detectTags(t.title).includes(tagFilter));
+      }
+    }
 
     // Created-when filter — when was the task added
     if (createdWhenFilter !== "all") {
@@ -8104,7 +8455,12 @@ export default function App() {
       }
       // Tag filter — skip if counting tags
       if (!skip.includes("tag")) {
-        if (tagFilter !== "all" && !detectTags(t.title).includes(tagFilter)) return false;
+        if (tagFilter !== "all") {
+          if (tagFilter.startsWith("list:")) {
+            const listId = tagFilter.slice(5);
+            if (t.category !== listId) return false;
+          } else if (!detectTags(t.title).includes(tagFilter)) return false;
+        }
       }
       // Created-when filter
       if (!skip.includes("createdWhen") && createdWhenFilter !== "all") {
@@ -8436,6 +8792,28 @@ export default function App() {
           />
         )}
 
+        {showMoreFilters && (
+          <MoreFiltersSheet
+            theme={theme}
+            users={users}
+            currentUser={currentUser}
+            createdWhenFilter={createdWhenFilter}
+            onCreatedWhenFilterChange={setCreatedWhenFilter}
+            createdByFilter={createdByFilter}
+            onCreatedByFilterChange={setCreatedByFilter}
+            onClose={() => setShowMoreFilters(false)}
+          />
+        )}
+
+        {showCreateList && (
+          <CreateListModal
+            theme={theme}
+            currentUser={currentUser}
+            onClose={() => setShowCreateList(false)}
+            onCreate={(newList) => setCustomLists(prev => [...prev, newList])}
+          />
+        )}
+
         {/* Focus mode — fullscreen overlay */}
         {showFocus && (
           <FocusMode
@@ -8521,6 +8899,8 @@ export default function App() {
             onTagFilterChange={setTagFilter}
             tagCounts={tagCounts}
             allTasks={tasks}
+            customLists={customLists}
+            onCreateList={() => setShowCreateList(true)}
           />
 
           {/* Compact filters — one row */}
@@ -8528,7 +8908,7 @@ export default function App() {
             display: "flex", alignItems: "center", gap: "4px",
             marginBottom: "8px", flexWrap: "wrap",
           }}>
-            {/* Scope filter — includes per-person */}
+            {/* Scope filter — sloučený "Moje + Osoba" */}
             <select value={filter} onChange={e => setFilter(e.target.value)} style={{
               ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
               background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
@@ -8573,37 +8953,23 @@ export default function App() {
               <option value="date">↕ Termín</option>
             </select>
 
-            {/* Created-when filter */}
-            <select value={createdWhenFilter} onChange={e => setCreatedWhenFilter(e.target.value)} style={{
-              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: createdWhenFilter !== "all" ? theme.accentSoft : "transparent",
-              border: `1px solid ${createdWhenFilter !== "all" ? theme.accentBorder : theme.inputBorder}`,
-              color: createdWhenFilter !== "all" ? theme.accent : theme.textSub,
-              fontWeight: createdWhenFilter !== "all" ? 600 : 400,
-            }}>
-              <option value="all">📅 Přidáno kdy</option>
-              <option value="today">🆕 Dnes přidáno</option>
-              <option value="yesterday">Včera přidáno</option>
-              <option value="week">Tento týden</option>
-              <option value="month">Tento měsíc</option>
-              <option value="older">Starší</option>
-            </select>
-
-            {/* Created-by filter */}
-            <select value={createdByFilter} onChange={e => setCreatedByFilter(e.target.value)} style={{
-              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: createdByFilter !== "all" ? theme.accentSoft : "transparent",
-              border: `1px solid ${createdByFilter !== "all" ? theme.accentBorder : theme.inputBorder}`,
-              color: createdByFilter !== "all" ? theme.accent : theme.textSub,
-              fontWeight: createdByFilter !== "all" ? 600 : 400,
-            }}>
-              <option value="all">✏️ Kdo přidal</option>
-              {users.map(u => (
-                <option key={u.name} value={u.name}>
-                  {u.name === currentUser.name ? "Já" : u.name}
-                </option>
-              ))}
-            </select>
+            {/* "Více filtrů" — tlačítko otevírající MoreFiltersSheet */}
+            <button
+              onClick={() => setShowMoreFilters(true)}
+              title="Další filtry"
+              style={{
+                ...buttonStyle(),
+                padding: "4px 10px", fontSize: "11px", fontWeight: 600,
+                background: (createdWhenFilter !== "all" || createdByFilter !== "all")
+                  ? theme.accentSoft : "transparent",
+                color: (createdWhenFilter !== "all" || createdByFilter !== "all")
+                  ? theme.accent : theme.textSub,
+                border: `1px solid ${(createdWhenFilter !== "all" || createdByFilter !== "all")
+                  ? theme.accentBorder : theme.inputBorder}`,
+                cursor: "pointer",
+              }}>
+              ⋯ Více
+            </button>
           </div>
         </div>
 
