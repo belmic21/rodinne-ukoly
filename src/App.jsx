@@ -4979,6 +4979,406 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
    STATISTICS
    ═══════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════
+   STATS SHEET — full-screen modal s detailními statistikami
+   ═══════════════════════════════════════════════════════ */
+
+function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
+  if (!currentUser) return null;
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+
+  // ─── Day-of-week aktivita za poslední 4 týdny ───
+  const dayOfWeekCounts = [0, 0, 0, 0, 0, 0, 0]; // Po, Út, St, Čt, Pá, So, Ne
+  const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+  tasks.forEach(t => {
+    if (t.status !== "done" || !t.completedAt) return;
+    if (t.completedByUser !== currentUser.name) return;
+    const d = new Date(t.completedAt);
+    if (d < fourWeeksAgo) return;
+    const dayIdx = (d.getDay() + 6) % 7; // přemap: 0=Po, 6=Ne
+    dayOfWeekCounts[dayIdx]++;
+  });
+  const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+  const maxDayCount = Math.max(...dayOfWeekCounts, 1);
+  const bestDayIdx = dayOfWeekCounts.indexOf(Math.max(...dayOfWeekCounts));
+
+  // ─── Týdenní data ───
+  const doneThisWeek = tasks.filter(t =>
+    t.status === "done" && t.completedAt &&
+    t.completedByUser === currentUser.name &&
+    new Date(t.completedAt) >= weekAgo
+  ).length;
+  // 4 minulé týdny pro průměr
+  const weekDates = [];
+  for (let w = 1; w <= 4; w++) {
+    const start = new Date(); start.setDate(start.getDate() - 7 * (w + 1));
+    const end = new Date(); end.setDate(end.getDate() - 7 * w);
+    weekDates.push({ start, end });
+  }
+  const pastWeekCounts = weekDates.map(({ start, end }) =>
+    tasks.filter(t =>
+      t.status === "done" && t.completedAt &&
+      t.completedByUser === currentUser.name &&
+      new Date(t.completedAt) >= start && new Date(t.completedAt) < end
+    ).length
+  );
+  const validWeeks = pastWeekCounts.filter(c => c > 0);
+  const weekAvg = validWeeks.length > 0
+    ? Math.round(pastWeekCounts.reduce((a, b) => a + b, 0) / 4)
+    : null;
+  const trendDelta = weekAvg !== null ? doneThisWeek - pastWeekCounts[0] : null;
+
+  // ─── Dnes ───
+  const isDueToday = (t) => {
+    if (!t.dueDate) return false;
+    const due = new Date(t.dueDate);
+    return due.getFullYear() === todayStart.getFullYear() &&
+           due.getMonth() === todayStart.getMonth() &&
+           due.getDate() === todayStart.getDate();
+  };
+  const myDueToday = tasks.filter(t =>
+    !isDeleted(t) &&
+    t.assignedTo?.includes(currentUser.name) &&
+    isDueToday(t)
+  );
+  const dayDone = myDueToday.filter(t => t.status === "done").length;
+  const dayTotal = myDueToday.length;
+
+  // ─── Tag mix ───
+  const tagFreq = {};
+  tasks.forEach(t => {
+    if (t.status !== "done" || !t.completedAt) return;
+    if (t.completedByUser !== currentUser.name) return;
+    if (new Date(t.completedAt) < weekAgo) return;
+    detectTags(t.title).forEach(tagId => {
+      tagFreq[tagId] = (tagFreq[tagId] || 0) + 1;
+    });
+  });
+  const topTags = Object.entries(tagFreq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, count]) => ({ ...getTagDef(id), count }))
+    .filter(t => t.label);
+
+  // ─── Per-user (admin) ───
+  const perUserWeek = users.map(u => ({
+    name: u.name,
+    count: tasks.filter(t =>
+      t.status === "done" && t.completedAt &&
+      new Date(t.completedAt) >= weekAgo &&
+      t.completedByUser === u.name
+    ).length,
+  }));
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-end",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        background: theme.bg, borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
+        overflow: "auto",
+        boxShadow: "0 -8px 24px rgba(0,0,0,0.2)",
+      }}>
+        {/* Header */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 2, background: theme.bg,
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: theme.text }}>
+            📊 Statistiky
+          </h2>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "4px 8px",
+          }}>×</button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* DNES */}
+          <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
+            <div style={{
+              fontSize: "10px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px",
+            }}>🎯 Dnes</div>
+            {dayTotal > 0 ? (
+              <>
+                <div style={{
+                  width: "100%", height: "8px", borderRadius: "4px",
+                  background: theme.inputBorder, overflow: "hidden", marginBottom: "6px",
+                }}>
+                  <div style={{
+                    height: "100%", width: `${dayTotal > 0 ? dayDone / dayTotal * 100 : 0}%`,
+                    background: dayDone === dayTotal ? theme.green : theme.accent,
+                    transition: "width 0.4s",
+                  }} />
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: 800, color: theme.text }}>
+                  {dayDone}/{dayTotal}
+                  <span style={{ fontSize: "14px", fontWeight: 500, color: theme.textSub, marginLeft: "8px" }}>
+                    ({Math.round(dayDone / dayTotal * 100)}%)
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: "13px", color: theme.textMid }}>
+                Žádné úkoly s termínem dnes
+              </div>
+            )}
+          </div>
+
+          {/* TÝDEN */}
+          <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
+            <div style={{
+              fontSize: "10px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px",
+            }}>📊 Tento týden</div>
+            <div style={{ fontSize: "28px", fontWeight: 800, color: theme.green, lineHeight: 1 }}>
+              {doneThisWeek}
+              {weekAvg !== null && (
+                <span style={{ fontSize: "16px", fontWeight: 500, color: theme.textSub }}>
+                  {" / "}{weekAvg}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: "12px", color: theme.textMid, marginTop: "4px" }}>
+              {trendDelta === null ? "splněno" :
+                trendDelta > 0 ? <span style={{ color: theme.green, fontWeight: 700 }}>↑ +{trendDelta} oproti minulému týdnu 🎉</span> :
+                trendDelta < 0 ? <span style={{ color: theme.textSub }}>↓ {trendDelta} oproti minulému</span> :
+                <span>= jako minulý týden</span>
+              }
+            </div>
+            {weekAvg !== null && (
+              <div style={{ fontSize: "11px", color: theme.textDim, marginTop: "2px" }}>
+                Cíl = průměr 4 minulých týdnů
+              </div>
+            )}
+          </div>
+
+          {/* DAY OF WEEK */}
+          {dayOfWeekCounts.some(c => c > 0) && (
+            <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
+              <div style={{
+                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
+              }}>📅 Aktivita per den (4 týdny)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                {dayNames.map((day, idx) => {
+                  const count = dayOfWeekCounts[idx];
+                  const widthPercent = count > 0 ? (count / maxDayCount) * 100 : 0;
+                  const isBest = idx === bestDayIdx && count > 0;
+                  return (
+                    <div key={day} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{
+                        width: "24px", fontSize: "11px", fontWeight: 600,
+                        color: isBest ? theme.green : theme.text,
+                      }}>{day}</span>
+                      <div style={{
+                        flex: 1, height: "16px", borderRadius: "3px",
+                        background: theme.inputBorder, position: "relative", overflow: "hidden",
+                      }}>
+                        <div style={{
+                          height: "100%", width: `${widthPercent}%`,
+                          background: isBest ? theme.green : theme.accent,
+                          borderRadius: "3px", transition: "width 0.4s",
+                        }} />
+                      </div>
+                      <span style={{
+                        width: "30px", fontSize: "11px", fontWeight: 700,
+                        color: isBest ? theme.green : theme.textSub,
+                        textAlign: "right",
+                      }}>{count}{isBest && " 🏆"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {bestDayIdx >= 0 && dayOfWeekCounts[bestDayIdx] > 0 && (
+                <div style={{
+                  fontSize: "11px", color: theme.textMid, marginTop: "8px",
+                  textAlign: "center",
+                }}>
+                  Nejvíc plníš v <strong style={{ color: theme.green }}>{["pondělí", "úterý", "středu", "čtvrtek", "pátek", "sobotu", "neděli"][bestDayIdx]}</strong>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAG MIX */}
+          {topTags.length > 0 && (
+            <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
+              <div style={{
+                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
+              }}>🏷 Tvůj mix (tento týden)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {topTags.map(tag => (
+                  <div key={tag.id} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    fontSize: "12px",
+                  }}>
+                    <span>{tag.emoji} {tag.label}</span>
+                    <span style={{ fontWeight: 700, color: theme.text }}>{tag.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PER USER (admin) */}
+          {currentUser.admin && perUserWeek.length > 1 && (
+            <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
+              <div style={{
+                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
+              }}>👥 Per osoba (tento týden)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {perUserWeek.map(u => (
+                  <div key={u.name} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    fontSize: "12px",
+                  }}>
+                    <span>{u.name}</span>
+                    <span style={{ fontWeight: 700, color: theme.green }}>{u.count} úkolů</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   SEARCH SHEET — full-screen vyhledávání
+   ═══════════════════════════════════════════════════════ */
+
+function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
+
+  const results = useMemo(() => {
+    const q = (query || "").trim().toLowerCase();
+    if (q.length < 2) return [];
+    const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const qNorm = norm(q);
+    return tasks
+      .filter(t => {
+        // Privacy filter
+        if (!currentUser.admin) {
+          if (t.createdBy !== currentUser.name && !t.assignedTo?.includes(currentUser.name)) return false;
+        }
+        if (isDeleted(t)) return false;
+        // Match na title
+        if (norm(t.title).includes(qNorm)) return true;
+        // Match na poznámku
+        if (t.note && norm(t.note).includes(qNorm)) return true;
+        // Match na checklist
+        if ((t.checklist || []).some(item => norm(item.text).includes(qNorm))) return true;
+        // Match na komentáře (poprvé najdi komentář pro tenhle task)
+        const taskComments = comments.filter(c => c.taskId === t.id);
+        if (taskComments.some(c => c.content && norm(c.content).includes(qNorm))) return true;
+        return false;
+      })
+      .slice(0, 30);
+  }, [tasks, comments, query, currentUser]);
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        marginTop: "20px",
+        background: theme.bg, borderRadius: "16px",
+        overflow: "auto",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+      }}>
+        {/* Header */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 2, background: theme.bg,
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", gap: "8px",
+        }}>
+          <span style={{ fontSize: "16px" }}>🔍</span>
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Hledat v úkolech, poznámkách, komentářích..."
+            style={{
+              flex: 1, fontSize: "14px", padding: "8px 10px",
+              background: theme.inputBg, color: theme.text,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: "6px", outline: "none",
+            }}
+          />
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "0 4px",
+          }}>×</button>
+        </div>
+
+        {/* Results */}
+        <div style={{ padding: "12px 14px" }}>
+          {query.trim().length < 2 ? (
+            <div style={{ textAlign: "center", color: theme.textMid, fontSize: "13px", padding: "40px 0" }}>
+              Začni psát pro vyhledávání...
+            </div>
+          ) : results.length === 0 ? (
+            <div style={{ textAlign: "center", color: theme.textMid, fontSize: "13px", padding: "40px 0" }}>
+              Žádné výsledky pro „{query}"
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 600 }}>
+                {results.length} {results.length === 1 ? "výsledek" : results.length < 5 ? "výsledky" : "výsledků"}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {results.map(t => (
+                  <button key={t.id}
+                    onClick={() => { onNavigate(t.id); onClose(); }}
+                    style={{
+                      ...buttonStyle(),
+                      textAlign: "left", padding: "10px 12px",
+                      background: theme.card,
+                      border: `1px solid ${theme.cardBorder}`,
+                      borderRadius: "8px",
+                      display: "flex", flexDirection: "column", gap: "4px",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                    onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text }}>
+                      {isDone(t) && "✓ "}{t.title}
+                    </div>
+                    <div style={{ fontSize: "10px", color: theme.textMid }}>
+                      {t.assignedTo?.join(", ") || "—"} · {t.createdAt && formatTimeTrace(t.createdAt)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId }) {
   const [showPerUser, setShowPerUser] = useState(false);
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
@@ -6857,6 +7257,9 @@ export default function App() {
   });
   const [showAdmin, setShowAdmin] = useState(false);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showStatsSheet, setShowStatsSheet] = useState(false);
+  const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
   const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
@@ -7818,10 +8221,20 @@ export default function App() {
         position: "sticky", top: 0, zIndex: 30,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontWeight: 700, fontSize: "15px" }}>Úkoly</span>
-          <button onClick={() => setThemeName(themeName === "dark" ? "light" : "dark")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", padding: "2px" }}>
-            {themeName === "dark" ? "☀️" : "🌙"}
+          {/* Focus mode trigger - vlevo */}
+          <button onClick={() => setShowFocus(true)}
+            title="Spustit Focus mode"
+            style={{
+              background: theme.accentSoft,
+              border: `1px solid ${theme.accentBorder}`,
+              borderRadius: "6px",
+              padding: "5px 10px",
+              color: theme.accent,
+              cursor: "pointer",
+              fontSize: "13px", fontWeight: 700,
+              display: "inline-flex", alignItems: "center", gap: "4px",
+            }}>
+            🎯 Fokus
           </button>
           {!online && (
             <span style={{
@@ -7833,70 +8246,153 @@ export default function App() {
             <span style={{
               fontSize: "9px", background: theme.yellow, color: "#fff",
               padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>Odesílám {pendingCount}...</span>
+            }}>{pendingCount}↑</span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {currentUser.admin && users.filter(u => u.name !== currentUser.name).map(u =>
-            unreadCounts[u.name] > 0 ? (
-              <button key={u.name}
-                onClick={() => setFilter(`person:${u.name}`)}
-                title={`Zobrazit úkoly pro ${u.name}`}
-                style={{
-                  ...buttonStyle(),
-                  fontSize: "10px", color: theme.textSub,
-                  background: "transparent", border: "none",
-                  padding: "2px 4px", display: "flex", alignItems: "center", gap: "4px",
-                }}>
-                {u.name}: <span style={{
-                  background: theme.yellow, color: "#fff", borderRadius: "8px",
-                  padding: "1px 5px", fontSize: "9px", fontWeight: 800,
-                }}>{unreadCounts[u.name]}</span>
-              </button>
-            ) : null
-          )}
-          {currentUser.admin && (
-            <button onClick={() => setShowAdmin(!showAdmin)}
-              style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "13px" }}>
-              ⚙️
-            </button>
-          )}
-          {/* Focus mode trigger */}
-          <button onClick={() => setShowFocus(true)}
-            title="Spustit Focus mode — projet úkoly jeden po druhém"
+        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          {/* Search ikona */}
+          <button onClick={() => setShowSearchSheet(true)}
+            title="Hledat"
             style={{
-              background: theme.accentSoft,
-              border: `1px solid ${theme.accentBorder}`,
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
               borderRadius: "6px",
-              padding: "4px 8px",
-              color: theme.accent,
-              cursor: "pointer",
-              fontSize: "13px", fontWeight: 700,
-              display: "inline-flex", alignItems: "center", gap: "3px",
-            }}>
-            🎯 Fokus
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            🔍
           </button>
-          {/* Notification diagnostic panel */}
-          <button onClick={() => setShowNotifPanel(!showNotifPanel)}
-            title="Nastavení notifikací"
-            style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "14px" }}>
+          {/* Stats ikona */}
+          <button onClick={() => setShowStatsSheet(true)}
+            title="Statistiky"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            📊
+          </button>
+          {/* Notifications - jen badge když existují */}
+          <button onClick={() => setUpdatesPanelOpen(true)}
+            title="Zprávy"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px", position: "relative",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔔
+            {(() => {
+              const unseenCount = comments.filter(c =>
+                c.author !== currentUser.name &&
+                !c.seenBy?.includes(currentUser.name) &&
+                tasks.find(t => t.id === c.taskId &&
+                  (t.createdBy === currentUser.name || t.assignedTo?.includes(currentUser.name)))
+              ).length;
+              const noteCount = tasks.reduce((sum, t) => {
+                if (isDeleted(t)) return sum;
+                if (t.createdBy !== currentUser.name && !t.assignedTo?.includes(currentUser.name)) return sum;
+                return sum + (t.checklist || []).reduce((s, item) =>
+                  s + (item.notes || []).filter(n =>
+                    n.author !== currentUser.name && !n.seenBy?.includes(currentUser.name)
+                  ).length, 0);
+              }, 0);
+              const total = unseenCount + noteCount;
+              if (total === 0) return null;
+              return (
+                <span style={{
+                  position: "absolute", top: "1px", right: "1px",
+                  background: theme.red, color: "#fff",
+                  borderRadius: "8px", padding: "1px 4px",
+                  fontSize: "9px", fontWeight: 800,
+                  minWidth: "14px", textAlign: "center",
+                  border: "2px solid var(--bg-card, #fff)",
+                }}>{total}</span>
+              );
+            })()}
           </button>
-          {/* Visible user name */}
-          <span style={{
-            fontSize: "12px", fontWeight: 600, color: theme.text,
-            padding: "4px 8px", background: theme.accentSoft,
-            border: `1px solid ${theme.accentBorder}`, borderRadius: "6px",
-          }}>
+          {/* User menu trigger */}
+          <button onClick={() => setShowUserMenu(s => !s)}
+            title="Uživatel"
+            style={{
+              fontSize: "12px", fontWeight: 600, color: theme.text,
+              padding: "5px 10px", background: theme.accentSoft,
+              border: `1px solid ${theme.accentBorder}`, borderRadius: "6px",
+              cursor: "pointer",
+              display: "inline-flex", alignItems: "center", gap: "4px",
+            }}>
             {currentUser.name}
-          </span>
-          <button onClick={() => setCurrentUser(null)} title="Odhlásit se" style={{
-            ...buttonStyle(), background: theme.inputBg,
-            border: `1px solid ${theme.inputBorder}`,
-            color: theme.textSub, padding: "5px 9px", fontSize: "12px",
-          }}>⏻</button>
+            <span style={{ fontSize: "9px" }}>▾</span>
+          </button>
         </div>
       </div>
+
+      {/* User menu dropdown */}
+      {showUserMenu && (
+        <>
+          <div onClick={() => setShowUserMenu(false)} style={{
+            position: "fixed", inset: 0, background: "transparent", zIndex: 99,
+          }} />
+          <div style={{
+            position: "fixed", top: "55px", right: "12px", zIndex: 100,
+            background: theme.card,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "8px",
+            padding: "6px",
+            minWidth: "180px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            display: "flex", flexDirection: "column", gap: "2px",
+          }}>
+            <button onClick={() => { setThemeName(themeName === "dark" ? "light" : "dark"); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>{themeName === "dark" ? "☀️" : "🌙"}</span>
+              <span>{themeName === "dark" ? "Světlý režim" : "Tmavý režim"}</span>
+            </button>
+            <button onClick={() => { setShowNotifPanel(true); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>⚙️</span><span>Nastavení notifikací</span>
+            </button>
+            {currentUser.admin && (
+              <button onClick={() => { setShowAdmin(true); setShowUserMenu(false); }}
+                style={{
+                  ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                  background: "transparent", color: theme.text, border: "none",
+                  textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <span>👥</span><span>Správa uživatelů</span>
+              </button>
+            )}
+            <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+            <button onClick={() => { setCurrentUser(null); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.red, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = `${theme.red}10`}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>⏻</span><span>Odhlásit se</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ── Content ── */}
       <div style={{ maxWidth: "560px", margin: "0 auto", padding: "14px 12px 140px" }}>
@@ -7916,6 +8412,27 @@ export default function App() {
             currentUser={currentUser}
             onClose={() => setShowNotifPanel(false)}
             theme={theme}
+          />
+        )}
+
+        {showStatsSheet && (
+          <StatsSheet
+            tasks={tasks}
+            currentUser={currentUser}
+            users={users}
+            theme={theme}
+            onClose={() => setShowStatsSheet(false)}
+          />
+        )}
+
+        {showSearchSheet && (
+          <SearchSheet
+            tasks={tasks}
+            comments={comments}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowSearchSheet(false)}
+            onNavigate={(taskId) => setScrollToTaskId(taskId)}
           />
         )}
 
@@ -7974,32 +8491,6 @@ export default function App() {
           theme={theme}
         />
 
-        <StatsBar
-          tasks={tasks}
-          currentUser={currentUser}
-          users={users}
-          theme={theme}
-          activeStatId={
-            filter === "my" && viewStatus === "active" && sortMode === "smart" ? "my"
-            : filter === "assigned" && viewStatus === "active" ? "assigned"
-            : filter === "my" && viewStatus === "done" ? "done_week"
-            : filter === "my" && viewStatus === "active" && sortMode === "date" ? "overdue"
-            : null
-          }
-          onStatClick={(id) => {
-            // Apply filter based on which stat was clicked
-            if (id === "my") {
-              setFilter("my"); setViewStatus("active"); setSortMode("smart");
-            } else if (id === "in_progress") {
-              setFilter("my"); setViewStatus("in_progress");
-            } else if (id === "assigned") {
-              setFilter("assigned"); setViewStatus("active");
-            } else if (id === "overdue") {
-              setFilter("my"); setViewStatus("active"); setSortMode("date");
-            }
-          }}
-        />
-
         <div style={{
           position: "sticky",
           top: 0,
@@ -8031,45 +8522,6 @@ export default function App() {
             tagCounts={tagCounts}
             allTasks={tasks}
           />
-
-          {/* Search */}
-          <div style={{ marginBottom: "10px", position: "relative" }}>
-            <span style={{
-              position: "absolute", left: "12px", top: "50%",
-              transform: "translateY(-50%)",
-              fontSize: "15px", pointerEvents: "none",
-              color: searchQuery ? theme.accent : theme.textSub,
-              zIndex: 1,
-            }}>🔍</span>
-            <input
-              type="text"
-              placeholder="Hledat v úkolech..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              style={{
-                ...inputStyle(theme), fontSize: "13px",
-                padding: "11px 12px 11px 38px",
-                background: searchQuery ? theme.accentSoft : theme.inputBg,
-                border: `2px solid ${searchQuery ? theme.accent : theme.inputBorder}`,
-                fontWeight: 500,
-                boxShadow: searchQuery ? `0 0 0 3px ${theme.accent}20` : `inset 0 1px 2px rgba(0,0,0,0.04)`,
-              }}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                title="Vymazat"
-                style={{
-                  position: "absolute", right: "8px", top: "50%",
-                  transform: "translateY(-50%)",
-                  background: "none", border: "none",
-                  fontSize: "16px", cursor: "pointer",
-                  color: theme.textMid, padding: "4px 8px",
-                }}>
-                ×
-              </button>
-            )}
-          </div>
 
           {/* Compact filters — one row */}
           <div style={{
