@@ -4092,7 +4092,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         // DROPDOWN CONTENTS
         const catDropdown = (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "360px", overflowY: "auto" }}>
+            {/* Předdefinované kategorie */}
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              padding: "8px 10px 4px",
+            }}>📋 Předdefinované</div>
             {CATEGORIES.map(cat => {
               const selected = currentCategory === cat.id;
               const count = categoryCounts?.[cat.id] || 0;
@@ -4125,6 +4131,73 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 </button>
               );
             })}
+
+            {/* Moje seznamy */}
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              padding: "10px 10px 4px",
+            }}>📁 Moje seznamy</div>
+            {(() => {
+              const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
+              if (visibleLists.length === 0) {
+                return (
+                  <div style={{ padding: "6px 10px", fontSize: "11px", color: theme.textDim, fontStyle: "italic" }}>
+                    Zatím žádné — vytvoř první níže
+                  </div>
+                );
+              }
+              return visibleLists.map(list => {
+                const listKey = `list:${list.id}`;
+                const selected = currentCategory === listKey;
+                return (
+                  <button key={list.id}
+                    onClick={() => {
+                      if (isTyping) {
+                        setQuickCategory(selected ? null : listKey);
+                      } else {
+                        onCategoryFilterChange(selected ? "all" : listKey);
+                      }
+                      setOpenSegment(null);
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "7px 10px", fontSize: "12px",
+                      background: selected ? `${list.color}20` : "transparent",
+                      color: selected ? list.color : theme.text,
+                      border: "none", textAlign: "left", borderRadius: "6px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}
+                    onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
+                    onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ fontSize: "15px" }}>{list.emoji || "📁"}</span>
+                    <span style={{ flex: 1 }}>{list.name}</span>
+                    {!list.is_shared && (
+                      <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
+                    )}
+                    {selected && <span style={{ color: list.color, fontSize: "11px" }}>✓</span>}
+                  </button>
+                );
+              });
+            })()}
+
+            {/* + Vytvořit nový seznam */}
+            <button onClick={() => {
+              setOpenSegment(null);
+              onCreateList && onCreateList();
+            }} style={{
+              ...buttonStyle(),
+              padding: "8px 10px", fontSize: "12px",
+              background: theme.inputBg,
+              color: theme.accent, fontWeight: 600,
+              border: `1px dashed ${theme.accent}50`, borderRadius: "6px",
+              display: "flex", alignItems: "center", gap: "8px",
+              marginTop: "6px",
+            }}>
+              <span>+</span><span>Vytvořit nový seznam</span>
+            </button>
+
+            {/* Reset výběru */}
             {currentCategory && (
               <button onClick={() => {
                 if (isTyping) setQuickCategory(null);
@@ -4134,7 +4207,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
                 background: "transparent", color: theme.red,
                 border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-                textAlign: "left", borderRadius: 0, marginTop: "2px",
+                textAlign: "left", borderRadius: 0, marginTop: "4px",
               }}>✕ Zrušit výběr</button>
             )}
           </div>
@@ -4348,62 +4421,6 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 </button>
               );
             })}
-
-            {/* MOJE SEZNAMY sekce */}
-            <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px",
-              padding: "8px 10px 4px",
-            }}>📁 Moje seznamy</div>
-            {visibleCustomLists.length === 0 && (
-              <div style={{
-                padding: "6px 10px", fontSize: "11px", color: theme.textDim,
-                fontStyle: "italic",
-              }}>Zatím žádné — vytvoř první níže</div>
-            )}
-            {visibleCustomLists.map(list => {
-              const filterValue = `list:${list.id}`;
-              const isSet = tagFilter === filterValue;
-              return (
-                <button key={list.id}
-                  onClick={() => {
-                    onTagFilterChange && onTagFilterChange(isSet ? "all" : filterValue);
-                    setOpenSegment(null);
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px",
-                    background: isSet ? `${list.color}20` : "transparent",
-                    color: isSet ? list.color : theme.text,
-                    border: "none", textAlign: "left", borderRadius: "6px",
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}
-                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ width: "16px" }}>{list.emoji || "📁"}</span>
-                  <span style={{ flex: 1 }}>{list.name}</span>
-                  {!list.is_shared && (
-                    <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
-                  )}
-                </button>
-              );
-            })}
-
-            {/* + Vytvořit nový seznam */}
-            <button onClick={() => {
-              setOpenSegment(null);
-              onCreateList && onCreateList();
-            }} style={{
-              ...buttonStyle(),
-              padding: "8px 10px", fontSize: "12px",
-              background: theme.inputBg,
-              color: theme.accent, fontWeight: 600,
-              border: `1px dashed ${theme.accent}50`, borderRadius: "6px",
-              display: "flex", alignItems: "center", gap: "8px",
-              marginTop: "4px",
-            }}>
-              <span>+</span><span>Vytvořit nový seznam</span>
-            </button>
           </div>
         );
 
@@ -4475,11 +4492,28 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               display: "flex", gap: "6px", alignItems: "center",
               paddingLeft: "4px", flexWrap: "wrap",
             }}>
-              {renderSegment("cat",
-                <><span>🏷️</span><span>Kategorie</span></>,
-                currentCategory ? <><span>{getCategory(currentCategory).icon}</span><span>{getCategory(currentCategory).label}</span></> : "Kategorie",
-                theme.accent, !!currentCategory, catDropdown
-              )}
+              {(() => {
+                let activeLabel = "Seznam";
+                if (currentCategory) {
+                  if (currentCategory.startsWith("list:")) {
+                    const listId = currentCategory.slice(5);
+                    const list = (customLists || []).find(l => l.id === listId);
+                    if (list) {
+                      activeLabel = <><span>{list.emoji || "📁"}</span><span>{list.name}</span></>;
+                    }
+                  } else {
+                    const cat = getCategory(currentCategory);
+                    if (cat) {
+                      activeLabel = <><span>{cat.icon}</span><span>{cat.label}</span></>;
+                    }
+                  }
+                }
+                return renderSegment("cat",
+                  <><span>📋</span><span>Seznam</span></>,
+                  activeLabel,
+                  theme.accent, !!currentCategory, catDropdown
+                );
+              })()}
               {renderSegment("pri",
                 <><span style={{ fontWeight: 900 }}>!</span><span>Priorita</span></>,
                 currentPriority ? <><span style={{ fontWeight: 900, color: theme.priority[currentPriority].text }}>{getPriority(currentPriority).sym}</span><span>{getPriority(currentPriority).label}</span></> : "Priorita",
@@ -4493,17 +4527,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               )}
               {!isTyping && (() => {
                 let activeLabel = "Tag";
-                if (tagFilter !== "all") {
-                  if (tagFilter.startsWith("list:")) {
-                    const listId = tagFilter.slice(5);
-                    const list = customLists.find(l => l.id === listId);
-                    if (list) {
-                      activeLabel = <><span>{list.emoji || "📁"}</span><span>{list.name}</span></>;
-                    }
-                  } else if (getTagDef(tagFilter)) {
-                    const td = getTagDef(tagFilter);
-                    activeLabel = <><span>{td.emoji}</span><span>{td.label}</span></>;
-                  }
+                if (tagFilter !== "all" && getTagDef(tagFilter)) {
+                  const td = getTagDef(tagFilter);
+                  activeLabel = <><span>{td.emoji}</span><span>{td.label}</span></>;
                 }
                 return renderSegment("tag",
                   <><span>🏷</span><span>Tag</span></>,
@@ -5625,13 +5651,16 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
     if (q.length < 2) return [];
     const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const qNorm = norm(q);
+    const userNameLc = (currentUser.name || "").trim().toLowerCase();
     return tasks
       .filter(t => {
-        // Privacy filter
-        if (!currentUser.admin) {
-          if (t.createdBy !== currentUser.name && !t.assignedTo?.includes(currentUser.name)) return false;
-        }
         if (isDeleted(t)) return false;
+        // Privacy filter — search vždy ukazuje jen úkoly relevantní pro currentUser
+        // (autor nebo přiřazen), bez ohledu na admin flag
+        const createdByLc = (t.createdBy || "").trim().toLowerCase();
+        const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
+        const isMine = createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+        if (!isMine) return false;
         // Match na title
         if (norm(t.title).includes(qNorm)) return true;
         // Match na poznámku
@@ -7661,8 +7690,13 @@ export default function App() {
 
       // Load custom lists
       try {
-        const { data: lists } = await supabase.from("custom_lists").select("*").order("created_at");
-        if (lists) setCustomLists(lists);
+        const { data: lists, error: listsError } = await supabase.from("custom_lists").select("*").order("created_at");
+        if (listsError) {
+          console.error("[custom_lists] SELECT error:", listsError);
+        } else if (lists) {
+          console.log("[custom_lists] Loaded", lists.length, "lists:", lists);
+          setCustomLists(lists);
+        }
       } catch (e) {
         console.warn("Custom lists tabulka možná neexistuje, spusť migration_custom_lists.sql:", e);
       }
@@ -8261,15 +8295,9 @@ export default function App() {
     // Priority filter
     if (priorityFilter !== "all") result = result.filter(t => (t.priority || "low") === priorityFilter);
 
-    // Tag filter (auto-detected sloveso)
-    // Tag filter (auto-detected sloveso nebo list:xxx vlastní seznam)
+    // Tag filter (auto-detected sloveso z názvu úkolu)
     if (tagFilter !== "all") {
-      if (tagFilter.startsWith("list:")) {
-        const listId = tagFilter.slice(5);
-        result = result.filter(t => t.category === listId);
-      } else {
-        result = result.filter(t => detectTags(t.title).includes(tagFilter));
-      }
+      result = result.filter(t => detectTags(t.title).includes(tagFilter));
     }
 
     // Created-when filter — when was the task added
@@ -8455,12 +8483,7 @@ export default function App() {
       }
       // Tag filter — skip if counting tags
       if (!skip.includes("tag")) {
-        if (tagFilter !== "all") {
-          if (tagFilter.startsWith("list:")) {
-            const listId = tagFilter.slice(5);
-            if (t.category !== listId) return false;
-          } else if (!detectTags(t.title).includes(tagFilter)) return false;
-        }
+        if (tagFilter !== "all" && !detectTags(t.title).includes(tagFilter)) return false;
       }
       // Created-when filter
       if (!skip.includes("createdWhen") && createdWhenFilter !== "all") {
