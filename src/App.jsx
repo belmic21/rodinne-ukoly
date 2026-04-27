@@ -205,6 +205,80 @@ function autoDetectCategory(title) {
   return "other";
 }
 
+// ═══ TAGS — auto-detekce sloves v názvu úkolu ═══
+const TAGS = [
+  { id: "objednat",  label: "Objednat",   emoji: "📦", keywords: ["objednat", "objednám", "objednávka", "rezervovat", "rezervace"] },
+  { id: "koupit",    label: "Koupit",     emoji: "🛒", keywords: ["koupit", "kup", "nákup", "nakoupit"] },
+  { id: "zavolat",   label: "Zavolat",    emoji: "📞", keywords: ["zavolat", "volat", "telefon", "zavolám"] },
+  { id: "napsat",    label: "Napsat",     emoji: "📧", keywords: ["napsat", "email", "mail", "sms", "zpráva"] },
+  { id: "zaslat",    label: "Zaslat",     emoji: "📤", keywords: ["zaslat", "odeslat", "poslat"] },
+  { id: "vyzvednout",label: "Vyzvednout", emoji: "📥", keywords: ["vyzvednout", "vyzvedni"] },
+  { id: "zaridit",   label: "Vyřídit",    emoji: "⚙️", keywords: ["zařídit", "vyřídit", "vyřid", "zaridit"] },
+  { id: "opravit",   label: "Opravit",    emoji: "🔧", keywords: ["opravit", "spravit", "oprava"] },
+  { id: "pripravit", label: "Připravit",  emoji: "📋", keywords: ["připravit", "připrav"] },
+  { id: "zaplatit",  label: "Zaplatit",   emoji: "💰", keywords: ["zaplatit", "platba", "uhrad", "převod"] },
+  { id: "schuzka",   label: "Schůzka",    emoji: "📅", keywords: ["schůzka", "schuzka", "domluvit", "setkat", "domluva", "termín"] },
+  { id: "informovat",label: "Informovat", emoji: "ℹ️", keywords: ["informace", "info", "informovat", "sdělit"] },
+  { id: "uklid",     label: "Úklid",      emoji: "🧹", keywords: ["uklidit", "úklid", "uklid", "vyčistit", "umýt"] },
+];
+
+// Detekce tagů v názvu úkolu — vrací array tag IDs
+function detectTags(title) {
+  if (!title) return [];
+  const lower = title.toLowerCase();
+  const found = [];
+  for (const tag of TAGS) {
+    if (tag.keywords.some(kw => lower.includes(kw))) {
+      found.push(tag.id);
+    }
+  }
+  return found;
+}
+
+function getTagDef(tagId) {
+  return TAGS.find(t => t.id === tagId);
+}
+
+// Vrací predikce pro QuickAddBar:
+// - topVerbs: nejčastější slovesa z tagů (řazeno podle frekvence)
+// - topPhrases: opakované celé názvy úkolů (vyskytly se 2+) — TOP 5
+function getPredictions(tasks, currentUserName) {
+  if (!tasks || tasks.length === 0) return { topVerbs: [], topPhrases: [] };
+  // Pouze úkoly z TVÉ historie (nebo přiřazené tobě)
+  const myTasks = tasks.filter(t =>
+    t.createdBy === currentUserName || t.assignedTo?.includes(currentUserName)
+  );
+  // Verbs — frekvence tagů
+  const tagFreq = {};
+  myTasks.forEach(t => {
+    detectTags(t.title).forEach(tagId => {
+      tagFreq[tagId] = (tagFreq[tagId] || 0) + 1;
+    });
+  });
+  const topVerbs = Object.entries(tagFreq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, count]) => ({ ...getTagDef(id), count }))
+    .filter(t => t.label); // safety
+  // Phrases — opakované názvy (case insensitive, normalized)
+  const phraseFreq = {};
+  myTasks.forEach(t => {
+    const norm = (t.title || "").trim().toLowerCase();
+    if (norm.length < 3) return;
+    if (!phraseFreq[norm]) {
+      phraseFreq[norm] = { title: t.title, count: 0, lastUsed: 0 };
+    }
+    phraseFreq[norm].count += 1;
+    const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+    if (ts > phraseFreq[norm].lastUsed) phraseFreq[norm].lastUsed = ts;
+  });
+  const topPhrases = Object.values(phraseFreq)
+    .filter(p => p.count >= 2)
+    .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed)
+    .slice(0, 5);
+  return { topVerbs, topPhrases };
+}
+
 function searchMatch(task, query) {
   if (!query) return true;
   const lower = query.toLowerCase();
@@ -2932,7 +3006,14 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     }
   }, [autoOpen, task.id]);
 
-  const isNew = !task.seenBy?.includes(currentUser.name) && task.createdBy !== currentUser.name;
+  // isNew: úkol je nový pokud:
+  //   - autor není currentUser (porovnáno case-insensitive + trimmed kvůli přípaným chybám v datech)
+  //   - currentUser není v seenBy
+  // Defenzivní porovnání zajišťuje že "Pavla" === "pavla " === " Pavla"
+  const userNameLc = (currentUser.name || "").trim().toLowerCase();
+  const createdByLc = (task.createdBy || "").trim().toLowerCase();
+  const seenByLc = (task.seenBy || []).map(n => (n || "").trim().toLowerCase());
+  const isNew = createdByLc !== userNameLc && !seenByLc.includes(userNameLc);
   const overdue = daysDiff(task.dueDate) < 0 && !isDone(task);
   const soon = !overdue && daysDiff(task.dueDate) >= 0 && daysDiff(task.dueDate) <= 3 && !isDone(task);
   const forgotten = isForgotten(task);
@@ -3389,6 +3470,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               </span>
             )}
 
+            {/* Auto-tagy (Objednat/Koupit/Volat...) */}
+            {detectTags(task.title).slice(0, 2).map(tagId => {
+              const def = getTagDef(tagId);
+              if (!def) return null;
+              return (
+                <span key={tagId} title={def.label} style={{
+                  fontSize: "10px", fontWeight: 600, color: theme.textSub,
+                  padding: "1px 6px", borderRadius: "8px",
+                  background: theme.inputBg,
+                  border: `1px solid ${theme.cardBorder}`,
+                }}>
+                  {def.emoji} {def.label}
+                </span>
+              );
+            })}
+
             {/* Both users dots */}
             {task.assignTo === "both" && (
               <span style={{ display: "inline-flex", gap: "2px" }}>
@@ -3642,7 +3739,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -3815,6 +3912,73 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           {showFull ? "×" : "⚙"}
         </button>
       </div>
+
+      {/* ═══ PREDICTIONS CHIPS — pod inputem, jen když uživatel zrovna píše a má krátký text ═══ */}
+      {(() => {
+        const trimmed = text.trim();
+        // Show predictions when:
+        //   - input is empty (suggestions for first verb / repeated phrase)
+        //   - OR user typed only 1 word (max 12 chars) — suggest completions
+        const showPredictions = !showFull && (trimmed.length === 0 || (trimmed.length <= 12 && !trimmed.includes(" ")));
+        if (!showPredictions) return null;
+        const predictions = getPredictions(allTasks || [], currentUser.name);
+        if (predictions.topVerbs.length === 0 && predictions.topPhrases.length === 0) return null;
+
+        // Filter — pokud uživatel píše, filtruj predikce které odpovídají
+        const lower = trimmed.toLowerCase();
+        const verbsToShow = trimmed.length > 0
+          ? predictions.topVerbs.filter(v => v.label.toLowerCase().startsWith(lower))
+          : predictions.topVerbs;
+        const phrasesToShow = trimmed.length > 0
+          ? predictions.topPhrases.filter(p => p.title.toLowerCase().includes(lower))
+          : predictions.topPhrases;
+
+        if (verbsToShow.length === 0 && phrasesToShow.length === 0) return null;
+
+        return (
+          <div style={{
+            display: "flex", flexWrap: "wrap", gap: "5px",
+            padding: "4px 4px 0", marginTop: "4px",
+          }}>
+            {verbsToShow.slice(0, 4).map(v => (
+              <button key={"v_" + v.id} onClick={() => {
+                // Vloží sloveso na začátek + mezeru, focus na input
+                const newText = trimmed
+                  ? (v.label + " " + trimmed.slice(0, 0))
+                  : (v.label + " ");
+                setText(newText);
+                if (inputRef.current) inputRef.current.focus();
+              }} style={{
+                ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
+                background: theme.inputBg, color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: "12px", fontWeight: 600,
+                display: "inline-flex", gap: "4px", alignItems: "center",
+              }}>
+                <span>{v.emoji}</span>
+                <span>{v.label}</span>
+              </button>
+            ))}
+            {phrasesToShow.slice(0, 3).map((p, i) => (
+              <button key={"p_" + i} onClick={() => {
+                setText(p.title);
+                if (inputRef.current) inputRef.current.focus();
+              }} title={`Použito ${p.count}× — klik vyplní celý název`} style={{
+                ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
+                background: `${theme.purple}10`, color: theme.purple,
+                border: `1px solid ${theme.purple}30`,
+                borderRadius: "12px", fontWeight: 600,
+                display: "inline-flex", gap: "4px", alignItems: "center",
+                maxWidth: "200px",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                <span>🔁</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Segmented filter bar — 3 buttons with mini-dropdowns + chips below. Shown ALWAYS. */}
       {(() => {
@@ -4092,7 +4256,55 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           </div>
         );
 
-        // CHIPS (active filters)
+        const tagDropdown = !isTyping && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "300px", overflowY: "auto" }}>
+            {/* "All" reset */}
+            <button onClick={() => {
+              onTagFilterChange && onTagFilterChange("all");
+              setOpenSegment(null);
+            }} style={{
+              ...buttonStyle(),
+              padding: "7px 10px", fontSize: "12px",
+              background: tagFilter === "all" ? theme.accentSoft : "transparent",
+              color: tagFilter === "all" ? theme.accent : theme.text,
+              border: "none", textAlign: "left", borderRadius: "6px",
+              display: "flex", alignItems: "center", gap: "8px",
+            }}>
+              <span style={{ width: "16px" }}>🏷</span>
+              <span style={{ flex: 1 }}>Všechny tagy</span>
+              {tagCounts?.all > 0 && (
+                <span style={{ fontSize: "10px", color: theme.textMid }}>{tagCounts.all}</span>
+              )}
+            </button>
+            {TAGS.map(tag => {
+              const count = tagCounts?.[tag.id] || 0;
+              if (count === 0 && tagFilter !== tag.id) return null; // skip empty tags
+              const isSet = tagFilter === tag.id;
+              return (
+                <button key={tag.id}
+                  onClick={() => {
+                    onTagFilterChange && onTagFilterChange(isSet ? "all" : tag.id);
+                    setOpenSegment(null);
+                  }}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "7px 10px", fontSize: "12px",
+                    background: isSet ? `${theme.purple}15` : "transparent",
+                    color: isSet ? theme.purple : theme.text,
+                    border: "none", textAlign: "left", borderRadius: "6px",
+                    display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ width: "16px" }}>{tag.emoji}</span>
+                  <span style={{ flex: 1 }}>{tag.label}</span>
+                  <span style={{ fontSize: "10px", color: isSet ? theme.purple : theme.textMid }}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+
         const chips = [];
         if (isTyping) {
           if (quickCategory) {
@@ -4131,6 +4343,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               onRemove: () => onPriorityFilterChange && onPriorityFilterChange("all"),
             });
           }
+          if (tagFilter && tagFilter !== "all") {
+            const tag = getTagDef(tagFilter);
+            if (tag) {
+              chips.push({
+                key: "tag", label: tag.emoji + " " + tag.label,
+                color: theme.purple,
+                onRemove: () => onTagFilterChange && onTagFilterChange("all"),
+              });
+            }
+          }
           if (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my") {
             if (scopeFilter.startsWith("person:")) {
               const name = scopeFilter.replace("person:", "");
@@ -4166,6 +4388,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <><span>👤</span><span>Osoba</span></>,
                 currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
                 theme.accent, !!currentPersonLabel, perDropdown
+              )}
+              {!isTyping && (
+                renderSegment("tag",
+                  <><span>🏷</span><span>Tag</span></>,
+                  tagFilter !== "all" && getTagDef(tagFilter)
+                    ? <><span>{getTagDef(tagFilter).emoji}</span><span>{getTagDef(tagFilter).label}</span></>
+                    : "Tag",
+                  theme.purple, tagFilter !== "all", tagDropdown
+                )
               )}
 
               {/* Spacer */}
@@ -6436,6 +6667,7 @@ export default function App() {
   const [sortMode, setSortMode] = useState("created");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
+  const [tagFilter, setTagFilter] = useState("all"); // "all" or tag id
   const [createdWhenFilter, setCreatedWhenFilter] = useState("all"); // "all" | "today" | "yesterday" | "week" | "month"
   const [createdByFilter, setCreatedByFilter] = useState("all"); // "all" | "<user.name>"
   const [searchQuery, setSearchQuery] = useState("");
@@ -7119,6 +7351,9 @@ export default function App() {
     // Priority filter
     if (priorityFilter !== "all") result = result.filter(t => (t.priority || "low") === priorityFilter);
 
+    // Tag filter (auto-detected sloveso)
+    if (tagFilter !== "all") result = result.filter(t => detectTags(t.title).includes(tagFilter));
+
     // Created-when filter — when was the task added
     if (createdWhenFilter !== "all") {
       const now = Date.now();
@@ -7300,6 +7535,10 @@ export default function App() {
       if (!skip.includes("priority")) {
         if (priorityFilter !== "all" && (t.priority || "low") !== priorityFilter) return false;
       }
+      // Tag filter — skip if counting tags
+      if (!skip.includes("tag")) {
+        if (tagFilter !== "all" && !detectTags(t.title).includes(tagFilter)) return false;
+      }
       // Created-when filter
       if (!skip.includes("createdWhen") && createdWhenFilter !== "all") {
         if (!t.createdAt) return false;
@@ -7368,6 +7607,15 @@ export default function App() {
       important: countTasks(t => (t.priority || "low") === "important", ["priority"]),
       low: countTasks(t => (t.priority || "low") === "low", ["priority"]),
     };
+  }, [countTasks]);
+
+  // Tag counts — kolik úkolů má daný tag (po aktuálních filtrech)
+  const tagCounts = useMemo(() => {
+    const counts = { all: countTasks(() => true, ["tag"]) };
+    TAGS.forEach(tag => {
+      counts[tag.id] = countTasks(t => detectTags(t.title).includes(tag.id), ["tag"]);
+    });
+    return counts;
   }, [countTasks]);
 
   // ── Render ──
@@ -7614,6 +7862,10 @@ export default function App() {
             onScopeFilterChange={setFilter}
             showDeferred={showDeferred}
             onShowDeferredChange={setShowDeferred}
+            tagFilter={tagFilter}
+            onTagFilterChange={setTagFilter}
+            tagCounts={tagCounts}
+            allTasks={tasks}
           />
 
           {/* Search */}
