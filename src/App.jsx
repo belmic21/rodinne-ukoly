@@ -239,14 +239,22 @@ function getTagDef(tagId) {
   return TAGS.find(t => t.id === tagId);
 }
 
+// Normalizace stringu pro porovnávání (lowercase, trim, bez diakritiky)
+function normalizeString(s) {
+  if (!s) return "";
+  return s.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 // Vrací predikce pro QuickAddBar:
 // - topVerbs: nejčastější slovesa z tagů (řazeno podle frekvence)
-// - topPhrases: opakované celé názvy úkolů (vyskytly se 2+) — TOP 5
+// - topPhrases: opakované celé názvy úkolů (vyskytly se 2+) — TOP X
 function getPredictions(tasks, currentUserName) {
   if (!tasks || tasks.length === 0) return { topVerbs: [], topPhrases: [] };
-  // Pouze úkoly z TVÉ historie (nebo přiřazené tobě)
+  // Pouze úkoly z TVÉ historie (vytvořené tebou nebo přiřazené tobě)
+  // a ne smazané (status != deleted)
   const myTasks = tasks.filter(t =>
-    t.createdBy === currentUserName || t.assignedTo?.includes(currentUserName)
+    t.status !== "deleted" &&
+    (t.createdBy === currentUserName || t.assignedTo?.includes(currentUserName))
   );
   // Verbs — frekvence tagů
   const tagFreq = {};
@@ -257,25 +265,30 @@ function getPredictions(tasks, currentUserName) {
   });
   const topVerbs = Object.entries(tagFreq)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .slice(0, 4)
     .map(([id, count]) => ({ ...getTagDef(id), count }))
-    .filter(t => t.label); // safety
-  // Phrases — opakované názvy (case insensitive, normalized)
+    .filter(t => t.label);
+
+  // Phrases — opakované názvy (normalizované — bez diakritiky, lowercase)
+  // Skupina podle normalizovaného klíče → ukázat varianta s nejnovějším createdAt.
   const phraseFreq = {};
   myTasks.forEach(t => {
-    const norm = (t.title || "").trim().toLowerCase();
+    const norm = normalizeString(t.title);
     if (norm.length < 3) return;
     if (!phraseFreq[norm]) {
       phraseFreq[norm] = { title: t.title, count: 0, lastUsed: 0 };
     }
     phraseFreq[norm].count += 1;
     const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
-    if (ts > phraseFreq[norm].lastUsed) phraseFreq[norm].lastUsed = ts;
+    if (ts > phraseFreq[norm].lastUsed) {
+      phraseFreq[norm].lastUsed = ts;
+      phraseFreq[norm].title = t.title; // zachovat nejnovější varianty (s diakritikou)
+    }
   });
   const topPhrases = Object.values(phraseFreq)
     .filter(p => p.count >= 2)
     .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed)
-    .slice(0, 5);
+    .slice(0, 4);
   return { topVerbs, topPhrases };
 }
 
@@ -3959,7 +3972,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <span>{v.label}</span>
               </button>
             ))}
-            {phrasesToShow.slice(0, 3).map((p, i) => (
+            {phrasesToShow.slice(0, 4).map((p, i) => (
               <button key={"p_" + i} onClick={() => {
                 setText(p.title);
                 if (inputRef.current) inputRef.current.focus();
@@ -4967,35 +4980,89 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
    ═══════════════════════════════════════════════════════ */
 
 function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId }) {
+  const [showPerUser, setShowPerUser] = useState(false);
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
 
-  // Helper: je úkol "viditelně aktivní" — tj. není done, není deleted,
-  // a buď nemá showFrom nebo už showFrom nastal (není odložený do budoucnosti)
   const isVisiblyActive = (t) =>
     !isDone(t) && !isDeleted(t) &&
     !(t.showFrom && daysDiff(t.showFrom) > 0);
 
-  // Aktivní úkoly které mám plnit JÁ (nezahrnuje odložené do budoucnosti)
+  // ─── DNES ─── úkoly s due date dnes (a moje)
+  const isDueToday = (t) => {
+    if (!t.dueDate) return false;
+    const due = new Date(t.dueDate);
+    return due.getFullYear() === todayStart.getFullYear() &&
+           due.getMonth() === todayStart.getMonth() &&
+           due.getDate() === todayStart.getDate();
+  };
+  const myDueToday = tasks.filter(t =>
+    !isDeleted(t) &&
+    t.assignedTo?.includes(currentUser.name) &&
+    isDueToday(t)
+  );
+  const dayTotal = myDueToday.length;
+  const dayDone = myDueToday.filter(t => t.status === "done").length;
+  const dayPercent = dayTotal > 0 ? Math.round(dayDone / dayTotal * 100) : 0;
+  const dayActive = myDueToday.filter(t => !isDone(t)).length;
+  const dayHighPrio = myDueToday.filter(t =>
+    !isDone(t) && (t.priority === "urgent" || t.priority === "important")
+  ).length;
+
+  // ─── TÝDEN ─── splněné mnou tento týden
+  const doneThisWeekByMe = tasks.filter(t =>
+    t.status === "done" && t.completedAt && new Date(t.completedAt) >= weekAgo &&
+    t.completedByUser === currentUser.name
+  ).length;
+
+  // ─── TÝDENNÍ CÍL ─── průměr z minulých 4 týdnů
+  // Ignoruje aktuální týden (ten teprve probíhá)
+  let weekTarget = null;
+  let trendDelta = null;
+  const weekDates = [];
+  for (let w = 1; w <= 4; w++) {
+    const start = new Date(); start.setDate(start.getDate() - 7 * (w + 1));
+    const end = new Date(); end.setDate(end.getDate() - 7 * w);
+    weekDates.push({ start, end });
+  }
+  const pastWeekCounts = weekDates.map(({ start, end }) =>
+    tasks.filter(t =>
+      t.status === "done" && t.completedAt &&
+      t.completedByUser === currentUser.name &&
+      new Date(t.completedAt) >= start && new Date(t.completedAt) < end
+    ).length
+  );
+  // Cíl ze průměru, jen pokud máme alespoň 1 týden historie s daty
+  const validWeeks = pastWeekCounts.filter(c => c > 0);
+  if (validWeeks.length > 0) {
+    weekTarget = Math.round(pastWeekCounts.reduce((a, b) => a + b, 0) / 4) || null;
+    if (weekTarget) {
+      // Trend = aktuální vs. minulý týden (pastWeekCounts[0])
+      trendDelta = doneThisWeekByMe - pastWeekCounts[0];
+    }
+  }
+
+  // ─── 4 SMART CARDS ───
   const myActive = tasks.filter(t =>
     isVisiblyActive(t) && t.assignedTo?.includes(currentUser.name)
   );
-
-  // Úkoly, které JÁ jsem zadal NĚKOMU DRUHÉMU (ne sobě)
+  const inProgressCount = myActive.filter(t => t.status === "in_progress").length;
+  const overdueCount = myActive.filter(t => daysDiff(t.dueDate) < 0).length;
   const assignedByMeToOthers = tasks.filter(t =>
     isVisiblyActive(t) &&
     t.createdBy === currentUser.name &&
     !t.assignedTo?.every(a => a === currentUser.name)
   );
 
-  // Úkoly které JÁ jsem splnil za tento týden
-  const doneThisWeekByMe = tasks.filter(t =>
-    t.status === "done" && t.completedAt && new Date(t.completedAt) >= weekAgo &&
-    t.completedByUser === currentUser.name
-  ).length;
+  const cards = [
+    { id: "my",         value: myActive.length,             label: "Pro mě",      icon: "⚡", color: theme.accent },
+    { id: "in_progress", value: inProgressCount,            label: "Rozpracov.",  icon: "🔥", color: theme.yellow },
+    { id: "overdue",    value: overdueCount,                label: "Po termínu",  icon: "⚠️", color: theme.red },
+    { id: "assigned",   value: assignedByMeToOthers.length, label: "Druhým",      icon: "📤", color: theme.purple },
+  ];
 
-  const overdueCount = myActive.filter(t => daysDiff(t.dueDate) < 0).length;
-
-  // Per-user týdenní dokončené — ukáže aktivitu celé rodiny
+  // Per-user týdenní dokončené
   const perUserWeek = users.map(u => ({
     name: u.name,
     count: tasks.filter(t =>
@@ -5004,52 +5071,149 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
     ).length,
   }));
 
-  const stats = [
-    { id: "my",       value: myActive.length,              label: "Zbývá mně",     color: theme.accent },
-    { id: "assigned", value: assignedByMeToOthers.length,  label: "Zadáno druhým", color: theme.purple },
-    { id: "done_week", value: doneThisWeekByMe,            label: "Splněno týden", color: theme.green },
-    { id: "overdue",  value: overdueCount,                 label: "Po termínu",    color: overdueCount > 0 ? theme.red : theme.textDim },
-  ];
-
   return (
-    <div style={{ ...cardStyle(theme), padding: "12px 14px", marginBottom: "14px" }}>
-      <div style={{ display: "flex", gap: "4px", marginBottom: (perUserWeek.length > 1 && currentUser.admin) ? "8px" : "0" }}>
-        {stats.map((stat) => {
-          const isActive = activeStatId === stat.id;
+    <div style={{ ...cardStyle(theme), padding: "10px 12px", marginBottom: "12px" }}>
+      {/* ═══ TOP: DNES (vlevo) + TÝDEN (vpravo) ═══ */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px",
+        marginBottom: "10px", paddingBottom: "8px",
+        borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        {/* DNES */}
+        <div>
+          <div style={{
+            fontSize: "9px", fontWeight: 800, color: theme.textMid,
+            textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px",
+          }}>🎯 Dnes</div>
+          {dayTotal > 0 ? (
+            <>
+              <div style={{
+                width: "100%", height: "6px", borderRadius: "3px",
+                background: theme.inputBorder, overflow: "hidden",
+                marginBottom: "4px",
+              }}>
+                <div style={{
+                  height: "100%", width: `${dayPercent}%`,
+                  background: dayPercent === 100 ? theme.green : theme.accent,
+                  borderRadius: "3px",
+                  transition: "width 0.4s ease",
+                }} />
+              </div>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+                {dayDone}/{dayTotal}
+                <span style={{ fontSize: "11px", fontWeight: 500, color: theme.textSub, marginLeft: "6px" }}>
+                  ({dayPercent}%)
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: theme.textMid, marginTop: "1px" }}>
+                {dayActive > 0 ? `${dayActive} zbývá` : "Vše hotovo! 🎉"}
+                {dayHighPrio > 0 && (
+                  <span style={{ color: theme.priority.urgent.text, fontWeight: 700 }}>
+                    {" · "}{dayHighPrio} prio
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: "11px", color: theme.textMid, paddingTop: "4px" }}>
+              Žádné úkoly s termínem dnes
+            </div>
+          )}
+        </div>
+
+        {/* TÝDEN */}
+        <div style={{ textAlign: "right" }}>
+          <div style={{
+            fontSize: "9px", fontWeight: 800, color: theme.textMid,
+            textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px",
+          }}>📊 Tento týden</div>
+          <div style={{ fontSize: "18px", fontWeight: 800, color: theme.green, lineHeight: 1 }}>
+            {doneThisWeekByMe}
+            {weekTarget && (
+              <span style={{ fontSize: "12px", fontWeight: 500, color: theme.textSub }}>
+                {" / "}{weekTarget}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "10px", color: theme.textMid, marginTop: "2px" }}>
+            {trendDelta === null ? "splněno" :
+              trendDelta > 0 ? <span style={{ color: theme.green, fontWeight: 700 }}>↑ +{trendDelta} vs minulý 🎉</span> :
+              trendDelta < 0 ? <span style={{ color: theme.textSub }}>↓ {trendDelta} vs minulý</span> :
+              <span>= jako minulý</span>
+            }
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ 4 SMART CARDS ═══ */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px" }}>
+        {cards.map(card => {
+          // Schovej "Po termínu" když je 0
+          if (card.id === "overdue" && card.value === 0) {
+            return <div key={card.id} />;
+          }
+          const isActive = activeStatId === card.id;
           return (
-            <button key={stat.id}
-              onClick={() => onStatClick && onStatClick(stat.id)}
-              title={`Filtrovat: ${stat.label}`}
+            <button key={card.id}
+              onClick={() => onStatClick && onStatClick(card.id)}
+              title={`Filtrovat: ${card.label}`}
               style={{
                 ...buttonStyle(),
-                flex: "1 1 0",
-                background: isActive ? `${stat.color}15` : "transparent",
-                border: `1px solid ${isActive ? stat.color + "50" : "transparent"}`,
+                background: isActive ? `${card.color}15` : theme.inputBg,
+                border: `1px solid ${isActive ? card.color : theme.cardBorder}`,
                 borderRadius: "8px",
                 padding: "6px 4px",
                 textAlign: "center",
                 cursor: "pointer",
                 transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) e.currentTarget.style.background = `${card.color}08`;
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) e.currentTarget.style.background = theme.inputBg;
               }}>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: stat.color }}>{stat.value}</div>
               <div style={{
-                fontSize: "9px", color: theme.textMid, fontWeight: 600,
-                textTransform: "uppercase", letterSpacing: "0.2px", marginTop: "1px",
-              }}>{stat.label}</div>
+                fontSize: "10px", color: theme.textMid,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: "3px",
+              }}>
+                <span>{card.icon}</span>
+                <span style={{ fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.2px" }}>
+                  {card.label}
+                </span>
+              </div>
+              <div style={{
+                fontSize: "16px", fontWeight: 800, color: card.color, marginTop: "2px",
+              }}>{card.value}</div>
             </button>
           );
         })}
       </div>
-      {perUserWeek.length > 1 && currentUser.admin && (
-        <div style={{
-          display: "flex", gap: "12px", justifyContent: "center",
-          paddingTop: "6px", borderTop: `1px solid ${theme.cardBorder}`,
-        }}>
-          {perUserWeek.map(u => (
-            <span key={u.name} style={{ fontSize: "10px", color: theme.textSub }}>
-              {u.name}: <strong style={{ color: theme.green }}>{u.count}</strong> /týden
-            </span>
-          ))}
+
+      {/* ═══ Per-user (admin only, collapsed) ═══ */}
+      {currentUser.admin && perUserWeek.length > 1 && (
+        <div style={{ marginTop: "8px", paddingTop: "6px", borderTop: `1px solid ${theme.cardBorder}` }}>
+          <button onClick={() => setShowPerUser(s => !s)} style={{
+            ...buttonStyle(), padding: "2px 0", fontSize: "10px",
+            background: "transparent", color: theme.textSub,
+            border: "none", display: "flex", alignItems: "center", gap: "4px",
+            cursor: "pointer",
+          }}>
+            <span>{showPerUser ? "▼" : "▶"}</span>
+            <span>Detail per osoba</span>
+          </button>
+          {showPerUser && (
+            <div style={{
+              display: "flex", gap: "12px", flexWrap: "wrap",
+              paddingTop: "4px",
+            }}>
+              {perUserWeek.map(u => (
+                <span key={u.name} style={{ fontSize: "10px", color: theme.textSub }}>
+                  {u.name}: <strong style={{ color: theme.green }}>{u.count}</strong> /týden
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -7826,10 +7990,10 @@ export default function App() {
             // Apply filter based on which stat was clicked
             if (id === "my") {
               setFilter("my"); setViewStatus("active"); setSortMode("smart");
+            } else if (id === "in_progress") {
+              setFilter("my"); setViewStatus("in_progress");
             } else if (id === "assigned") {
               setFilter("assigned"); setViewStatus("active");
-            } else if (id === "done_week") {
-              setFilter("my"); setViewStatus("done");
             } else if (id === "overdue") {
               setFilter("my"); setViewStatus("active"); setSortMode("date");
             }
