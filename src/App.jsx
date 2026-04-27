@@ -141,6 +141,62 @@ function formatDuration(fromIso) {
   return `${months} ${months === 1 ? "měsíc" : (months < 5 ? "měsíce" : "měsíců")}`;
 }
 
+// Intensity level pro in_progress úkol — podle stáří
+// 0 = čerstvý (<24h), 1 = den (24-48h), 2 = staré (48h-7d), 3 = velmi staré (>7d)
+function inProgressIntensity(fromIso) {
+  if (!fromIso) return 0;
+  const hours = (Date.now() - new Date(fromIso).getTime()) / 3600000;
+  if (hours < 24) return 0;
+  if (hours < 48) return 1;
+  if (hours < 168) return 2; // < 7 dní
+  return 3;
+}
+
+// Resize image client-side using Canvas (max 1200px width)
+async function resizeImage(file, maxWidth = 1200) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round(height * (maxWidth / width));
+        width = maxWidth;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(resolve, "image/jpeg", 0.85);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// Upload image to Supabase Storage 'task-images' bucket. Returns public URL or null on failure.
+async function uploadTaskImage(file) {
+  if (!file) return null;
+  if (file.size > 5 * 1024 * 1024) {
+    alert("Foto je větší než 5 MB. Použij menší.");
+    return null;
+  }
+  try {
+    const resized = await resizeImage(file);
+    const filename = `note_${Date.now()}_${Math.random().toString(36).slice(2, 9)}.jpg`;
+    const { error } = await supabase.storage
+      .from("task-images")
+      .upload(filename, resized, { contentType: "image/jpeg" });
+    if (error) throw error;
+    const { data } = supabase.storage.from("task-images").getPublicUrl(filename);
+    return data.publicUrl;
+  } catch (e) {
+    console.error("Upload failed:", e);
+    alert("Nahrání fotky se nezdařilo.");
+    return null;
+  }
+}
+
 function autoDetectCategory(title) {
   const lower = title.toLowerCase();
   for (const cat of CATEGORIES) {
@@ -1784,9 +1840,12 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             </div>
             {task.checklist.map(item => {
               const itemComments = comments.filter(c => c.checklistItemId === item.id);
+              const hasNotes = (item.notes || []).length > 0;
               return (
                 <div key={item.id} style={{
-                  display: "flex", alignItems: "center", gap: "8px",
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr auto auto",
+                  alignItems: "center", gap: "8px",
                   padding: "7px 10px", borderRadius: "6px", marginBottom: "3px",
                   background: item.done ? `${theme.green}08` : theme.inputBg,
                   border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
@@ -1805,7 +1864,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     {item.done && "✓"}
                   </button>
                   <span style={{
-                    flex: 1, fontSize: "13px",
+                    fontSize: "13px",
                     color: item.done ? theme.textSub : theme.text,
                     textDecoration: item.done ? "line-through" : "none",
                     lineHeight: 1.3,
@@ -1827,6 +1886,18 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       💬 {itemComments.length}
                     </span>
                   )}
+                  <ChecklistItemNotes
+                    item={item}
+                    currentUser={currentUser}
+                    theme={theme}
+                    defaultExpanded={hasNotes}
+                    onUpdateItem={(itemId, patch) => {
+                      const updated = task.checklist.map(it =>
+                        it.id === itemId ? { ...it, ...patch } : it
+                      );
+                      onUpdate(task.id, { checklist: updated });
+                    }}
+                  />
                 </div>
               );
             })}
@@ -2409,6 +2480,294 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
 }
 
 /* ═══════════════════════════════════════════════════════
+   IMAGE LIGHTBOX — fullscreen view fotky
+   ═══════════════════════════════════════════════════════ */
+
+function ImageLightbox({ url, onClose }) {
+  if (!url) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+      background: "rgba(0,0,0,0.92)", zIndex: 9999,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "20px", cursor: "pointer",
+    }}>
+      <img src={url} alt="" style={{
+        maxWidth: "100%", maxHeight: "100%",
+        objectFit: "contain", borderRadius: "8px",
+      }} />
+      <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{
+        position: "absolute", top: 16, right: 16,
+        width: 40, height: 40, borderRadius: "50%",
+        background: "rgba(255,255,255,0.15)", color: "#fff",
+        border: "none", fontSize: 20, cursor: "pointer",
+      }}>×</button>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   CHECKLIST ITEM NOTES — poznámky k jednotlivým položkám
+   ═══════════════════════════════════════════════════════ */
+
+function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExpanded = false }) {
+  const notes = item.notes || [];
+  const [expanded, setExpanded] = useState(defaultExpanded || notes.length > 0);
+  const [text, setText] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const addNote = async (imageUrl = null) => {
+    if (!text.trim() && !imageUrl) return;
+    const newNote = {
+      id: "n_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      text: text.trim(),
+      author: currentUser.name,
+      createdAt: new Date().toISOString(),
+      reactions: {},
+      imageUrl: imageUrl || null,
+    };
+    onUpdateItem(item.id, { notes: [...notes, newNote] });
+    setText("");
+  };
+
+  const deleteNote = (noteId) => {
+    if (!confirm("Smazat tuto poznámku?")) return;
+    onUpdateItem(item.id, { notes: notes.filter(n => n.id !== noteId) });
+  };
+
+  const startEdit = (note) => {
+    setEditingId(note.id);
+    setEditText(note.text);
+  };
+
+  const saveEdit = () => {
+    onUpdateItem(item.id, {
+      notes: notes.map(n => n.id === editingId ? { ...n, text: editText.trim() } : n),
+    });
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const toggleReaction = (noteId, emoji) => {
+    const updated = notes.map(n => {
+      if (n.id !== noteId) return n;
+      const reactions = { ...(n.reactions || {}) };
+      const list = reactions[emoji] || [];
+      if (list.includes(currentUser.name)) {
+        reactions[emoji] = list.filter(u => u !== currentUser.name);
+        if (reactions[emoji].length === 0) delete reactions[emoji];
+      } else {
+        reactions[emoji] = [...list, currentUser.name];
+      }
+      return { ...n, reactions };
+    });
+    onUpdateItem(item.id, { notes: updated });
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const url = await uploadTaskImage(file);
+    setUploading(false);
+    if (url) {
+      await addNote(url);
+    }
+    e.target.value = ""; // reset input
+  };
+
+  if (!expanded) {
+    return (
+      <button onClick={() => setExpanded(true)} title="Přidat poznámku" style={{
+        width: "24px", height: "24px", minWidth: "24px",
+        borderRadius: "5px", border: "none",
+        background: "transparent", cursor: "pointer",
+        color: theme.textDim, fontSize: "13px",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        opacity: 0.5, transition: "all 0.15s",
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
+      onMouseLeave={(e) => e.currentTarget.style.opacity = 0.5}>
+        ✏️
+      </button>
+    );
+  }
+
+  return (
+    <>
+      <ImageLightbox url={lightboxUrl} onClose={() => setLightboxUrl(null)} />
+      <div style={{
+        gridColumn: "1 / -1",
+        marginTop: "6px",
+        padding: "8px 10px",
+        background: `${theme.purple}08`,
+        border: `1px solid ${theme.purple}25`,
+        borderRadius: "6px",
+        display: "flex", flexDirection: "column", gap: "6px",
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          fontSize: "10px", fontWeight: 700, color: theme.purple,
+          textTransform: "uppercase", letterSpacing: "0.4px",
+        }}>
+          <span>📝 Poznámky ({notes.length})</span>
+          <button onClick={() => setExpanded(false)} style={{
+            background: "transparent", border: "none", color: theme.textSub,
+            fontSize: "12px", cursor: "pointer", padding: 0,
+          }} title="Schovat">▲</button>
+        </div>
+
+        {/* List existing notes */}
+        {notes.map(n => (
+          <div key={n.id} style={{
+            background: theme.card,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "5px",
+            padding: "6px 8px",
+            display: "flex", flexDirection: "column", gap: "4px",
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              fontSize: "10px", color: theme.textMid,
+            }}>
+              <span><strong style={{ color: theme.text }}>{n.author}</strong> · {formatTimeTrace(n.createdAt)}</span>
+              {n.author === currentUser.name && editingId !== n.id && (
+                <span style={{ display: "flex", gap: "4px" }}>
+                  <button onClick={() => startEdit(n)} title="Upravit" style={{
+                    background: "transparent", border: "none", cursor: "pointer",
+                    color: theme.textSub, fontSize: "11px", padding: "0 2px",
+                  }}>✏️</button>
+                  <button onClick={() => deleteNote(n.id)} title="Smazat" style={{
+                    background: "transparent", border: "none", cursor: "pointer",
+                    color: theme.red, fontSize: "11px", padding: "0 2px",
+                  }}>🗑</button>
+                </span>
+              )}
+            </div>
+
+            {editingId === n.id ? (
+              <div style={{ display: "flex", gap: "4px" }}>
+                <input
+                  type="text" value={editText} onChange={e => setEditText(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingId(null); }}
+                  autoFocus
+                  style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "12px", flex: 1 }}
+                />
+                <button onClick={saveEdit} style={{
+                  ...buttonStyle(), padding: "5px 8px", fontSize: "11px",
+                  background: theme.green, color: "#fff", border: "none",
+                }}>✓</button>
+                <button onClick={() => setEditingId(null)} style={{
+                  ...buttonStyle(), padding: "5px 8px", fontSize: "11px",
+                  background: "transparent", color: theme.textSub,
+                  border: `1px solid ${theme.cardBorder}`,
+                }}>×</button>
+              </div>
+            ) : (
+              <>
+                {n.text && (
+                  <div style={{ fontSize: "12px", color: theme.text, lineHeight: 1.4 }}>{n.text}</div>
+                )}
+                {n.imageUrl && (
+                  <img
+                    src={n.imageUrl}
+                    alt=""
+                    onClick={() => setLightboxUrl(n.imageUrl)}
+                    style={{
+                      maxWidth: "100%", maxHeight: "180px",
+                      borderRadius: "5px", cursor: "pointer",
+                      objectFit: "cover",
+                    }}
+                  />
+                )}
+                {/* Reactions */}
+                <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", alignItems: "center" }}>
+                  {REACTION_EMOJIS.map(emoji => {
+                    const list = n.reactions?.[emoji] || [];
+                    const active = list.includes(currentUser.name);
+                    if (list.length === 0 && !active) {
+                      return (
+                        <button key={emoji} onClick={() => toggleReaction(n.id, emoji)} style={{
+                          background: "transparent", border: "none",
+                          opacity: 0.35, cursor: "pointer", fontSize: "12px", padding: "1px 4px",
+                          transition: "opacity 0.15s",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = 0.35}>
+                          {emoji}
+                        </button>
+                      );
+                    }
+                    return (
+                      <button key={emoji} onClick={() => toggleReaction(n.id, emoji)} title={list.join(", ")} style={{
+                        background: active ? `${theme.accent}20` : theme.inputBg,
+                        border: `1px solid ${active ? theme.accent : theme.cardBorder}`,
+                        borderRadius: "10px",
+                        padding: "1px 6px",
+                        cursor: "pointer", fontSize: "11px",
+                        display: "inline-flex", gap: "3px", alignItems: "center",
+                      }}>
+                        <span>{emoji}</span>
+                        <span style={{ fontWeight: 700, color: active ? theme.accent : theme.textSub }}>{list.length}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+
+        {/* Add new note */}
+        <div style={{ display: "flex", gap: "4px", alignItems: "stretch" }}>
+          <input
+            type="text"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") addNote(); }}
+            placeholder="Napiš poznámku..."
+            style={{ ...inputStyle(theme), padding: "6px 10px", fontSize: "12px", flex: 1 }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileUpload}
+            style={{ display: "none" }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            title="Přidat foto"
+            style={{
+              ...buttonStyle(), padding: "6px 8px", fontSize: "13px",
+              background: theme.inputBg, color: theme.textSub,
+              border: `1px solid ${theme.inputBorder}`,
+              cursor: uploading ? "wait" : "pointer",
+            }}>
+            {uploading ? "⌛" : "📎"}
+          </button>
+          <button
+            onClick={() => addNote()}
+            disabled={!text.trim()}
+            style={{
+              ...buttonStyle(), padding: "6px 10px", fontSize: "12px", fontWeight: 700,
+              background: text.trim() ? theme.purple : theme.inputBg,
+              color: text.trim() ? "#fff" : theme.textDim,
+              border: `1px solid ${text.trim() ? theme.purple : theme.inputBorder}`,
+              cursor: text.trim() ? "pointer" : "default",
+            }}>▶</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
@@ -2555,6 +2914,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const checklistDone = task.checklist?.filter(c => c.done).length || 0;
   const checklistTotal = task.checklist?.length || 0;
   const allChecked = checklistTotal > 0 && checklistDone === checklistTotal;
+  const totalItemNotes = (task.checklist || []).reduce((sum, item) => sum + (item.notes?.length || 0), 0);
 
   const handleClick = () => {
     // If this is a progress card, scroll to the main active card and open it there
@@ -2716,7 +3076,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       borderLeft: `5px solid ${
         actionAnim ? animColor
         : recentlyAdded ? theme.green
-        : (inProgress && !taskIsDone && !taskIsDeleted) ? theme.yellow
+        : (inProgress && !taskIsDone && !taskIsDeleted) ? (() => {
+            const i = inProgressIntensity(task.inProgressAt);
+            return i === 0 ? theme.yellow : i === 1 ? "#f59e0b" : i === 2 ? "#ea580c" : theme.red;
+          })()
         : leftBorderColor
       }`,
       padding: "8px 11px",
@@ -2952,6 +3315,18 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               </span>
             )}
 
+            {/* Notes badge — počet poznámek k položkám */}
+            {totalItemNotes > 0 && (
+              <span title={`${totalItemNotes} poznámek k položkám`} style={{
+                fontSize: "10px", fontWeight: 700, color: theme.purple,
+                padding: "1px 6px", borderRadius: "8px",
+                background: `${theme.purple}15`,
+                border: `1px solid ${theme.purple}30`,
+              }}>
+                📝 {totalItemNotes}
+              </span>
+            )}
+
             {/* Both users dots */}
             {task.assignTo === "both" && (
               <span style={{ display: "inline-flex", gap: "2px" }}>
@@ -2990,16 +3365,27 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 ⏰ od {formatDate(task.showFrom)}
               </span>
             )}
-            {/* In-progress duration indicator */}
-            {inProgress && task.inProgressAt && !taskIsDone && !taskIsDeleted && (
-              <span style={{
-                fontSize: "10px", fontWeight: 700, color: theme.yellow,
-                background: `${theme.yellow}15`,
-                padding: "1px 6px", borderRadius: "4px",
-              }}>
-                ◐ {formatDuration(task.inProgressAt)}
-              </span>
-            )}
+            {/* In-progress duration indicator — barva podle stáří */}
+            {inProgress && task.inProgressAt && !taskIsDone && !taskIsDeleted && (() => {
+              const intensity = inProgressIntensity(task.inProgressAt);
+              const colors = [
+                { fg: theme.yellow, bg: `${theme.yellow}15`, prefix: "◐" },        // 0: <24h
+                { fg: "#f59e0b",   bg: "#f59e0b1f",         prefix: "◐!" },         // 1: 24-48h (orange light)
+                { fg: "#ea580c",   bg: "#ea580c20",         prefix: "◐!" },         // 2: 48h-7d (orange)
+                { fg: theme.red,   bg: `${theme.red}1a`,    prefix: "◐!!" },        // 3: >7d (red)
+              ];
+              const c = colors[intensity];
+              return (
+                <span style={{
+                  fontSize: "10px", fontWeight: 700, color: c.fg,
+                  background: c.bg,
+                  padding: "1px 6px", borderRadius: "4px",
+                  border: intensity >= 2 ? `1px solid ${c.fg}40` : "none",
+                }} title={intensity >= 1 ? "Tento úkol je rozpracovaný déle než 24h — zvaž dokončení nebo odložení" : ""}>
+                  {c.prefix} {formatDuration(task.inProgressAt)}
+                </span>
+              );
+            })()}
             {task.dueDate && !taskIsDone && !isDeleted(task) && (
               <span style={{
                 fontSize: "10px", fontWeight: 600,
@@ -5886,6 +6272,7 @@ export default function App() {
   // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
   // aby nepřepisovaly náš čerstvý lokální stav.
   const localEditsRef = useRef({}); // { [taskId]: timestamp }
+  const localCommentEditsRef = useRef({}); // { [commentId]: timestamp }
   const [comments, setComments] = useState([]);
   const [users, setUsers] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -6098,6 +6485,9 @@ export default function App() {
         if (payload.eventType === "INSERT") {
           setComments(prev => prev.find(c => c.id === payload.new.id) ? prev : [...prev, dbToComment(payload.new)]);
         } else if (payload.eventType === "UPDATE") {
+          // Echo prevention — pokud jsme tento komentář editovali v posledních 1500ms, ignoruj
+          const lastEdit = localCommentEditsRef.current[payload.new.id] || 0;
+          if (Date.now() - lastEdit < 1500) return;
           setComments(prev => prev.map(c => c.id === payload.new.id ? dbToComment(payload.new) : c));
         } else if (payload.eventType === "DELETE") {
           setComments(prev => prev.filter(c => c.id !== payload.old.id));
@@ -6458,6 +6848,9 @@ export default function App() {
 
   const markCommentsSeen = useCallback(async (commentIds) => {
     if (!commentIds || commentIds.length === 0) return;
+    const now = Date.now();
+    // Echo prevention — označ tyto komentáře jako právě upravené
+    commentIds.forEach(id => { localCommentEditsRef.current[id] = now; });
     const updates = [];
     setComments(prev => prev.map(c => {
       if (!commentIds.includes(c.id)) return c;
@@ -6624,7 +7017,16 @@ export default function App() {
       .sort((a, b) => (recentlyAdded[b.id] || 0) - (recentlyAdded[a.id] || 0));
 
     const recentIds = new Set(recentList.map(t => t.id));
-    const remainingActive = activeTasks.filter(t => !recentIds.has(t.id));
+
+    // ═══ Dlouho rozpracované (>24h) ═══
+    // Úkoly v in_progress déle než 24h jdou na vrchol jako varovná sekce.
+    const staleList = activeTasks
+      .filter(t => !recentIds.has(t.id))
+      .filter(t => t.status === "in_progress" && t.inProgressAt && inProgressIntensity(t.inProgressAt) >= 1)
+      .sort((a, b) => new Date(a.inProgressAt) - new Date(b.inProgressAt)); // nejstarší první
+    const staleIds = new Set(staleList.map(t => t.id));
+
+    const remainingActive = activeTasks.filter(t => !recentIds.has(t.id) && !staleIds.has(t.id));
 
     if (recentList.length > 0) {
       items.push({ type: "section_header_recent", key: "section-recent", count: recentList.length });
@@ -6636,6 +7038,12 @@ export default function App() {
         items.push({ type: "task", task, key: task.id, recentlyAdded: true, fadeProgress });
       });
       items.push({ type: "section_divider", key: "section-divider-recent" });
+    }
+
+    if (staleList.length > 0) {
+      items.push({ type: "section_header_stale", key: "section-stale", count: staleList.length });
+      staleList.forEach(task => items.push({ type: "task", task, key: task.id }));
+      items.push({ type: "section_divider", key: "section-divider-stale" });
     }
 
     remainingActive.forEach(task => items.push({ type: "task", task, key: task.id }));
@@ -7212,6 +7620,31 @@ export default function App() {
                         marginLeft: "auto",
                       }}>
                         zmizí během 5 min
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_header_stale") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "4px 0 8px",
+                      padding: "8px 12px",
+                      background: "#ea580c10",
+                      border: `2px solid #ea580c`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: "#ea580c", fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.3px",
+                      }}>
+                        🔥 Dlouho rozpracované ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        dotáhni nebo odlož
                       </span>
                     </div>
                   );
