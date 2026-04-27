@@ -2520,6 +2520,24 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Auto-mark unseen notes as seen po 2s expanded — uvidím = označím jako přečtené
+  useEffect(() => {
+    if (!expanded || notes.length === 0) return;
+    const timer = setTimeout(() => {
+      const hasUnseen = notes.some(n =>
+        n.author !== currentUser.name && !n.seenBy?.includes(currentUser.name)
+      );
+      if (!hasUnseen) return;
+      const updated = notes.map(n => {
+        if (n.author === currentUser.name) return n;
+        if (n.seenBy?.includes(currentUser.name)) return n;
+        return { ...n, seenBy: [...(n.seenBy || []), currentUser.name] };
+      });
+      onUpdateItem(item.id, { notes: updated });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [expanded, notes, currentUser.name, item.id, onUpdateItem]);
+
   const addNote = async (imageUrl = null) => {
     if (!text.trim() && !imageUrl) return;
     const newNote = {
@@ -2529,6 +2547,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
       createdAt: new Date().toISOString(),
       reactions: {},
       imageUrl: imageUrl || null,
+      seenBy: [currentUser.name],
     };
     onUpdateItem(item.id, { notes: [...notes, newNote] });
     setText("");
@@ -2622,14 +2641,26 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
         </div>
 
         {/* List existing notes */}
-        {notes.map(n => (
+        {notes.map(n => {
+          const isUnseen = n.author !== currentUser.name && !n.seenBy?.includes(currentUser.name);
+          return (
           <div key={n.id} style={{
-            background: theme.card,
-            border: `1px solid ${theme.cardBorder}`,
+            background: isUnseen ? `${theme.purple}12` : theme.card,
+            border: `1px solid ${isUnseen ? theme.purple : theme.cardBorder}`,
             borderRadius: "5px",
             padding: "6px 8px",
             display: "flex", flexDirection: "column", gap: "4px",
+            position: "relative",
           }}>
+            {isUnseen && (
+              <span style={{
+                position: "absolute", top: "-4px", right: "6px",
+                fontSize: "9px", fontWeight: 800, color: "#fff",
+                background: theme.purple,
+                padding: "1px 6px", borderRadius: "8px",
+                textTransform: "uppercase", letterSpacing: "0.4px",
+              }}>nové</span>
+            )}
             <div style={{
               display: "flex", alignItems: "center", justifyContent: "space-between",
               fontSize: "10px", color: theme.textMid,
@@ -2720,7 +2751,8 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
               </>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {/* Add new note */}
         <div style={{ display: "flex", gap: "4px", alignItems: "stretch" }}>
@@ -2915,6 +2947,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const checklistTotal = task.checklist?.length || 0;
   const allChecked = checklistTotal > 0 && checklistDone === checklistTotal;
   const totalItemNotes = (task.checklist || []).reduce((sum, item) => sum + (item.notes?.length || 0), 0);
+  const unseenItemNotes = (task.checklist || []).reduce((sum, item) =>
+    sum + (item.notes || []).filter(n =>
+      n.author !== currentUser.name && !n.seenBy?.includes(currentUser.name)
+    ).length
+  , 0);
 
   const handleClick = () => {
     // If this is a progress card, scroll to the main active card and open it there
@@ -3315,15 +3352,19 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               </span>
             )}
 
-            {/* Notes badge — počet poznámek k položkám */}
+            {/* Notes badge — počet poznámek k položkám (nepřečtené výrazně) */}
             {totalItemNotes > 0 && (
-              <span title={`${totalItemNotes} poznámek k položkám`} style={{
-                fontSize: "10px", fontWeight: 700, color: theme.purple,
+              <span title={unseenItemNotes > 0
+                ? `${unseenItemNotes} nepřečtených z ${totalItemNotes} poznámek k položkám`
+                : `${totalItemNotes} poznámek k položkám`} style={{
+                fontSize: "10px", fontWeight: 700,
+                color: unseenItemNotes > 0 ? "#fff" : theme.purple,
                 padding: "1px 6px", borderRadius: "8px",
-                background: `${theme.purple}15`,
-                border: `1px solid ${theme.purple}30`,
+                background: unseenItemNotes > 0 ? theme.purple : `${theme.purple}15`,
+                border: `1px solid ${unseenItemNotes > 0 ? theme.purple : theme.purple + "30"}`,
+                animation: unseenItemNotes > 0 ? "newTaskHighlight 1.5s ease-out" : "none",
               }}>
-                📝 {totalItemNotes}
+                📝 {unseenItemNotes > 0 ? `${unseenItemNotes} nové` : totalItemNotes}
               </span>
             )}
 
@@ -5964,7 +6005,7 @@ function AdminPanel({ users, onAdd, onRemove, onClose, theme }) {
    comments and task changes the user hasn't seen yet
    ═══════════════════════════════════════════════════════ */
 
-function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onNavigate, onMarkSeen, onQuickReply, theme }) {
+function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onNavigate, onMarkSeen, onMarkItemNoteSeen, onQuickReply, theme }) {
   // Get unseen comments — the user hasn't seen them AND they're not by this user
   const unseenComments = comments.filter(c =>
     c.author !== currentUser.name &&
@@ -5988,8 +6029,38 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
     byTask[c.taskId].push(c);
   });
 
-  const totalCount = relevantComments.length;
-  const taskCount = Object.keys(byTask).length;
+  // ═══ Per-item notes detection ═══
+  // Pro každý úkol najdi nepřečtené poznámky k položkám.
+  // unseenItemNotesByTask = { taskId: [{itemId, itemText, note}, ...] }
+  const unseenItemNotesByTask = {};
+  tasks.forEach(task => {
+    if (isDone(task) || isDeleted(task)) return;
+    const isRelevant =
+      task.createdBy === currentUser.name ||
+      task.assignedTo?.includes(currentUser.name);
+    if (!isRelevant) return;
+    (task.checklist || []).forEach(item => {
+      (item.notes || []).forEach(note => {
+        if (note.author === currentUser.name) return;
+        if (note.seenBy?.includes(currentUser.name)) return;
+        if (!unseenItemNotesByTask[task.id]) unseenItemNotesByTask[task.id] = [];
+        unseenItemNotesByTask[task.id].push({
+          itemId: item.id,
+          itemText: item.text,
+          note,
+        });
+      });
+    });
+  });
+
+  const totalNoteCount = Object.values(unseenItemNotesByTask).reduce((sum, arr) => sum + arr.length, 0);
+  const taskIdsWithUpdates = new Set([
+    ...Object.keys(byTask),
+    ...Object.keys(unseenItemNotesByTask),
+  ]);
+
+  const totalCount = relevantComments.length + totalNoteCount;
+  const taskCount = taskIdsWithUpdates.size;
   const hasUpdates = totalCount > 0;
 
   // Quick reply state — single text field when user decides to reply
@@ -6085,9 +6156,11 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
           borderTop: `1px solid ${theme.cardBorder}`,
           animation: "slideUp 0.2s",
         }}>
-          {Object.entries(byTask).map(([taskId, taskComments]) => {
+          {Array.from(taskIdsWithUpdates).map(taskId => {
             const task = tasks.find(t => t.id === taskId);
             if (!task) return null;
+            const taskComments = byTask[taskId] || [];
+            const itemNotes = unseenItemNotesByTask[taskId] || [];
             return (
               <div key={taskId} style={{
                 padding: "10px 14px",
@@ -6163,8 +6236,8 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                   );
                 })}
 
-                {/* Quick reply */}
-                {replyTo === taskId ? (
+                {/* Quick reply — pouze pokud existují komentáře k odpovědi */}
+                {taskComments.length > 0 && (replyTo === taskId ? (
                   <div style={{ display: "flex", gap: "4px", marginTop: "6px" }}>
                     <input
                       type="text"
@@ -6200,7 +6273,7 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                         border: `1px solid ${theme.cardBorder}`,
                       }}>✓ Přečteno</button>
                   </div>
-                )}
+                ))}
 
                 {/* "Odesláno ✓" feedback */}
                 {justSent === taskId && (
@@ -6216,6 +6289,65 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                     animation: "slideUp 0.2s",
                   }}>
                     ✓ Odesláno a označeno jako přečtené
+                  </div>
+                )}
+
+                {/* ═══ Per-item notes section ═══ */}
+                {itemNotes.length > 0 && (
+                  <div style={{ marginTop: taskComments.length > 0 ? "8px" : "0" }}>
+                    <div style={{
+                      fontSize: "10px", fontWeight: 700, color: theme.purple,
+                      textTransform: "uppercase", letterSpacing: "0.4px",
+                      marginBottom: "4px",
+                    }}>
+                      📝 Poznámky k položkám ({itemNotes.length})
+                    </div>
+                    {itemNotes.map(({ itemId, itemText, note }) => (
+                      <div key={note.id} style={{
+                        padding: "6px 10px", marginBottom: "4px",
+                        background: `${theme.purple}08`,
+                        borderRadius: "6px", fontSize: "12px",
+                        borderLeft: `3px solid ${theme.purple}`,
+                      }}>
+                        <div style={{
+                          display: "flex", alignItems: "center", gap: "6px",
+                          marginBottom: "2px",
+                        }}>
+                          <span style={{ fontWeight: 700, color: theme.text }}>{note.author}</span>
+                          <span style={{ fontSize: "10px", color: theme.textMid }}>
+                            {formatRelativeTime(note.createdAt)}
+                          </span>
+                        </div>
+                        <div style={{
+                          fontSize: "10px", color: theme.textMid, marginBottom: "3px",
+                          fontStyle: "italic",
+                        }}>
+                          k položce: {itemText}
+                        </div>
+                        {note.text && (
+                          <div style={{ color: theme.text, lineHeight: 1.4 }}>{note.text}</div>
+                        )}
+                        {note.imageUrl && (
+                          <div style={{ fontSize: "11px", color: theme.purple, marginTop: "2px" }}>
+                            📎 Foto
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => {
+                        onNavigate(taskId);
+                        if (onMarkItemNoteSeen) {
+                          onMarkItemNoteSeen(taskId, itemNotes.map(n => ({ itemId: n.itemId, noteId: n.note.id })));
+                        }
+                      }}
+                      style={{
+                        ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
+                        background: `${theme.purple}12`, color: theme.purple,
+                        border: `1px solid ${theme.purple}25`, fontWeight: 600,
+                      }}>
+                      → Otevřít úkol
+                    </button>
                   </div>
                 )}
               </div>
@@ -6862,6 +6994,29 @@ export default function App() {
     for (const u of updates) await apiUpdateComment(u);
   }, [currentUser]);
 
+  // Mark per-item notes as seen — entries: [{itemId, noteId}, ...]
+  const markItemNoteSeen = useCallback(async (taskId, entries) => {
+    if (!entries || entries.length === 0) return;
+    localEditsRef.current[taskId] = Date.now();
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const updatedChecklist = (t.checklist || []).map(item => {
+        const matching = entries.filter(e => e.itemId === item.id);
+        if (matching.length === 0) return item;
+        const noteIds = new Set(matching.map(m => m.noteId));
+        const updatedNotes = (item.notes || []).map(n => {
+          if (!noteIds.has(n.id)) return n;
+          if (n.seenBy?.includes(currentUser.name)) return n;
+          return { ...n, seenBy: [...(n.seenBy || []), currentUser.name] };
+        });
+        return { ...item, notes: updatedNotes };
+      });
+      const updated = { ...t, checklist: updatedChecklist };
+      apiUpdateTask(updated);
+      return updated;
+    }));
+  }, [currentUser]);
+
   // ── Computed values ──
 
   const unreadCounts = useMemo(() => {
@@ -7381,6 +7536,7 @@ export default function App() {
             setUpdatesPanelOpen(false);
           }}
           onMarkSeen={markCommentsSeen}
+          onMarkItemNoteSeen={markItemNoteSeen}
           onQuickReply={(taskId, text) => addComment(taskId, text)}
           theme={theme}
         />
