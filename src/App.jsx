@@ -615,6 +615,13 @@ const GLOBAL_CSS = `
   0%, 100% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15), 0 2px 8px rgba(245, 158, 11, 0.4); }
   50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.30), 0 2px 12px rgba(245, 158, 11, 0.6); }
 }
+@keyframes searchHighlight {
+  0%   { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.0); }
+  10%  { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0.45), 0 0 30px rgba(99, 102, 241, 0.7); }
+  40%  { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.30), 0 0 20px rgba(99, 102, 241, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0.40), 0 0 28px rgba(99, 102, 241, 0.6); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.0); }
+}
 @keyframes actionCardGlow {
   0% { box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
   30% { box-shadow: 0 0 40px currentColor, 0 4px 20px currentColor; }
@@ -2890,7 +2897,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0 }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -3018,6 +3025,16 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       }, 100);
     }
   }, [autoOpen, task.id]);
+
+  // Scroll to task when highlighted (z search) — i bez auto-open
+  useEffect(() => {
+    if (isHighlighted) {
+      setTimeout(() => {
+        const el = document.getElementById(`task-${task.id}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [isHighlighted, task.id]);
 
   // isNew: úkol je nový pokud:
   //   - autor není currentUser (porovnáno case-insensitive + trimmed kvůli přípaným chybám v datech)
@@ -3232,6 +3249,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       cursor: "pointer",
       position: "relative",
       animation: actionAnim ? "actionCardGlow 0.55s ease-out"
+        : isHighlighted ? "searchHighlight 2.4s ease-out"
         : recentlyAdded ? "newTaskHighlight 1.5s ease-out"
         : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
@@ -3752,7 +3770,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -4150,33 +4168,62 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               return visibleLists.map(list => {
                 const listKey = `list:${list.id}`;
                 const selected = currentCategory === listKey;
+                const canEditList = list.created_by_user === currentUser.name;
                 return (
-                  <button key={list.id}
-                    onClick={() => {
-                      if (isTyping) {
-                        setQuickCategory(selected ? null : listKey);
-                      } else {
-                        onCategoryFilterChange(selected ? "all" : listKey);
-                      }
-                      setOpenSegment(null);
-                    }}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "7px 10px", fontSize: "12px",
-                      background: selected ? `${list.color}20` : "transparent",
-                      color: selected ? list.color : theme.text,
-                      border: "none", textAlign: "left", borderRadius: "6px",
-                      display: "flex", alignItems: "center", gap: "6px",
-                    }}
-                    onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
-                    onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ fontSize: "15px" }}>{list.emoji || "📁"}</span>
-                    <span style={{ flex: 1 }}>{list.name}</span>
-                    {!list.is_shared && (
-                      <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
+                  <div key={list.id} style={{
+                    display: "flex", alignItems: "stretch",
+                    background: selected ? `${list.color}20` : "transparent",
+                    borderRadius: "6px",
+                  }}
+                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
+                    <button
+                      onClick={() => {
+                        if (isTyping) {
+                          setQuickCategory(selected ? null : listKey);
+                        } else {
+                          onCategoryFilterChange(selected ? "all" : listKey);
+                        }
+                        setOpenSegment(null);
+                      }}
+                      style={{
+                        ...buttonStyle(),
+                        flex: 1,
+                        padding: "7px 10px", fontSize: "12px",
+                        background: "transparent",
+                        color: selected ? list.color : theme.text,
+                        border: "none", textAlign: "left", borderRadius: "6px",
+                        display: "flex", alignItems: "center", gap: "6px",
+                      }}>
+                      <span style={{ fontSize: "15px" }}>{list.emoji || "📁"}</span>
+                      <span style={{ flex: 1 }}>{list.name}</span>
+                      {!list.is_shared && (
+                        <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
+                      )}
+                      {selected && <span style={{ color: list.color, fontSize: "11px" }}>✓</span>}
+                    </button>
+                    {canEditList && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenSegment(null);
+                          onEditList && onEditList(list);
+                        }}
+                        title="Upravit / smazat"
+                        style={{
+                          ...buttonStyle(),
+                          padding: "0 10px", fontSize: "13px",
+                          background: "transparent",
+                          color: theme.textSub,
+                          border: "none", borderRadius: "6px",
+                          cursor: "pointer", opacity: 0.6,
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = 0.6}>
+                        ✏️
+                      </button>
                     )}
-                    {selected && <span style={{ color: list.color, fontSize: "11px" }}>✓</span>}
-                  </button>
+                  </div>
                 );
               });
             })()}
@@ -5109,36 +5156,72 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
    CREATE LIST MODAL — modal pro vytvoření vlastního seznamu
    ═══════════════════════════════════════════════════════ */
 
-function CreateListModal({ theme, currentUser, onClose, onCreate }) {
-  const [name, setName] = useState("");
-  const [emoji, setEmoji] = useState("📁");
-  const [color, setColor] = useState("#3b82f6");
-  const [isShared, setIsShared] = useState(true);
-  const [creating, setCreating] = useState(false);
+function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDelete, editingList = null }) {
+  const isEditing = !!editingList;
+  const [name, setName] = useState(editingList?.name || "");
+  const [emoji, setEmoji] = useState(editingList?.emoji || "📁");
+  const [color, setColor] = useState(editingList?.color || "#3b82f6");
+  const [isShared, setIsShared] = useState(editingList?.is_shared !== false);
+  const [saving, setSaving] = useState(false);
 
   const EMOJIS = ["📁", "🏗", "🌴", "🏠", "💼", "🎓", "🎨", "🚗", "💪", "🍽", "🎁", "📚"];
   const COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#6366f1"];
 
-  const handleCreate = async () => {
+  // Pouze vlastník může editovat / mazat
+  const canEdit = isEditing && editingList?.created_by_user === currentUser.name;
+
+  const handleSave = async () => {
     if (!name.trim()) return;
-    setCreating(true);
+    setSaving(true);
     try {
-      const newList = {
-        name: name.trim(),
-        emoji,
-        color,
-        is_shared: isShared,
-        created_by_user: currentUser.name,
-      };
-      const { data, error } = await supabase.from("custom_lists").insert([newList]).select().single();
+      if (isEditing) {
+        if (!canEdit) {
+          alert("Můžeš editovat jen vlastní seznamy.");
+          setSaving(false);
+          return;
+        }
+        const updates = {
+          name: name.trim(), emoji, color, is_shared: isShared,
+        };
+        const { data, error } = await supabase.from("custom_lists")
+          .update(updates).eq("id", editingList.id).select().single();
+        if (error) throw error;
+        onUpdate && onUpdate(data);
+        onClose();
+      } else {
+        const newList = {
+          name: name.trim(), emoji, color, is_shared: isShared,
+          created_by_user: currentUser.name,
+        };
+        const { data, error } = await supabase.from("custom_lists")
+          .insert([newList]).select().single();
+        if (error) throw error;
+        onCreate && onCreate(data);
+        onClose();
+      }
+    } catch (e) {
+      console.error("Uložení seznamu selhalo:", e);
+      alert("Nepodařilo se uložit: " + (e.message || "neznámá chyba"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!canEdit || !editingList) return;
+    if (!confirm(`Smazat seznam "${editingList.name}"?\n\nÚkoly v něm zůstanou ale ztratí přiřazení.`)) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("custom_lists")
+        .delete().eq("id", editingList.id);
       if (error) throw error;
-      onCreate(data);
+      onDelete && onDelete(editingList.id);
       onClose();
     } catch (e) {
-      console.error("Vytvoření seznamu selhalo:", e);
-      alert("Nepodařilo se vytvořit seznam: " + (e.message || "neznámá chyba"));
+      console.error("Smazání selhalo:", e);
+      alert("Nepodařilo se smazat: " + (e.message || "neznámá chyba"));
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
   };
 
@@ -5158,13 +5241,23 @@ function CreateListModal({ theme, currentUser, onClose, onCreate }) {
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700 }}>
-            {emoji} Nový seznam
+            {emoji} {isEditing ? "Upravit seznam" : "Nový seznam"}
           </h2>
           <button onClick={onClose} style={{
             background: "none", border: "none", fontSize: "20px",
             cursor: "pointer", color: theme.textSub, padding: "0 4px",
           }}>×</button>
         </div>
+
+        {isEditing && !canEdit && (
+          <div style={{
+            padding: "10px", borderRadius: "6px",
+            background: `${theme.yellow}15`, color: theme.yellow,
+            fontSize: "11px", fontWeight: 600, border: `1px solid ${theme.yellow}40`,
+          }}>
+            🔒 Tento seznam vytvořil/a {editingList.created_by_user}, můžeš ho jen vidět.
+          </div>
+        )}
 
         {/* Název */}
         <div>
@@ -5173,7 +5266,8 @@ function CreateListModal({ theme, currentUser, onClose, onCreate }) {
           </label>
           <input type="text" value={name} onChange={e => setName(e.target.value)}
             placeholder="Např. Stavba, Dovolená..."
-            autoFocus
+            disabled={isEditing && !canEdit}
+            autoFocus={!isEditing}
             style={{ ...inputStyle(theme), marginTop: "4px", padding: "8px 12px", fontSize: "13px" }} />
         </div>
 
@@ -5184,13 +5278,15 @@ function CreateListModal({ theme, currentUser, onClose, onCreate }) {
           </label>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
             {EMOJIS.map(e => (
-              <button key={e} onClick={() => setEmoji(e)} style={{
-                width: "34px", height: "34px",
-                border: `2px solid ${emoji === e ? color : theme.cardBorder}`,
-                background: emoji === e ? `${color}15` : theme.inputBg,
-                borderRadius: "8px", cursor: "pointer",
-                fontSize: "16px",
-              }}>{e}</button>
+              <button key={e} onClick={() => canEdit !== false && setEmoji(e)}
+                disabled={isEditing && !canEdit}
+                style={{
+                  width: "34px", height: "34px",
+                  border: `2px solid ${emoji === e ? color : theme.cardBorder}`,
+                  background: emoji === e ? `${color}15` : theme.inputBg,
+                  borderRadius: "8px", cursor: (isEditing && !canEdit) ? "not-allowed" : "pointer",
+                  fontSize: "16px", opacity: (isEditing && !canEdit) ? 0.5 : 1,
+                }}>{e}</button>
             ))}
           </div>
         </div>
@@ -5202,12 +5298,15 @@ function CreateListModal({ theme, currentUser, onClose, onCreate }) {
           </label>
           <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
             {COLORS.map(c => (
-              <button key={c} onClick={() => setColor(c)} style={{
-                width: "28px", height: "28px",
-                background: c, borderRadius: "50%",
-                border: color === c ? `3px solid ${theme.text}` : `1px solid ${theme.cardBorder}`,
-                cursor: "pointer",
-              }} />
+              <button key={c} onClick={() => canEdit !== false && setColor(c)}
+                disabled={isEditing && !canEdit}
+                style={{
+                  width: "28px", height: "28px",
+                  background: c, borderRadius: "50%",
+                  border: color === c ? `3px solid ${theme.text}` : `1px solid ${theme.cardBorder}`,
+                  cursor: (isEditing && !canEdit) ? "not-allowed" : "pointer",
+                  opacity: (isEditing && !canEdit) ? 0.5 : 1,
+                }} />
             ))}
           </div>
         </div>
@@ -5218,37 +5317,56 @@ function CreateListModal({ theme, currentUser, onClose, onCreate }) {
             Sdílení
           </label>
           <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-            <button onClick={() => setIsShared(true)} style={{
-              ...buttonStyle(),
-              padding: "8px 12px", fontSize: "12px", textAlign: "left",
-              background: isShared ? `${color}15` : theme.inputBg,
-              color: isShared ? color : theme.text,
-              border: `1px solid ${isShared ? color : theme.cardBorder}`,
-              fontWeight: 600,
-            }}>👥 Sdílený — vidí všichni v rodině</button>
-            <button onClick={() => setIsShared(false)} style={{
-              ...buttonStyle(),
-              padding: "8px 12px", fontSize: "12px", textAlign: "left",
-              background: !isShared ? `${color}15` : theme.inputBg,
-              color: !isShared ? color : theme.text,
-              border: `1px solid ${!isShared ? color : theme.cardBorder}`,
-              fontWeight: 600,
-            }}>🔒 Soukromý — jen já</button>
+            <button onClick={() => canEdit !== false && setIsShared(true)}
+              disabled={isEditing && !canEdit}
+              style={{
+                ...buttonStyle(),
+                padding: "8px 12px", fontSize: "12px", textAlign: "left",
+                background: isShared ? `${color}15` : theme.inputBg,
+                color: isShared ? color : theme.text,
+                border: `1px solid ${isShared ? color : theme.cardBorder}`,
+                fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
+              }}>👥 Sdílený — vidí všichni v rodině</button>
+            <button onClick={() => canEdit !== false && setIsShared(false)}
+              disabled={isEditing && !canEdit}
+              style={{
+                ...buttonStyle(),
+                padding: "8px 12px", fontSize: "12px", textAlign: "left",
+                background: !isShared ? `${color}15` : theme.inputBg,
+                color: !isShared ? color : theme.text,
+                border: `1px solid ${!isShared ? color : theme.cardBorder}`,
+                fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
+              }}>🔒 Soukromý — jen já</button>
           </div>
         </div>
 
-        {/* Submit */}
-        <button onClick={handleCreate} disabled={!name.trim() || creating} style={{
-          ...buttonStyle(),
-          padding: "10px", fontSize: "13px", fontWeight: 700,
-          background: name.trim() ? color : theme.inputBg,
-          color: name.trim() ? "#fff" : theme.textDim,
-          border: "none",
-          marginTop: "4px",
-          cursor: name.trim() && !creating ? "pointer" : "default",
-        }}>
-          {creating ? "Vytvářím..." : "Vytvořit seznam"}
-        </button>
+        {/* Action buttons */}
+        <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+          {isEditing && canEdit && (
+            <button onClick={handleDelete} disabled={saving} style={{
+              ...buttonStyle(),
+              padding: "10px 14px", fontSize: "13px", fontWeight: 700,
+              background: "transparent", color: theme.red,
+              border: `1px solid ${theme.red}50`,
+              cursor: saving ? "default" : "pointer",
+            }}>
+              🗑 Smazat
+            </button>
+          )}
+          <button onClick={handleSave}
+            disabled={!name.trim() || saving || (isEditing && !canEdit)}
+            style={{
+              ...buttonStyle(),
+              flex: 1,
+              padding: "10px", fontSize: "13px", fontWeight: 700,
+              background: name.trim() && (!isEditing || canEdit) ? color : theme.inputBg,
+              color: name.trim() && (!isEditing || canEdit) ? "#fff" : theme.textDim,
+              border: "none",
+              cursor: name.trim() && !saving && (!isEditing || canEdit) ? "pointer" : "default",
+            }}>
+            {saving ? "Ukládám..." : isEditing ? "Uložit změny" : "Vytvořit seznam"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -7599,6 +7717,8 @@ export default function App() {
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
   const [scrollToTaskId, setScrollToTaskId] = useState(null);
+  // highlightedTaskId — úkol který právě navigoval (např. ze search) → flash glow na 2s
+  const [highlightedTaskId, setHighlightedTaskId] = useState(null);
   // Recently added tasks — mapa { taskId: addedAtTimestamp }
   // Tyto úkoly se zobrazí v sekci "✨ Právě přidáno" nahoře po dobu 5 minut.
   // Vizuálně postupně blednou (fade-out 5 minut).
@@ -7612,6 +7732,13 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [scrollToTaskId]);
+  // Clear highlight po 2.5s
+  useEffect(() => {
+    if (highlightedTaskId) {
+      const t = setTimeout(() => setHighlightedTaskId(null), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [highlightedTaskId]);
   const [undoState, setUndoState] = useState(null);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
@@ -7623,6 +7750,7 @@ export default function App() {
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showCreateList, setShowCreateList] = useState(false);
+  const [editingList, setEditingList] = useState(null);
   const [showFocus, setShowFocus] = useState(false);
   const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
@@ -8811,7 +8939,10 @@ export default function App() {
             currentUser={currentUser}
             theme={theme}
             onClose={() => setShowSearchSheet(false)}
-            onNavigate={(taskId) => setScrollToTaskId(taskId)}
+            onNavigate={(taskId) => {
+              setScrollToTaskId(taskId);
+              setHighlightedTaskId(taskId);
+            }}
           />
         )}
 
@@ -8828,12 +8959,15 @@ export default function App() {
           />
         )}
 
-        {showCreateList && (
+        {(showCreateList || editingList) && (
           <CreateListModal
             theme={theme}
             currentUser={currentUser}
-            onClose={() => setShowCreateList(false)}
+            editingList={editingList}
+            onClose={() => { setShowCreateList(false); setEditingList(null); }}
             onCreate={(newList) => setCustomLists(prev => [...prev, newList])}
+            onUpdate={(updated) => setCustomLists(prev => prev.map(l => l.id === updated.id ? updated : l))}
+            onDelete={(deletedId) => setCustomLists(prev => prev.filter(l => l.id !== deletedId))}
           />
         )}
 
@@ -8884,6 +9018,7 @@ export default function App() {
           onToggle={() => setUpdatesPanelOpen(o => !o)}
           onNavigate={(taskId) => {
             setScrollToTaskId(taskId);
+            setHighlightedTaskId(taskId);
             setUpdatesPanelOpen(false);
           }}
           onMarkSeen={markCommentsSeen}
@@ -8924,6 +9059,7 @@ export default function App() {
             allTasks={tasks}
             customLists={customLists}
             onCreateList={() => setShowCreateList(true)}
+            onEditList={(list) => setEditingList(list)}
           />
 
           {/* Compact filters — one row */}
@@ -9205,6 +9341,7 @@ export default function App() {
                       onToggleReaction={toggleReaction}
                       onMarkCommentsSeen={markCommentsSeen}
                       autoOpen={scrollToTaskId === task.id}
+                      isHighlighted={highlightedTaskId === task.id}
                       progressItem={item.type === "progress" ? item.checklistItem : null}
                       recentlyAdded={item.recentlyAdded === true}
                       fadeProgress={item.fadeProgress || 0}
