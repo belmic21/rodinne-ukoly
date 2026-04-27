@@ -2941,7 +2941,14 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 
   const priority = getPriority(task.priority);
   const priorityTheme = theme.priority[priority.id];
-  const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
+  const isMine = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
+  const canAct = isMine || currentUser.admin;
+  // Admin manipuluje s cizím úkolem → potřebujeme potvrzení
+  const actAsProxy = !isMine && currentUser.admin;
+  // Jméno koho zastupujeme (pro confirm popup)
+  const proxyName = actAsProxy
+    ? (task.assignedTo?.[0] || task.createdBy || "jiného uživatele")
+    : null;
 
   const checklistDone = task.checklist?.filter(c => c.done).length || 0;
   const checklistTotal = task.checklist?.length || 0;
@@ -3001,6 +3008,12 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const handleQuickComplete = (e) => {
     e.stopPropagation();
     if (actionAnim) return;
+
+    // Admin manipuluje s cizím úkolem → confirmation
+    if (actAsProxy) {
+      const ok = confirm(`Splnit úkol "${task.title}" za ${proxyName}?`);
+      if (!ok) return;
+    }
 
     // Smart: if task has checklist items, mark them all as done first
     const hasChecklist = task.checklist && task.checklist.length > 0;
@@ -3198,7 +3211,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               height: completing ? "40px" : "32px",
               minWidth: completing ? "40px" : "32px",
               borderRadius: "50%",
-              border: `2.5px solid ${completing ? theme.green : priorityTheme.text}`,
+              border: actAsProxy && !completing
+                ? `2.5px dashed ${priorityTheme.text}`
+                : `2.5px solid ${completing ? theme.green : priorityTheme.text}`,
               background: completing ? theme.green : "transparent",
               cursor: completing ? "default" : "pointer",
               display: "flex", alignItems: "center", justifyContent: "center",
@@ -3208,7 +3223,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
               boxShadow: completing ? `0 0 0 10px ${theme.green}25, 0 4px 20px ${theme.green}60` : "none",
               animation: completing ? "completePulse 0.55s ease-out" : "none",
-            }} title="Splnit">
+              opacity: actAsProxy && !completing ? 0.6 : 1,
+            }} title={actAsProxy ? `Splnit za ${proxyName}` : "Splnit"}>
               {completing ? "✓" : ""}
             </button>
 
@@ -3216,6 +3232,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {!completing && (
               <button onClick={(e) => {
                 e.stopPropagation();
+                if (actAsProxy) {
+                  const action = inProgress ? "vrátit do aktivních" : "rozpracovat";
+                  const ok = confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} úkol "${task.title}" za ${proxyName}?`);
+                  if (!ok) return;
+                }
                 if (inProgress) {
                   onStatusChange(task.id, "reopen");
                 } else {
