@@ -956,16 +956,16 @@ function CopyTaskButton({ task, theme }) {
       title={copied ? "Zkopírováno" : "Kopírovat název do schránky"}
       style={{
         ...buttonStyle(),
-        width: "28px", height: "28px", padding: 0,
-        background: copied ? `${theme.green}15` : "transparent",
-        color: copied ? theme.green : theme.textSub,
-        border: `1px solid ${copied ? theme.green + "40" : theme.inputBorder}`,
-        borderRadius: "6px",
+        width: "40px", height: "40px", padding: 0,
+        background: copied ? `${theme.green}20` : theme.inputBg,
+        color: copied ? theme.green : theme.textMid,
+        border: `2px solid ${copied ? theme.green : theme.inputBorder}`,
+        borderRadius: "8px",
         display: "inline-flex", alignItems: "center", justifyContent: "center",
-        fontSize: "13px",
+        fontSize: "18px",
         transition: "all 0.2s",
       }}>
-      {copied ? "✓" : "⎘"}
+      {copied ? "✓" : "📋"}
     </button>
   );
 }
@@ -1927,9 +1927,18 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     };
 
     return (
-      <div style={{ marginTop: "10px", paddingLeft: "32px", animation: "fadeIn 0.12s" }}
+      <div style={{
+        marginTop: "10px",
+        animation: "fadeIn 0.12s",
+        display: "flex", gap: "8px", alignItems: "flex-start",
+      }}
            onClick={e => e.stopPropagation()}>
+        {/* Levá kolonka — Copy button přesně pod kolečkem splnění */}
+        <div style={{ width: "24px", flexShrink: 0, display: "flex", justifyContent: "center" }}>
+          <CopyTaskButton task={task} theme={theme} />
+        </div>
 
+        <div style={{ flex: 1, minWidth: 0 }}>
         {/* Compact time trace: when completed / deleted / due / deferred */}
         {(task.completedAt || task.deletedAt || task.dueDate || (task.showFrom && daysDiff(task.showFrom) > 0) || task.recDays > 0) && (
           <div style={{
@@ -1959,9 +1968,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             )}
           </div>
         )}
-
-        {/* Copy button — copies title + note to clipboard */}
-        <CopyTaskButton task={task} theme={theme} />
 
         {/* Note (if exists) — read-only */}
         {task.note && task.note.trim() && (
@@ -2199,6 +2205,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             />
           );
         })()}
+        </div>
       </div>
     );
   }
@@ -3934,8 +3941,18 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [openSegment]);
 
-  // Compute final assignment from quickAssignees array
+  // Compute final assignment from quickAssignees array.
+  // Plus filter propagace: pokud filtruji "person:Pavla" a nezvolil jsem nikoho explicitně,
+  // úkol jde Pavle (kontext = pracovní mód).
   const computeAssignment = () => {
+    // Filter propagace: pokud filter = scope na konkrétní osobu a uživatel nezvolil
+    if (quickAssignees.length === 0 && scopeFilter && scopeFilter.startsWith("person:")) {
+      const personName = scopeFilter.slice(7);
+      return { assignTo: "person", assignedTo: [personName] };
+    }
+    if (quickAssignees.length === 0 && scopeFilter === "shared") {
+      return { assignTo: "both", assignedTo: users.map(u => u.name) };
+    }
     // No picks → default: for me
     if (quickAssignees.length === 0) {
       return { assignTo: "self", assignedTo: [currentUser.name] };
@@ -9995,43 +10012,55 @@ export default function App() {
             onTypingChange={setIsTypingMode}
           />
 
-          {/* Filter bar — schováno v typing mode */}
-          {!isTypingMode && (
+          {/* Filter bar — vždy viditelný (i v typing mode pro rychlé přiřazení) */}
           <>
-          {/* Kompaktní ikonový filter row — 7 prvků, mobile-first */}
+          {/* Kompaktní ikonový filter row — 7 prvků, jen ikony */}
           <div style={{
-            display: "flex", alignItems: "stretch", gap: "3px",
+            display: "flex", alignItems: "stretch", gap: "4px",
             marginBottom: "8px",
-            background: theme.card,
-            border: `1px solid ${theme.cardBorder}`,
-            borderRadius: "12px", padding: "4px",
           }}>
-            {/* 1) Status (Aktivní/Dnes/Splněné/Koš) */}
+            {/* 1) Status */}
             {(() => {
               const opts = [
                 { value: "today",       icon: "🎯", label: "Dnes" },
                 { value: "active",      icon: "📋", label: "Aktivní" },
-                { value: "in_progress", icon: "🔥", label: "Rozprac." },
-                { value: "planned",     icon: "⏰", label: "Plán." },
-                { value: "done",        icon: "✓",  label: "Hotové" },
+                { value: "in_progress", icon: "🔥", label: "Rozpracované" },
+                { value: "planned",     icon: "⏰", label: "Plánované" },
+                { value: "done",        icon: "✓",  label: "Splněné" },
                 { value: "trash",       icon: "🗑", label: "Koš" },
                 { value: "all",         icon: "🌐", label: "Vše" },
               ];
               const cur = opts.find(o => o.value === viewStatus) || opts[1];
+              const count = stats[viewStatus === "active" ? "active" : viewStatus] || 0;
               const isActive = viewStatus !== "active";
               return (
                 <div style={{ position: "relative", flex: 1 }}>
+                  <div style={{
+                    width: "100%", height: "44px",
+                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : theme.inputBg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "20px", position: "relative",
+                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
+                  }} title={`Status: ${cur.label} (${count})`}>
+                    <span>{cur.icon}</span>
+                    {count > 0 && isActive && (
+                      <span style={{
+                        position: "absolute", top: "-4px", right: "-4px",
+                        background: theme.accent, color: "#fff",
+                        fontSize: "9px", fontWeight: 700,
+                        minWidth: "16px", height: "16px",
+                        borderRadius: "8px", padding: "0 4px",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>{count}</span>
+                    )}
+                  </div>
                   <select value={viewStatus} onChange={e => setViewStatus(e.target.value)}
-                    title="Status filter"
+                    title="Status úkolu"
                     style={{
-                      width: "100%", padding: "8px 0", textAlign: "center",
-                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                      borderRadius: "8px",
-                      background: isActive ? `${theme.accent}15` : "transparent",
-                      color: theme.text, fontSize: "16px",
-                      fontFamily: FONT, cursor: "pointer",
-                      appearance: "none", WebkitAppearance: "none",
-                      textAlignLast: "center",
+                      position: "absolute", inset: 0, width: "100%", height: "100%",
+                      opacity: 0, cursor: "pointer", border: "none",
                     }}>
                     {opts.map(o => (
                       <option key={o.value} value={o.value}>
@@ -10043,22 +10072,30 @@ export default function App() {
               );
             })()}
 
-            {/* 2) Scope (Moje/Pavla/...) */}
+            {/* 2) Scope */}
             {(() => {
               const isActive = filter !== "my";
+              const labels = { my: "👤", for_me: "📥", assigned: "📤", shared: "👥", unread: "🔴", all: "📋" };
+              let icon = labels[filter] || "👤";
+              if (filter && filter.startsWith("person:")) icon = "👤";
               return (
                 <div style={{ position: "relative", flex: 1 }}>
+                  <div style={{
+                    width: "100%", height: "44px",
+                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : theme.inputBg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "20px",
+                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
+                  }} title="Pro koho je úkol">
+                    <span>{icon}</span>
+                  </div>
                   <select value={filter} onChange={e => setFilter(e.target.value)}
                     title="Pro koho je úkol"
                     style={{
-                      width: "100%", padding: "8px 0", textAlign: "center",
-                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                      borderRadius: "8px",
-                      background: isActive ? `${theme.accent}15` : "transparent",
-                      color: theme.text, fontSize: "16px",
-                      fontFamily: FONT, cursor: "pointer",
-                      appearance: "none", WebkitAppearance: "none",
-                      textAlignLast: "center",
+                      position: "absolute", inset: 0, width: "100%", height: "100%",
+                      opacity: 0, cursor: "pointer", border: "none",
                     }}>
                     <option value="my">👤 Moje ({stats.my})</option>
                     <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
@@ -10078,17 +10115,20 @@ export default function App() {
             {(() => {
               return (
                 <div style={{ position: "relative", flex: 1 }}>
+                  <div style={{
+                    width: "100%", height: "44px",
+                    border: `1.5px solid ${theme.inputBorder}`,
+                    borderRadius: "10px", background: theme.inputBg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "20px",
+                  }} title="Řazení">
+                    <span>↕</span>
+                  </div>
                   <select value={sortMode} onChange={e => setSortMode(e.target.value)}
                     title="Řazení"
                     style={{
-                      width: "100%", padding: "8px 0", textAlign: "center",
-                      border: "1.5px solid transparent",
-                      borderRadius: "8px",
-                      background: "transparent",
-                      color: theme.text, fontSize: "16px",
-                      fontFamily: FONT, cursor: "pointer",
-                      appearance: "none", WebkitAppearance: "none",
-                      textAlignLast: "center",
+                      position: "absolute", inset: 0, width: "100%", height: "100%",
+                      opacity: 0, cursor: "pointer", border: "none",
                     }}>
                     <option value="created">↕ Nejnovější</option>
                     <option value="smart">↕ Chytré</option>
@@ -10099,58 +10139,79 @@ export default function App() {
               );
             })()}
 
-            {/* 4) Datum (dnes/týden/měsíc) */}
+            {/* 4) Datum */}
             {(() => {
               const opts = [
-                { value: "all",       label: "📅 Datum: vše" },
-                { value: "today",     label: "🎯 Dnes" },
-                { value: "week",      label: "📅 Tento týden" },
-                { value: "next_week", label: "📅 Příští týden" },
-                { value: "month",     label: "📅 Tento měsíc" },
+                { value: "all",       label: "Všechna data", icon: "📅" },
+                { value: "today",     label: "Dnes",         icon: "🎯" },
+                { value: "week",      label: "Tento týden",  icon: "📅" },
+                { value: "next_week", label: "Příští týden", icon: "📅" },
+                { value: "month",     label: "Tento měsíc",  icon: "📅" },
               ];
               const isActive = dueDateFilter !== "all";
+              const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
+              const cur = opts.find(o => o.value === dueDateFilter);
+              const icon = isRange ? "📆" : (cur?.icon || "📅");
               return (
                 <div style={{ position: "relative", flex: 1 }}>
-                  <select value={dueDateFilter.startsWith("range:") ? "all" : dueDateFilter}
+                  <div style={{
+                    width: "100%", height: "44px",
+                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : theme.inputBg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "20px",
+                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
+                  }} title="Termín splnění">
+                    <span>{icon}</span>
+                  </div>
+                  <select value={isRange ? "all" : dueDateFilter}
                     onChange={e => setDueDateFilter(e.target.value)}
                     title="Termín splnění"
                     style={{
-                      width: "100%", padding: "8px 0", textAlign: "center",
-                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                      borderRadius: "8px",
-                      background: isActive ? `${theme.accent}15` : "transparent",
-                      color: theme.text, fontSize: "16px",
-                      fontFamily: FONT, cursor: "pointer",
-                      appearance: "none", WebkitAppearance: "none",
-                      textAlignLast: "center",
+                      position: "absolute", inset: 0, width: "100%", height: "100%",
+                      opacity: 0, cursor: "pointer", border: "none",
                     }}>
                     {opts.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value}>{o.icon} {o.label}</option>
                     ))}
                   </select>
                 </div>
               );
             })()}
 
-            {/* 5) Seznam (Stavba/Doksy/...) */}
+            {/* 5) Seznam */}
             {(() => {
               const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
               const isActive = categoryFilter !== "all";
+              let icon = "📁";
+              if (categoryFilter.startsWith("list:")) {
+                const list = visibleLists.find(l => `list:${l.id}` === categoryFilter);
+                if (list) icon = list.emoji || "📁";
+              } else if (isActive) {
+                const cat = CATEGORIES.find(c => c.id === categoryFilter);
+                if (cat) icon = cat.icon;
+              }
               return (
                 <div style={{ position: "relative", flex: 1 }}>
+                  <div style={{
+                    width: "100%", height: "44px",
+                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : theme.inputBg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "20px",
+                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
+                  }} title="Seznam">
+                    <span>{icon}</span>
+                  </div>
                   <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
                     title="Seznam"
                     style={{
-                      width: "100%", padding: "8px 0", textAlign: "center",
-                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                      borderRadius: "8px",
-                      background: isActive ? `${theme.accent}15` : "transparent",
-                      color: theme.text, fontSize: "16px",
-                      fontFamily: FONT, cursor: "pointer",
-                      appearance: "none", WebkitAppearance: "none",
-                      textAlignLast: "center",
+                      position: "absolute", inset: 0, width: "100%", height: "100%",
+                      opacity: 0, cursor: "pointer", border: "none",
                     }}>
-                    <option value="all">📋 Seznam: vše</option>
+                    <option value="all">📁 Všechny seznamy</option>
                     {CATEGORIES.map(cat => (
                       <option key={cat.id} value={cat.id}>{cat.icon} {cat.label}</option>
                     ))}
@@ -10162,7 +10223,7 @@ export default function App() {
               );
             })()}
 
-            {/* 6) Priority — přepínací (None → ! → ‼) */}
+            {/* 6) Priority — přepínací */}
             {(() => {
               const cyclePriority = () => {
                 if (priorityFilter === "all" || priorityFilter === "low") setPriorityFilter("important");
@@ -10174,21 +10235,22 @@ export default function App() {
               const color = isUrg ? "#ef4444" : isImp ? "#f59e0b" : theme.textMid;
               return (
                 <button type="button" onClick={cyclePriority}
-                  title="Priorita (klik = přepnout)"
+                  title={`Priorita: ${isUrg ? "Urgent" : isImp ? "Důležité" : "Vše"}`}
                   style={{
-                    flex: 1, padding: "8px 0",
-                    background: (isImp || isUrg) ? `${color}15` : "transparent",
-                    color: color, fontSize: "16px", fontWeight: 800,
-                    border: `1.5px solid ${(isImp || isUrg) ? color : "transparent"}`,
-                    borderRadius: "8px",
+                    flex: 1, height: "44px",
+                    background: (isImp || isUrg) ? `${color}15` : theme.inputBg,
+                    color: color, fontSize: "22px", fontWeight: 800,
+                    border: `1.5px solid ${(isImp || isUrg) ? color : theme.inputBorder}`,
+                    borderRadius: "10px",
                     cursor: "pointer", fontFamily: FONT,
+                    boxShadow: (isImp || isUrg) ? `0 1px 4px ${color}25` : "none",
                   }}>
                   {isUrg ? "‼" : "!"}
                 </button>
               );
             })()}
 
-            {/* 7) Více filtrů (Tag, Zadavatel, Kdy přidáno) */}
+            {/* 7) Více filtrů */}
             {(() => {
               const hasMore = tagFilter !== "all" ||
                 createdWhenFilter !== "all" || createdByFilter !== "all";
@@ -10196,12 +10258,12 @@ export default function App() {
                 <button onClick={() => setShowMoreFilters(true)}
                   title="Více filtrů"
                   style={{
-                    flex: 1, padding: "8px 0",
-                    background: hasMore ? `${theme.accent}15` : "transparent",
+                    flex: 1, height: "44px",
+                    background: hasMore ? `${theme.accent}15` : theme.inputBg,
                     color: hasMore ? theme.accent : theme.textMid,
-                    fontSize: "18px", fontWeight: 800,
-                    border: `1.5px solid ${hasMore ? theme.accent : "transparent"}`,
-                    borderRadius: "8px",
+                    fontSize: "22px", fontWeight: 800,
+                    border: `1.5px solid ${hasMore ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "10px",
                     cursor: "pointer", fontFamily: FONT,
                   }}>
                   ⋯
@@ -10318,7 +10380,6 @@ export default function App() {
             );
           })()}
           </>
-          )}
         </div>
 
         {/* Task list */}
