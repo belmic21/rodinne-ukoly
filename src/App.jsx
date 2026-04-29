@@ -3854,7 +3854,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active" }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -4002,6 +4002,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   const resetForm = () => {
     setText(""); setNote(""); setDueDate(smartDefaultDueDate()); setRecurrence(0);
+    if (onTypingChange) onTypingChange(false);
     setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
@@ -4036,7 +4037,26 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           type="text"
           placeholder={(showFull && type === "complex") ? "↓ Zadej název dole" : "Napiš úkol a stiskni Enter..."}
           value={text}
-          onChange={e => setText(e.target.value)}
+          onChange={e => {
+            setText(e.target.value);
+            // Když text > 0, jsme v typing mode
+            if (onTypingChange) onTypingChange(e.target.value.trim().length > 0);
+          }}
+          onFocus={() => {
+            // Klik do inputu = typing mode (i když je prázdné, klávesnice se otevře)
+            if (onTypingChange) onTypingChange(true);
+            // Scroll input do viditelné oblasti (klávesnice se otevře pod ním)
+            // Po 300ms — počkáme na otevření klávesnice
+            setTimeout(() => {
+              if (inputRef.current) {
+                inputRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+              }
+            }, 300);
+          }}
+          onBlur={() => {
+            // Pokud uživatel klikne mimo a text je prázdný, vrátit do filter mode
+            if (!text.trim() && onTypingChange) onTypingChange(false);
+          }}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (showFull) fullSubmit(); else quickSubmit(); } }}
           disabled={showFull && type === "complex"}
           style={{
@@ -4181,10 +4201,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         );
       })()}
 
-      {/* ═══ RYCHLÉ CHIPS — termín + priorita, jen v typing mode ═══ */}
+      {/* ═══ RYCHLÉ VOLBY — termín + priorita, viditelné v typing mode ═══ */}
       {(() => {
+        const isInputFocused = document.activeElement === inputRef.current;
         const isTyping = text.trim().length > 0;
-        if (!isTyping || showFull) return null;
+        // Show když uživatel píše, nebo input má focus
+        if ((!isTyping && !isInputFocused) || showFull) return null;
 
         const today = new Date(); today.setHours(12, 0, 0, 0);
         const todayStr = today.toISOString().slice(0, 10);
@@ -4203,10 +4225,6 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           { label: "Sobota", value: satStr },
           { label: "Týden", value: weekStr },
         ];
-        const priChips = [
-          { label: "! Důl.", value: "important", color: "#f59e0b" },
-          { label: "‼ Urgent", value: "urgent", color: "#ef4444" },
-        ];
 
         return (
           <div style={{
@@ -4216,13 +4234,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <div style={{
               fontSize: "9px", fontWeight: 800, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.4px",
-              marginBottom: "5px", padding: "0 2px",
+              marginBottom: "6px", padding: "0 2px",
               display: "flex", alignItems: "center", gap: "5px",
             }}>
               <span>⚡</span>
-              <span>Rychle</span>
+              <span>Rychlé volby</span>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px", alignItems: "center" }}>
+              {/* Datum chips */}
               {dueChips.map(c => {
                 const isSel = dueDate === c.value;
                 return (
@@ -4230,7 +4249,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     onClick={() => setDueDate(c.value)}
                     style={{
                       ...buttonStyle(),
-                      padding: "5px 11px", fontSize: "11px", fontWeight: 600,
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
                       background: isSel ? theme.accent : theme.inputBg,
                       color: isSel ? "#fff" : theme.textSub,
                       border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
@@ -4241,991 +4260,129 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 );
               })}
               {/* Separator */}
-              <span style={{ color: theme.cardBorder, alignSelf: "center", padding: "0 2px" }}>·</span>
-              {priChips.map(c => {
-                const isSel = quickPriority === c.value;
-                return (
-                  <button key={c.value} type="button"
-                    onClick={() => setQuickPriority(isSel ? null : c.value)}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "5px 11px", fontSize: "11px", fontWeight: 600,
-                      background: isSel ? c.color : theme.inputBg,
-                      color: isSel ? "#fff" : c.color,
-                      border: `1px solid ${isSel ? c.color : c.color + "40"}`,
-                      borderRadius: "12px",
-                    }}>
-                    {c.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Segmented filter bar — 3 buttons with mini-dropdowns + chips below. Shown ALWAYS. */}
-      {(() => {
-        const isTyping = text.trim().length > 0;
-
-        // Figure out CURRENT state for each segment based on mode
-        const currentCategory = isTyping ? quickCategory : (categoryFilter !== "all" ? categoryFilter : null);
-        const currentPriority = isTyping
-          ? quickPriority
-          : (priorityFilter !== "all" ? priorityFilter : null);
-        // For filter mode, "person" is extracted from scopeFilter
-        let currentPersonLabel = null;
-        let currentPersonCount = 0;
-        if (isTyping) {
-          currentPersonCount = quickAssignees.length;
-          if (quickAssignees.length === users.length && users.length > 1) {
-            currentPersonLabel = "Všichni";
-          } else if (quickAssignees.length === 1) {
-            currentPersonLabel = quickAssignees[0];
-          } else if (quickAssignees.length > 1) {
-            // Show first 2 initials + count indicator: "Mi, Pe +1"
-            const labels = quickAssignees.slice(0, 2).map(getUserLabel).join(", ");
-            const extra = quickAssignees.length > 2 ? ` +${quickAssignees.length - 2}` : "";
-            currentPersonLabel = labels + extra;
-          }
-        } else {
-          if (scopeFilter === "my") { currentPersonLabel = currentUser.name; currentPersonCount = 1; }
-          else if (scopeFilter && scopeFilter.startsWith("person:")) {
-            currentPersonLabel = scopeFilter.replace("person:", "");
-            currentPersonCount = 1;
-          }
-        }
-
-        // Segment helper — renders a button with its mini-dropdown
-        const renderSegment = (id, defaultLabel, activeLabel, activeColor, isActive, dropdownContent) => {
-          const isOpen = openSegment === id;
-          return (
-            <div style={{ position: "relative", flexShrink: 0 }}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenSegment(isOpen ? null : id);
+              <span style={{ color: theme.cardBorder, fontSize: "13px", padding: "0 2px" }}>·</span>
+              {/* Priority — přepínací (None → ! → ‼ → None) */}
+              <button type="button"
+                onClick={() => {
+                  if (!quickPriority || quickPriority === "low") setQuickPriority("important");
+                  else if (quickPriority === "important") setQuickPriority("urgent");
+                  else setQuickPriority(null);
                 }}
+                title="Klik = přepnout prioritu"
                 style={{
                   ...buttonStyle(),
-                  padding: "5px 10px", fontSize: "12px", fontWeight: 600,
-                  background: isActive ? (activeColor + "15") : theme.inputBg,
-                  color: isActive ? activeColor : theme.textSub,
-                  border: `1px solid ${isActive ? activeColor + "50" : theme.inputBorder}`,
-                  borderRadius: "16px",
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                  whiteSpace: "nowrap",
+                  padding: "5px 10px", fontSize: "11px", fontWeight: 700,
+                  background: quickPriority === "urgent" ? "#ef4444"
+                    : quickPriority === "important" ? "#f59e0b"
+                    : theme.inputBg,
+                  color: (quickPriority === "urgent" || quickPriority === "important") ? "#fff" : theme.textSub,
+                  border: `1px solid ${
+                    quickPriority === "urgent" ? "#ef4444"
+                    : quickPriority === "important" ? "#f59e0b"
+                    : theme.inputBorder
+                  }`,
+                  borderRadius: "12px",
                 }}>
-                {isActive ? activeLabel : defaultLabel}
-                <span style={{ fontSize: "8px", opacity: 0.7 }}>{isOpen ? "▲" : "▼"}</span>
+                {quickPriority === "urgent" ? "‼ Urgent"
+                  : quickPriority === "important" ? "! Důležité"
+                  : "Priorita"}
               </button>
-              {isOpen && (
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    position: "absolute", top: "calc(100% + 4px)", left: 0,
-                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
-                    borderRadius: "10px", padding: "6px",
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-                    zIndex: 25, minWidth: "170px",
-                    animation: "slideUp 0.15s",
-                  }}>
-                  {dropdownContent}
-                </div>
-              )}
-            </div>
-          );
-        };
-
-        // DROPDOWN CONTENTS
-        const catDropdown = (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "360px", overflowY: "auto" }}>
-            {/* Předdefinované kategorie */}
-            <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px",
-              padding: "8px 10px 4px",
-            }}>📋 Předdefinované</div>
-            {CATEGORIES.map(cat => {
-              const selected = currentCategory === cat.id;
-              const count = categoryCounts?.[cat.id] || 0;
-              return (
-                <button key={cat.id}
-                  onClick={() => {
-                    if (isTyping) {
-                      setQuickCategory(selected ? null : cat.id);
-                    } else {
-                      onCategoryFilterChange(selected ? "all" : cat.id);
-                    }
-                    setOpenSegment(null);
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px",
-                    background: selected ? theme.accentSoft : "transparent",
-                    color: selected ? theme.accent : theme.text,
-                    border: "none", textAlign: "left", borderRadius: "6px",
-                    display: "flex", alignItems: "center", gap: "6px",
-                  }}
-                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ fontSize: "15px" }}>{cat.icon}</span>
-                  <span style={{ flex: 1 }}>{cat.label}</span>
-                  {count > 0 && !isTyping && (
-                    <span style={{ fontSize: "10px", color: theme.textMid, fontWeight: 700 }}>{count}</span>
-                  )}
-                  {selected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
-                </button>
-              );
-            })}
-
-            {/* Moje seznamy */}
-            <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px",
-              padding: "10px 10px 4px",
-            }}>📁 Moje seznamy</div>
-            {(() => {
-              const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
-              if (visibleLists.length === 0) {
+              {/* Seznam (kategorie) — mini dropdown */}
+              {(() => {
+                const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
+                const isQuickListSet = quickCategory && quickCategory.startsWith("list:");
+                const selectedList = isQuickListSet
+                  ? visibleLists.find(l => `list:${l.id}` === quickCategory)
+                  : null;
+                const isOpen = openSegment === "quick_list";
                 return (
-                  <div style={{ padding: "6px 10px", fontSize: "11px", color: theme.textDim, fontStyle: "italic" }}>
-                    Zatím žádné — vytvoř první níže
-                  </div>
-                );
-              }
-              return visibleLists.map(list => {
-                const listKey = `list:${list.id}`;
-                const selected = currentCategory === listKey;
-                const canEditList = list.created_by_user === currentUser.name;
-                return (
-                  <div key={list.id} style={{
-                    display: "flex", alignItems: "stretch",
-                    background: selected ? `${list.color}20` : "transparent",
-                    borderRadius: "6px",
-                  }}
-                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
-                    <button
-                      onClick={() => {
-                        if (isTyping) {
-                          setQuickCategory(selected ? null : listKey);
-                        } else {
-                          onCategoryFilterChange(selected ? "all" : listKey);
-                        }
-                        setOpenSegment(null);
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <button type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenSegment(isOpen ? null : "quick_list");
                       }}
                       style={{
                         ...buttonStyle(),
-                        flex: 1,
-                        padding: "7px 10px", fontSize: "12px",
-                        background: "transparent",
-                        color: selected ? list.color : theme.text,
-                        border: "none", textAlign: "left", borderRadius: "6px",
-                        display: "flex", alignItems: "center", gap: "6px",
+                        padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                        background: selectedList ? `${selectedList.color}15` : theme.inputBg,
+                        color: selectedList ? selectedList.color : theme.textSub,
+                        border: `1px solid ${selectedList ? selectedList.color : theme.inputBorder}`,
+                        borderRadius: "12px",
+                        display: "inline-flex", alignItems: "center", gap: "4px",
                       }}>
-                      <span style={{ fontSize: "15px" }}>{list.emoji || "📁"}</span>
-                      <span style={{ flex: 1 }}>{list.name}</span>
-                      {!list.is_shared && (
-                        <span title="Soukromý" style={{ fontSize: "10px" }}>🔒</span>
-                      )}
-                      {selected && <span style={{ color: list.color, fontSize: "11px" }}>✓</span>}
+                      <span>{selectedList ? (selectedList.emoji || "📁") : "📋"}</span>
+                      <span>{selectedList ? selectedList.name : "Seznam"}</span>
+                      <span style={{ fontSize: "8px", opacity: 0.7 }}>▾</span>
                     </button>
-                    {canEditList && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenSegment(null);
-                          onEditList && onEditList(list);
-                        }}
-                        title="Upravit / smazat"
-                        style={{
-                          ...buttonStyle(),
-                          padding: "0 10px", fontSize: "13px",
-                          background: "transparent",
-                          color: theme.textSub,
-                          border: "none", borderRadius: "6px",
-                          cursor: "pointer", opacity: 0.6,
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
-                        onMouseLeave={(e) => e.currentTarget.style.opacity = 0.6}>
-                        ✏️
-                      </button>
+                    {isOpen && (
+                      <div style={{
+                        position: "absolute", top: "100%", left: 0,
+                        marginTop: "4px",
+                        background: theme.bg, border: `1px solid ${theme.cardBorder}`,
+                        borderRadius: "8px", boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                        padding: "4px",
+                        zIndex: 50, minWidth: "180px",
+                        maxHeight: "260px", overflowY: "auto",
+                      }} onClick={e => e.stopPropagation()}>
+                        <button type="button"
+                          onClick={() => { setQuickCategory(null); setOpenSegment(null); }}
+                          style={{
+                            ...buttonStyle(), width: "100%", padding: "6px 8px", fontSize: "11px",
+                            background: !quickCategory ? theme.accentSoft : "transparent",
+                            color: !quickCategory ? theme.accent : theme.text,
+                            border: "none", textAlign: "left", borderRadius: "5px",
+                          }}>Bez seznamu</button>
+                        {CATEGORIES.map(cat => (
+                          <button key={cat.id} type="button"
+                            onClick={() => { setQuickCategory(cat.id); setOpenSegment(null); }}
+                            style={{
+                              ...buttonStyle(), width: "100%", padding: "6px 8px", fontSize: "11px",
+                              background: quickCategory === cat.id ? theme.accentSoft : "transparent",
+                              color: quickCategory === cat.id ? theme.accent : theme.text,
+                              border: "none", textAlign: "left", borderRadius: "5px",
+                              display: "flex", alignItems: "center", gap: "6px",
+                            }}>
+                            <span>{cat.icon}</span><span>{cat.label}</span>
+                          </button>
+                        ))}
+                        {visibleLists.length > 0 && (
+                          <div style={{
+                            fontSize: "9px", fontWeight: 800, color: theme.textMid,
+                            padding: "6px 8px 2px", textTransform: "uppercase", letterSpacing: "0.3px",
+                          }}>📁 Moje</div>
+                        )}
+                        {visibleLists.map(list => {
+                          const v = `list:${list.id}`;
+                          return (
+                            <button key={list.id} type="button"
+                              onClick={() => { setQuickCategory(v); setOpenSegment(null); }}
+                              style={{
+                                ...buttonStyle(), width: "100%", padding: "6px 8px", fontSize: "11px",
+                                background: quickCategory === v ? `${list.color}15` : "transparent",
+                                color: quickCategory === v ? list.color : theme.text,
+                                border: "none", textAlign: "left", borderRadius: "5px",
+                                display: "flex", alignItems: "center", gap: "6px",
+                              }}>
+                              <span>{list.emoji || "📁"}</span><span>{list.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 );
-              });
-            })()}
-
-            {/* + Vytvořit nový seznam */}
-            <button onClick={() => {
-              setOpenSegment(null);
-              onCreateList && onCreateList();
-            }} style={{
-              ...buttonStyle(),
-              padding: "8px 10px", fontSize: "12px",
-              background: theme.inputBg,
-              color: theme.accent, fontWeight: 600,
-              border: `1px dashed ${theme.accent}50`, borderRadius: "6px",
-              display: "flex", alignItems: "center", gap: "8px",
-              marginTop: "6px",
-            }}>
-              <span>+</span><span>Vytvořit nový seznam</span>
-            </button>
-
-            {/* Reset výběru */}
-            {currentCategory && (
-              <button onClick={() => {
-                if (isTyping) setQuickCategory(null);
-                else onCategoryFilterChange("all");
-                setOpenSegment(null);
-              }} style={{
-                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
-                background: "transparent", color: theme.red,
-                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-                textAlign: "left", borderRadius: 0, marginTop: "4px",
-              }}>✕ Zrušit výběr</button>
-            )}
-          </div>
-        );
-
-        const priDropdown = (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-            {PRIORITIES.map(pri => {
-              const pt = theme.priority[pri.id];
-              // Is this priority the currently selected one (in either mode)?
-              const isSet = isTyping
-                ? quickPriority === pri.id
-                : priorityFilter === pri.id;
-              return (
-                <button key={pri.id}
-                  onClick={() => {
-                    if (isTyping) {
-                      // Typing mode: "low" is default, clicking it means reset
-                      setQuickPriority(pri.id === "low" ? null : pri.id);
-                    } else {
-                      // Filter mode: toggle this priority
-                      if (priorityFilter === pri.id) {
-                        onPriorityFilterChange && onPriorityFilterChange("all");
-                      } else {
-                        onPriorityFilterChange && onPriorityFilterChange(pri.id);
-                      }
-                    }
-                    setOpenSegment(null);
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px",
-                    background: isSet ? pt.cardBg : "transparent",
-                    color: isSet ? pt.text : theme.text,
-                    border: "none", textAlign: "left", borderRadius: "6px",
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}
-                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ fontSize: "15px", fontWeight: 900, color: pt.text, width: "16px" }}>
-                    {pri.sym}
-                  </span>
-                  <span style={{ flex: 1 }}>{pri.label}</span>
-                  {isSet && <span style={{ color: pt.text, fontSize: "11px" }}>✓</span>}
-                </button>
-              );
-            })}
-            {!isTyping && priorityFilter !== "all" && (
-              <button onClick={() => {
-                onPriorityFilterChange && onPriorityFilterChange("all");
-                setOpenSegment(null);
-              }} style={{
-                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
-                background: "transparent", color: theme.red,
-                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-                textAlign: "left", borderRadius: 0, marginTop: "2px",
-              }}>✕ Zrušit filtr</button>
-            )}
-          </div>
-        );
-
-        const perDropdown = (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-            {/* Quick "Všichni" option (typing mode only) — one-tap multi-select */}
-            {isTyping && users.length > 1 && (() => {
-              const allSelected = users.every(u => quickAssignees.includes(u.name));
-              return (
-                <button
-                  onClick={() => {
-                    if (allSelected) {
-                      setQuickAssignees([]);
-                    } else {
-                      setQuickAssignees(users.map(u => u.name));
-                    }
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px", fontWeight: 600,
-                    background: allSelected ? theme.accentSoft : "transparent",
-                    color: allSelected ? theme.accent : theme.text,
-                    border: "none",
-                    borderBottom: `1px solid ${theme.cardBorder}`,
-                    textAlign: "left", borderRadius: 0,
-                    display: "flex", alignItems: "center", gap: "8px",
-                    marginBottom: "2px",
-                  }}
-                  onMouseEnter={e => { if (!allSelected) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!allSelected) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ fontSize: "14px", width: "24px", textAlign: "center" }}>👥</span>
-                  <span style={{ flex: 1 }}>Všichni</span>
-                  {allSelected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
-                </button>
-              );
-            })()}
-
-            {users.map(u => {
-              const selected = isTyping
-                ? quickAssignees.includes(u.name)
-                : (u.name === currentUser.name ? scopeFilter === "my" : scopeFilter === `person:${u.name}`);
-              return (
-                <button key={u.name}
-                  onClick={() => {
-                    if (isTyping) {
-                      setQuickAssignees(prev =>
-                        prev.includes(u.name) ? prev.filter(n => n !== u.name) : [...prev, u.name]
-                      );
-                      // keep open in typing mode so user can pick multiple
-                    } else {
-                      if (u.name === currentUser.name) {
-                        onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
-                      } else {
-                        const key = `person:${u.name}`;
-                        onScopeFilterChange && onScopeFilterChange(scopeFilter === key ? "all" : key);
-                      }
-                      setOpenSegment(null);
-                    }
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px",
-                    background: selected ? theme.accentSoft : "transparent",
-                    color: selected ? theme.accent : theme.text,
-                    border: "none", textAlign: "left", borderRadius: "6px",
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}
-                  onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{
-                    fontSize: "10px", fontWeight: 700,
-                    width: "24px", textAlign: "center",
-                    color: selected ? theme.accent : theme.textMid,
-                  }}>{getUserLabel(u.name)}</span>
-                  <span style={{ flex: 1 }}>{u.name}</span>
-                  {selected && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
-                </button>
-              );
-            })}
-            {isTyping && quickAssignees.length > 0 && (
-              <button onClick={() => { setQuickAssignees([]); setOpenSegment(null); }} style={{
-                ...buttonStyle(), padding: "7px 10px", fontSize: "11px",
-                background: "transparent", color: theme.red,
-                border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-                textAlign: "left", borderRadius: 0, marginTop: "2px",
-              }}>✕ Zrušit výběr</button>
-            )}
-            {isTyping && (
-              <div style={{
-                fontSize: "10px", color: theme.textMid,
-                padding: "5px 10px",
-                borderTop: quickAssignees.length > 0 ? "none" : `1px solid ${theme.cardBorder}`,
-                marginTop: quickAssignees.length > 0 ? 0 : "2px",
-              }}>
-                💡 Můžeš vybrat víc osob zároveň
-              </div>
-            )}
-          </div>
-        );
-
-        const visibleCustomLists = customLists.filter(l => l.is_shared || l.created_by_user === currentUser.name);
-
-        const tagDropdown = !isTyping && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1px", maxHeight: "360px", overflowY: "auto" }}>
-            {/* "All" reset */}
-            <button onClick={() => {
-              onTagFilterChange && onTagFilterChange("all");
-              setOpenSegment(null);
-            }} style={{
-              ...buttonStyle(),
-              padding: "7px 10px", fontSize: "12px",
-              background: tagFilter === "all" ? theme.accentSoft : "transparent",
-              color: tagFilter === "all" ? theme.accent : theme.text,
-              border: "none", textAlign: "left", borderRadius: "6px",
-              display: "flex", alignItems: "center", gap: "8px",
-            }}>
-              <span style={{ width: "16px" }}>🏷</span>
-              <span style={{ flex: 1 }}>Všechny tagy</span>
-              {tagCounts?.all > 0 && (
-                <span style={{ fontSize: "10px", color: theme.textMid }}>{tagCounts.all}</span>
-              )}
-            </button>
-
-            {/* AUTO-DETEKCE sekce */}
-            <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px",
-              padding: "8px 10px 4px",
-            }}>🤖 Auto-detekce</div>
-            {TAGS.map(tag => {
-              const count = tagCounts?.[tag.id] || 0;
-              if (count === 0 && tagFilter !== tag.id) return null;
-              const isSet = tagFilter === tag.id;
-              return (
-                <button key={tag.id}
-                  onClick={() => {
-                    onTagFilterChange && onTagFilterChange(isSet ? "all" : tag.id);
-                    setOpenSegment(null);
-                  }}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "7px 10px", fontSize: "12px",
-                    background: isSet ? `${theme.purple}15` : "transparent",
-                    color: isSet ? theme.purple : theme.text,
-                    border: "none", textAlign: "left", borderRadius: "6px",
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}
-                  onMouseEnter={e => { if (!isSet) e.currentTarget.style.background = theme.inputBg; }}
-                  onMouseLeave={e => { if (!isSet) e.currentTarget.style.background = "transparent"; }}>
-                  <span style={{ width: "16px" }}>{tag.emoji}</span>
-                  <span style={{ flex: 1 }}>{tag.label}</span>
-                  <span style={{ fontSize: "10px", color: isSet ? theme.purple : theme.textMid }}>{count}</span>
-                </button>
-              );
-            })}
-          </div>
-        );
-
-        // Datum filter dropdown — presety + vlastní rozsah
-        const dueDateDropdown = !isTyping && (() => {
-          const presets = [
-            { value: "all", label: "Všechna data", icon: "📅" },
-            { value: "today", label: "Dnes", icon: "🎯" },
-            { value: "week", label: "Tento týden", icon: "📅" },
-            { value: "next_week", label: "Příští týden", icon: "📅" },
-            { value: "month", label: "Tento měsíc", icon: "📅" },
-          ];
-          const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
-          const [rangeFrom, rangeTo] = isRange ? dueDateFilter.slice(6).split(",") : ["", ""];
-          return (
-            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-              {presets.map(opt => {
-                const isSel = dueDateFilter === opt.value;
-                return (
-                  <button key={opt.value}
-                    onClick={() => {
-                      onDueDateFilterChange && onDueDateFilterChange(opt.value);
-                      setOpenSegment(null);
-                    }}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "7px 10px", fontSize: "12px",
-                      background: isSel ? theme.accentSoft : "transparent",
-                      color: isSel ? theme.accent : theme.text,
-                      border: "none", textAlign: "left", borderRadius: "6px",
-                      display: "flex", alignItems: "center", gap: "8px",
-                    }}
-                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = theme.inputBg; }}
-                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ width: "16px" }}>{opt.icon}</span>
-                    <span style={{ flex: 1 }}>{opt.label}</span>
-                    {isSel && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
-                  </button>
-                );
-              })}
-
-              {/* Vlastní rozsah */}
-              <div style={{
-                marginTop: "6px", padding: "8px",
-                borderTop: `1px solid ${theme.cardBorder}`,
-                background: isRange ? theme.accentSoft : "transparent",
-                borderRadius: "0 0 6px 6px",
-              }}>
-                <div style={{
-                  fontSize: "10px", fontWeight: 700, color: theme.textMid,
-                  textTransform: "uppercase", letterSpacing: "0.3px",
-                  marginBottom: "5px",
-                }}>📆 Vlastní rozsah</div>
-                <div style={{ display: "flex", gap: "5px", alignItems: "center", marginBottom: "5px" }}>
-                  <input type="date" value={rangeFrom || ""}
-                    onChange={(e) => {
-                      const newFrom = e.target.value;
-                      if (newFrom && rangeTo) {
-                        onDueDateFilterChange && onDueDateFilterChange(`range:${newFrom},${rangeTo}`);
-                      } else if (newFrom) {
-                        onDueDateFilterChange && onDueDateFilterChange(`range:${newFrom},${newFrom}`);
-                      }
-                    }}
-                    style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
-                  <span style={{ fontSize: "11px", color: theme.textMid }}>→</span>
-                  <input type="date" value={rangeTo || ""}
-                    onChange={(e) => {
-                      const newTo = e.target.value;
-                      const fromVal = rangeFrom || newTo;
-                      if (newTo) {
-                        onDueDateFilterChange && onDueDateFilterChange(`range:${fromVal},${newTo}`);
-                      }
-                    }}
-                    style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
-                </div>
-                {isRange && (
-                  <button onClick={() => {
-                    onDueDateFilterChange && onDueDateFilterChange("all");
-                    setOpenSegment(null);
-                  }} style={{
-                    ...buttonStyle(), width: "100%",
-                    padding: "5px", fontSize: "10px",
-                    background: "transparent", color: theme.red,
-                    border: `1px solid ${theme.red}25`, borderRadius: "4px",
-                  }}>✕ Zrušit rozsah</button>
-                )}
-              </div>
+              })()}
             </div>
-          );
-        })();
-
-        const chips = [];
-        if (isTyping) {
-          if (quickCategory) {
-            const cat = getCategory(quickCategory);
-            chips.push({ key: "cat", label: cat.icon + " " + cat.label, color: theme.accent,
-              onRemove: () => setQuickCategory(null) });
-          }
-          if (quickPriority && quickPriority !== "low") {
-            const pri = getPriority(quickPriority);
-            chips.push({ key: "pri", label: pri.sym + " " + pri.label, color: theme.priority[quickPriority].text,
-              onRemove: () => setQuickPriority(null) });
-          }
-          // If all users are assigned, collapse to single "Všichni" chip
-          if (quickAssignees.length === users.length && users.length > 1) {
-            chips.push({
-              key: "all", label: "👥 Všichni", color: theme.accent,
-              onRemove: () => setQuickAssignees([]),
-            });
-          } else {
-            quickAssignees.forEach(name => {
-              chips.push({ key: "a_" + name, label: name, color: theme.accent,
-                onRemove: () => setQuickAssignees(prev => prev.filter(n => n !== name)) });
-            });
-          }
-        } else {
-          if (categoryFilter && categoryFilter !== "all") {
-            const cat = getCategory(categoryFilter);
-            chips.push({ key: "cat", label: cat.icon + " " + cat.label, color: theme.accent,
-              onRemove: () => onCategoryFilterChange("all") });
-          }
-          if (priorityFilter && priorityFilter !== "all") {
-            const pri = getPriority(priorityFilter);
-            chips.push({
-              key: "pri", label: pri.sym + " " + pri.label,
-              color: theme.priority[priorityFilter].text,
-              onRemove: () => onPriorityFilterChange && onPriorityFilterChange("all"),
-            });
-          }
-          if (tagFilter && tagFilter !== "all") {
-            const tag = getTagDef(tagFilter);
-            if (tag) {
-              chips.push({
-                key: "tag", label: tag.emoji + " " + tag.label,
-                color: theme.purple,
-                onRemove: () => onTagFilterChange && onTagFilterChange("all"),
-              });
-            }
-          }
-          if (scopeFilter && scopeFilter !== "all" && scopeFilter !== "my") {
-            if (scopeFilter.startsWith("person:")) {
-              const name = scopeFilter.replace("person:", "");
-              chips.push({ key: "p", label: "👤 " + name, color: theme.accent,
-                onRemove: () => onScopeFilterChange("all") });
-            } else {
-              const labels = { assigned: "Zadané", shared: "Společné", unread: "Nové" };
-              chips.push({ key: "s", label: labels[scopeFilter] || scopeFilter, color: theme.accent,
-                onRemove: () => onScopeFilterChange("all") });
-            }
-          }
-        }
-
-        return (
-          <div ref={segmentBarRef} style={{
-            marginTop: "12px",
-            paddingTop: "10px",
-            borderTop: `2px dashed ${theme.cardBorder}`,
-          }}>
-            <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px",
-              marginBottom: "5px", padding: "0 2px",
-              display: "flex", alignItems: "center", gap: "5px",
-            }}>
-              <span>🎛</span>
-              <span>Filtry</span>
-            </div>
-            {/* Row of segmented buttons */}
-            <div style={{
-              display: "flex", gap: "6px", alignItems: "center",
-              paddingLeft: "4px", flexWrap: "wrap",
-            }}>
-              {(() => {
-                let activeLabel = "Seznam";
-                if (currentCategory) {
-                  if (currentCategory.startsWith("list:")) {
-                    const listId = currentCategory.slice(5);
-                    const list = (customLists || []).find(l => l.id === listId);
-                    if (list) {
-                      activeLabel = <><span>{list.emoji || "📁"}</span><span>{list.name}</span></>;
-                    }
-                  } else {
-                    const cat = getCategory(currentCategory);
-                    if (cat) {
-                      activeLabel = <><span>{cat.icon}</span><span>{cat.label}</span></>;
-                    }
-                  }
-                }
-                return renderSegment("cat",
-                  <><span>📋</span><span>Seznam</span></>,
-                  activeLabel,
-                  theme.accent, !!currentCategory, catDropdown
-                );
-              })()}
-              {/* Priority - přepínací tlačítko (cyklus None → ! → !! → None) */}
-              {(() => {
-                const cyclePriority = () => {
-                  // Cyklus: null/low → important → urgent → null/low
-                  if (isTyping) {
-                    if (!quickPriority || quickPriority === "low") setQuickPriority("important");
-                    else if (quickPriority === "important") setQuickPriority("urgent");
-                    else setQuickPriority(null);
-                  } else {
-                    if (priorityFilter === "all" || priorityFilter === "low") onPriorityFilterChange("important");
-                    else if (priorityFilter === "important") onPriorityFilterChange("urgent");
-                    else onPriorityFilterChange("all");
-                  }
-                };
-                const isImp = currentPriority === "important";
-                const isUrg = currentPriority === "urgent";
-                const color = isUrg ? theme.red : isImp ? "#f59e0b" : theme.textSub;
-                return (
-                  <button onClick={cyclePriority} type="button"
-                    title="Klik = přepnout prioritu (žádná → ! → !! → žádná)"
-                    style={{
-                      ...buttonStyle(),
-                      padding: "6px 12px", fontSize: "12px", fontWeight: 700,
-                      background: isImp || isUrg ? `${color}15` : "transparent",
-                      color: color,
-                      border: `1px solid ${isImp || isUrg ? color : theme.inputBorder}`,
-                      borderRadius: "16px",
-                      display: "inline-flex", alignItems: "center", gap: "4px",
-                      cursor: "pointer", fontFamily: FONT,
-                      minWidth: "auto",
-                    }}>
-                    <span style={{ fontSize: "14px", fontWeight: 900 }}>
-                      {isUrg ? "‼" : isImp ? "!" : "!"}
-                    </span>
-                    <span>
-                      {isUrg ? "Urgent" : isImp ? "Důležité" : "Priorita"}
-                    </span>
-                  </button>
-                );
-              })()}
-              {renderSegment("per",
-                <><span>👤</span><span>Osoba</span></>,
-                currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
-                theme.accent, !!currentPersonLabel, perDropdown
-              )}
-              {!isTyping && (() => {
-                const labels = { today: "Dnes", week: "Tento týden", next_week: "Příští týden", month: "Tento měsíc" };
-                let activeLabel = "Datum";
-                if (dueDateFilter !== "all") {
-                  if (dueDateFilter.startsWith("range:")) {
-                    activeLabel = <><span>📆</span><span>Rozsah</span></>;
-                  } else if (labels[dueDateFilter]) {
-                    activeLabel = <><span>📅</span><span>{labels[dueDateFilter]}</span></>;
-                  }
-                }
-                return renderSegment("date",
-                  <><span>📅</span><span>Datum</span></>,
-                  activeLabel,
-                  theme.accent, dueDateFilter !== "all", dueDateDropdown
-                );
-              })()}
-              {!isTyping && (() => {
-                let activeLabel = "Tag";
-                if (tagFilter !== "all" && getTagDef(tagFilter)) {
-                  const td = getTagDef(tagFilter);
-                  activeLabel = <><span>{td.emoji}</span><span>{td.label}</span></>;
-                }
-                return renderSegment("tag",
-                  <><span>🏷</span><span>Tag</span></>,
-                  activeLabel,
-                  theme.purple, tagFilter !== "all", tagDropdown
-                );
-              })()}
-
-              {/* Spacer */}
-              <span style={{ flex: 1 }} />
-
-              {/* Deferred toggle — filter mode only */}
-              {!isTyping && (
-                <button
-                  onClick={() => onShowDeferredChange && onShowDeferredChange(!showDeferred)}
-                  title={showDeferred ? "Skrýt odložené úkoly" : "Zobrazit i odložené úkoly"}
-                  style={{
-                    ...buttonStyle(),
-                    minWidth: "32px", height: "26px", padding: "0 6px",
-                    fontSize: "13px",
-                    background: showDeferred ? `${theme.purple}15` : "transparent",
-                    color: showDeferred ? theme.purple : theme.textDim,
-                    border: `1px solid ${showDeferred ? theme.purple + "40" : theme.inputBorder}`,
-                    borderRadius: "14px",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    opacity: showDeferred ? 1 : 0.6,
-                  }}>
-                  ⏰
-                </button>
-              )}
-            </div>
-
-            {/* Chips row (only if any active filter) */}
-            {chips.length > 0 && (
-              <div style={{
-                display: "flex", gap: "4px", flexWrap: "wrap",
-                marginTop: "6px", paddingLeft: "4px",
-              }}>
-                {chips.map(chip => (
-                  <span key={chip.key} style={{
-                    display: "inline-flex", alignItems: "center", gap: "4px",
-                    padding: "2px 5px 2px 8px", fontSize: "11px", fontWeight: 600,
-                    background: chip.color + "15", color: chip.color,
-                    border: `1px solid ${chip.color}35`,
-                    borderRadius: "12px",
-                  }}>
-                    {chip.label}
-                    <button onClick={chip.onRemove} title="Odebrat" style={{
-                      ...buttonStyle(),
-                      width: "14px", height: "14px", padding: 0,
-                      background: "transparent", color: chip.color,
-                      border: "none", fontSize: "13px", lineHeight: 1,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         );
       })()}
+
+      {/* Stará Segmented filter bar — odstraněna, nahrazena App-level kompaktní lištou */}
+
 
       {/* Bottom sheet: filter/picker panel — big icons, touch-friendly */}
-      {pickerOpen && (() => {
-        const isTyping = text.trim().length > 0;
-        return (
-          <div
-            onClick={() => setPickerOpen(false)}
-            style={{
-              position: "fixed", inset: 0,
-              background: "rgba(0,0,0,0.4)",
-              zIndex: 50,
-              display: "flex", alignItems: "flex-end", justifyContent: "center",
-              animation: "fadeIn 0.15s",
-            }}>
-            <div
-              onClick={e => e.stopPropagation()}
-              style={{
-                width: "100%", maxWidth: "560px",
-                background: theme.card,
-                borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
-                padding: "14px 16px 24px",
-                maxHeight: "80vh", overflowY: "auto",
-                animation: "slideUp 0.2s",
-              }}>
-              {/* Header */}
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                marginBottom: "16px",
-              }}>
-                <span style={{ fontSize: "14px", fontWeight: 700, color: theme.text }}>
-                  {isTyping ? "Nastavit nový úkol" : "Filtry"}
-                </span>
-                <button onClick={() => setPickerOpen(false)} style={{
-                  ...buttonStyle(), width: "28px", height: "28px", padding: 0,
-                  background: theme.inputBg, color: theme.textSub,
-                  border: `1px solid ${theme.inputBorder}`, fontSize: "14px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>×</button>
-              </div>
-
-              {/* Kategorie section */}
-              <div style={{
-                fontSize: "10px", color: theme.textMid, fontWeight: 700,
-                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
-              }}>Kategorie</div>
-              <div style={{
-                display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px",
-                marginBottom: "16px",
-              }}>
-                {/* "Vše" pseudo-kategorie — resetuje filter */}
-                {!isTyping && (
-                  <button
-                    onClick={() => onCategoryFilterChange("all")}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "10px 4px", fontSize: "13px",
-                      background: categoryFilter === "all" ? theme.accentSoft : theme.inputBg,
-                      color: categoryFilter === "all" ? theme.accent : theme.text,
-                      border: `2px solid ${categoryFilter === "all" ? theme.accentBorder : theme.inputBorder}`,
-                      borderRadius: "10px",
-                      display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
-                    }}>
-                    <span style={{ fontSize: "22px" }}>📋</span>
-                    <span style={{ fontSize: "10px", fontWeight: 600 }}>Vše</span>
-                    {categoryCounts?.all > 0 && (
-                      <span style={{
-                        fontSize: "9px", color: categoryFilter === "all" ? theme.accent : theme.textMid,
-                        fontWeight: 700,
-                      }}>{categoryCounts.all}</span>
-                    )}
-                  </button>
-                )}
-                {CATEGORIES.filter(c => c.id !== "other").map(cat => {
-                  const isHighlighted = isTyping
-                    ? quickCategory === cat.id
-                    : categoryFilter === cat.id;
-                  const count = categoryCounts?.[cat.id] || 0;
-                  return (
-                    <button key={cat.id}
-                      onClick={() => {
-                        if (isTyping) {
-                          setQuickCategory(quickCategory === cat.id ? null : cat.id);
-                        } else {
-                          onCategoryFilterChange(categoryFilter === cat.id ? "all" : cat.id);
-                        }
-                      }}
-                      style={{
-                        ...buttonStyle(),
-                        padding: "10px 4px", fontSize: "13px",
-                        background: isHighlighted ? theme.accentSoft : theme.inputBg,
-                        color: isHighlighted ? theme.accent : theme.text,
-                        border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
-                        borderRadius: "10px",
-                        display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
-                      }}>
-                      <span style={{ fontSize: "22px" }}>{cat.icon}</span>
-                      <span style={{ fontSize: "10px", fontWeight: 600 }}>{cat.label}</span>
-                      {count > 0 && !isTyping && (
-                        <span style={{
-                          fontSize: "9px", color: isHighlighted ? theme.accent : theme.textMid,
-                          fontWeight: 700,
-                        }}>{count}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Priorita section */}
-              <div style={{
-                fontSize: "10px", color: theme.textMid, fontWeight: 700,
-                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
-              }}>Priorita</div>
-              <div style={{
-                display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px",
-                marginBottom: "16px",
-              }}>
-                {PRIORITIES.map(pri => {
-                  const priTheme = theme.priority[pri.id];
-                  const activePri = isTyping ? (quickPriority || "low") : null;
-                  const isHighlighted = isTyping && activePri === pri.id;
-                  return (
-                    <button key={pri.id}
-                      onClick={() => {
-                        if (isTyping) {
-                          // low is default — clicking low again means "reset to low"
-                          setQuickPriority(pri.id === "low" ? null : pri.id);
-                        }
-                      }}
-                      disabled={!isTyping}
-                      style={{
-                        ...buttonStyle(),
-                        padding: "10px 6px", fontSize: "12px",
-                        background: isHighlighted ? priTheme.cardBg : theme.inputBg,
-                        color: isHighlighted ? priTheme.text : theme.text,
-                        border: `2px solid ${isHighlighted ? priTheme.border : theme.inputBorder}`,
-                        borderRadius: "10px",
-                        opacity: !isTyping ? 0.4 : 1,
-                        display: "flex", flexDirection: "column", alignItems: "center", gap: "4px",
-                      }}>
-                      <span style={{ fontSize: "20px", fontWeight: 900, color: priTheme.text }}>
-                        {pri.sym}
-                      </span>
-                      <span style={{ fontSize: "11px", fontWeight: 600 }}>{pri.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Pro koho / filter: uživatelé */}
-              <div style={{
-                fontSize: "10px", color: theme.textMid, fontWeight: 700,
-                marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.3px",
-              }}>{isTyping ? "Pro koho" : "Filtr podle osoby"}</div>
-              <div style={{
-                display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "6px",
-                marginBottom: "12px",
-              }}>
-                {users.map(u => {
-                  const isHighlighted = isTyping
-                    ? quickAssignees.includes(u.name)
-                    : (u.name === currentUser.name
-                      ? scopeFilter === "my"
-                      : scopeFilter === `person:${u.name}`);
-                  return (
-                    <button key={u.name}
-                      onClick={() => {
-                        if (isTyping) {
-                          setQuickAssignees(prev =>
-                            prev.includes(u.name)
-                              ? prev.filter(n => n !== u.name)
-                              : [...prev, u.name]
-                          );
-                        } else {
-                          if (u.name === currentUser.name) {
-                            onScopeFilterChange && onScopeFilterChange(scopeFilter === "my" ? "all" : "my");
-                          } else {
-                            const key = `person:${u.name}`;
-                            onScopeFilterChange && onScopeFilterChange(scopeFilter === key ? "all" : key);
-                          }
-                        }
-                      }}
-                      style={{
-                        ...buttonStyle(),
-                        padding: "10px 8px", fontSize: "13px", fontWeight: 600,
-                        background: isHighlighted ? theme.accentSoft : theme.inputBg,
-                        color: isHighlighted ? theme.accent : theme.text,
-                        border: `2px solid ${isHighlighted ? theme.accentBorder : theme.inputBorder}`,
-                        borderRadius: "10px",
-                      }}>
-                      {u.name}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Done button */}
-              <button onClick={() => setPickerOpen(false)} style={{
-                ...buttonStyle(), width: "100%", padding: "12px",
-                background: theme.accent, color: "#fff", fontSize: "14px",
-                marginTop: "8px",
-              }}>
-                Hotovo
-              </button>
-            </div>
-          </div>
-        );
-      })()}
+      /* picker modal odstraněn */
 
       {/* Extended form */}
       {showFull && (
@@ -5923,7 +5080,17 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
    MORE FILTERS SHEET — full-screen pro méně používané filtry
    ═══════════════════════════════════════════════════════ */
 
-function MoreFiltersSheet({ theme, onClose, createdWhenFilter, onCreatedWhenFilterChange, createdByFilter, onCreatedByFilterChange, users, currentUser }) {
+function MoreFiltersSheet({
+  theme, onClose, users, currentUser, customLists = [],
+  categoryFilter, onCategoryFilterChange,
+  priorityFilter, onPriorityFilterChange,
+  tagFilter, onTagFilterChange, tagCounts = {},
+  dueDateFilter, onDueDateFilterChange,
+  createdWhenFilter, onCreatedWhenFilterChange,
+  createdByFilter, onCreatedByFilterChange,
+  onCreateList,
+}) {
+  const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
   const whenOptions = [
     { value: "all", label: "Všechny" },
     { value: "today", label: "🆕 Dnes přidáno" },
@@ -5932,6 +5099,34 @@ function MoreFiltersSheet({ theme, onClose, createdWhenFilter, onCreatedWhenFilt
     { value: "month", label: "Tento měsíc" },
     { value: "older", label: "Starší" },
   ];
+  const datePresets = [
+    { value: "all", label: "Všechna data" },
+    { value: "today", label: "🎯 Dnes" },
+    { value: "week", label: "Tento týden" },
+    { value: "next_week", label: "Příští týden" },
+    { value: "month", label: "Tento měsíc" },
+  ];
+  const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
+  const [rangeFrom, rangeTo] = isRange ? dueDateFilter.slice(6).split(",") : ["", ""];
+
+  const chipStyle = (active, color) => ({
+    ...buttonStyle(),
+    padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+    background: active ? `${color}15` : "transparent",
+    color: active ? color : theme.text,
+    border: `1px solid ${active ? color : theme.inputBorder}`,
+    borderRadius: "12px",
+  });
+
+  const sectionLabel = {
+    fontSize: "11px", fontWeight: 700, color: theme.textMid,
+    textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+  };
+
+  const hasAny = categoryFilter !== "all" || priorityFilter !== "all" ||
+    tagFilter !== "all" || dueDateFilter !== "all" ||
+    createdWhenFilter !== "all" || createdByFilter !== "all";
+
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
@@ -5955,67 +5150,161 @@ function MoreFiltersSheet({ theme, onClose, createdWhenFilter, onCreatedWhenFilt
           }}>×</button>
         </div>
         <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+
+          {/* Seznam */}
+          <div>
+            <div style={sectionLabel}>📋 Seznam</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              <button onClick={() => onCategoryFilterChange("all")}
+                style={chipStyle(categoryFilter === "all", theme.accent)}>Všechny</button>
+              {CATEGORIES.map(cat => (
+                <button key={cat.id}
+                  onClick={() => onCategoryFilterChange(cat.id)}
+                  style={chipStyle(categoryFilter === cat.id, theme.accent)}>
+                  {cat.icon} {cat.label}
+                </button>
+              ))}
+              {visibleLists.map(list => {
+                const v = `list:${list.id}`;
+                return (
+                  <button key={list.id}
+                    onClick={() => onCategoryFilterChange(v)}
+                    style={chipStyle(categoryFilter === v, list.color)}>
+                    {list.emoji || "📁"} {list.name}
+                  </button>
+                );
+              })}
+              <button onClick={() => { onClose(); onCreateList && onCreateList(); }}
+                style={{
+                  ...buttonStyle(),
+                  padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                  background: theme.inputBg, color: theme.accent,
+                  border: `1px dashed ${theme.accent}50`, borderRadius: "12px",
+                }}>+ Vytvořit nový</button>
+            </div>
+          </div>
+
+          {/* Priorita */}
+          <div>
+            <div style={sectionLabel}>! Priorita</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              <button onClick={() => onPriorityFilterChange("all")}
+                style={chipStyle(priorityFilter === "all", theme.accent)}>Všechny</button>
+              <button onClick={() => onPriorityFilterChange("low")}
+                style={chipStyle(priorityFilter === "low", theme.textMid)}>Žádná</button>
+              <button onClick={() => onPriorityFilterChange("important")}
+                style={chipStyle(priorityFilter === "important", "#f59e0b")}>! Důležité</button>
+              <button onClick={() => onPriorityFilterChange("urgent")}
+                style={chipStyle(priorityFilter === "urgent", "#ef4444")}>‼ Urgent</button>
+            </div>
+          </div>
+
+          {/* Tag */}
+          <div>
+            <div style={sectionLabel}>🏷 Tag (auto-detekce)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              <button onClick={() => onTagFilterChange("all")}
+                style={chipStyle(tagFilter === "all", theme.purple)}>Všechny</button>
+              {TAGS.map(tag => {
+                const count = tagCounts?.[tag.id] || 0;
+                if (count === 0 && tagFilter !== tag.id) return null;
+                return (
+                  <button key={tag.id}
+                    onClick={() => onTagFilterChange(tag.id)}
+                    style={chipStyle(tagFilter === tag.id, theme.purple)}>
+                    {tag.emoji} {tag.label}{count > 0 ? ` (${count})` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Datum splnění */}
+          <div>
+            <div style={sectionLabel}>📅 Datum splnění</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+              {datePresets.map(opt => (
+                <button key={opt.value}
+                  onClick={() => onDueDateFilterChange(opt.value)}
+                  style={chipStyle(dueDateFilter === opt.value, theme.accent)}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div style={{
+              padding: "10px", borderRadius: "8px",
+              background: isRange ? `${theme.accent}10` : theme.inputBg,
+              border: `1px solid ${isRange ? theme.accent : theme.inputBorder}`,
+            }}>
+              <div style={{ fontSize: "10px", fontWeight: 700, color: theme.textMid, marginBottom: "5px" }}>
+                📆 Vlastní rozsah
+              </div>
+              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                <input type="date" value={rangeFrom || ""}
+                  onChange={(e) => {
+                    const newFrom = e.target.value;
+                    if (newFrom && rangeTo) onDueDateFilterChange(`range:${newFrom},${rangeTo}`);
+                    else if (newFrom) onDueDateFilterChange(`range:${newFrom},${newFrom}`);
+                  }}
+                  style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: "11px", flex: 1 }} />
+                <span style={{ fontSize: "11px", color: theme.textMid }}>→</span>
+                <input type="date" value={rangeTo || ""}
+                  onChange={(e) => {
+                    const newTo = e.target.value;
+                    const fromVal = rangeFrom || newTo;
+                    if (newTo) onDueDateFilterChange(`range:${fromVal},${newTo}`);
+                  }}
+                  style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: "11px", flex: 1 }} />
+              </div>
+            </div>
+          </div>
+
           {/* Přidáno kdy */}
           <div>
-            <div style={{
-              fontSize: "11px", fontWeight: 700, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
-            }}>📅 Přidáno kdy</div>
+            <div style={sectionLabel}>📅 Přidáno kdy</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               {whenOptions.map(opt => (
                 <button key={opt.value}
                   onClick={() => onCreatedWhenFilterChange(opt.value)}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "6px 12px", fontSize: "12px",
-                    background: createdWhenFilter === opt.value ? theme.accentSoft : "transparent",
-                    color: createdWhenFilter === opt.value ? theme.accent : theme.text,
-                    border: `1px solid ${createdWhenFilter === opt.value ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "12px", fontWeight: 600,
-                  }}>{opt.label}</button>
+                  style={chipStyle(createdWhenFilter === opt.value, theme.accent)}>
+                  {opt.label}
+                </button>
               ))}
             </div>
           </div>
+
           {/* Kdo přidal */}
           <div>
-            <div style={{
-              fontSize: "11px", fontWeight: 700, color: theme.textMid,
-              textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
-            }}>✏️ Kdo přidal</div>
+            <div style={sectionLabel}>✏️ Kdo přidal</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-              <button onClick={() => onCreatedByFilterChange("all")} style={{
-                ...buttonStyle(),
-                padding: "6px 12px", fontSize: "12px",
-                background: createdByFilter === "all" ? theme.accentSoft : "transparent",
-                color: createdByFilter === "all" ? theme.accent : theme.text,
-                border: `1px solid ${createdByFilter === "all" ? theme.accent : theme.inputBorder}`,
-                borderRadius: "12px", fontWeight: 600,
-              }}>Všichni</button>
+              <button onClick={() => onCreatedByFilterChange("all")}
+                style={chipStyle(createdByFilter === "all", theme.accent)}>Všichni</button>
               {users.map(u => (
                 <button key={u.name}
                   onClick={() => onCreatedByFilterChange(u.name)}
-                  style={{
-                    ...buttonStyle(),
-                    padding: "6px 12px", fontSize: "12px",
-                    background: createdByFilter === u.name ? theme.accentSoft : "transparent",
-                    color: createdByFilter === u.name ? theme.accent : theme.text,
-                    border: `1px solid ${createdByFilter === u.name ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "12px", fontWeight: 600,
-                  }}>{u.name === currentUser.name ? "Já" : u.name}</button>
+                  style={chipStyle(createdByFilter === u.name, theme.accent)}>
+                  {u.name === currentUser.name ? "Já" : u.name}
+                </button>
               ))}
             </div>
           </div>
+
           {/* Reset all */}
-          {(createdWhenFilter !== "all" || createdByFilter !== "all") && (
+          {hasAny && (
             <button onClick={() => {
+              onCategoryFilterChange("all");
+              onPriorityFilterChange("all");
+              onTagFilterChange("all");
+              onDueDateFilterChange("all");
               onCreatedWhenFilterChange("all");
               onCreatedByFilterChange("all");
             }} style={{
               ...buttonStyle(),
               padding: "10px", fontSize: "12px", fontWeight: 600,
-              background: theme.inputBg, color: theme.textSub,
-              border: `1px solid ${theme.inputBorder}`,
-            }}>Resetovat všechny filtry</button>
+              background: `${theme.red}10`, color: theme.red,
+              border: `1px solid ${theme.red}40`, borderRadius: "8px",
+              marginTop: "4px",
+            }}>✕ Resetovat všechny filtry</button>
           )}
         </div>
       </div>
@@ -7132,13 +6421,14 @@ function LoginScreen({ users, onLogin, themeName }) {
       </div>
       {/* Footer s licencí */}
       <div style={{
-        position: "fixed", bottom: "12px", left: 0, right: 0,
+        position: "fixed", bottom: "16px", left: 0, right: 0,
         textAlign: "center",
-        fontSize: "10px", color: theme.textDim,
+        fontSize: "12px", color: theme.textSub,
         fontFamily: FONT,
         userSelect: "none",
+        fontWeight: 500,
       }}>
-        © Michal Bělohlávek · Rodinné úkoly
+        © Michal Bělohlav · Rodinné úkoly
       </div>
     </div>
   );
@@ -8811,6 +8101,31 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [highlightedTaskId]);
+
+  // Auto-hide header při scroll dolů, ukázat při scroll nahoru
+  useEffect(() => {
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        const last = lastScrollYRef.current;
+        // Threshold 10px aby se nehybalo při lehkém scrollu
+        if (Math.abs(y - last) > 10) {
+          if (y > last && y > 60) {
+            setHeaderHidden(true); // scroll dolů
+          } else if (y < last) {
+            setHeaderHidden(false); // scroll nahoru
+          }
+          lastScrollYRef.current = y;
+        }
+        ticking = false;
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
   const [undoState, setUndoState] = useState(null);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
@@ -8825,6 +8140,12 @@ export default function App() {
   const [editingList, setEditingList] = useState(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
+  // Auto-hide header při scroll dolů (mobile pattern)
+  const [headerHidden, setHeaderHidden] = useState(false);
+  const lastScrollYRef = useRef(0);
+  // isTyping — když uživatel zrovna zadává úkol (klikl do inputu).
+  // Pokud true, header + filtry jsou schované, aby se vešly chips nad klávesnici.
+  const [isTypingMode, setIsTypingMode] = useState(false);
   const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
   const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
@@ -9972,6 +9293,11 @@ export default function App() {
         padding: "11px 14px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
         position: "sticky", top: 0, zIndex: 30,
+        // Auto-hide: posun nahoru o vlastní výšku → schované
+        transform: (headerHidden || isTypingMode) ? "translateY(-100%)" : "translateY(0)",
+        transition: "transform 0.25s ease",
+        // Když schované, neblokuje scroll dál (height 0)
+        marginBottom: (headerHidden || isTypingMode) ? "-58px" : "0",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Focus mode trigger - vlevo */}
@@ -10144,11 +9470,11 @@ export default function App() {
               <span>⏻</span><span>Odhlásit se</span>
             </button>
             <div style={{
-              padding: "8px 12px 4px", fontSize: "9px", color: theme.textDim,
+              padding: "10px 12px 6px", fontSize: "11px", color: theme.textSub,
               borderTop: `1px solid ${theme.cardBorder}`, marginTop: "4px",
-              textAlign: "center", lineHeight: 1.4,
+              textAlign: "center", lineHeight: 1.4, fontWeight: 500,
             }}>
-              © {new Date().getFullYear()} Michal Bělohlávek<br/>
+              © {new Date().getFullYear()} Michal Bělohlav<br/>
               Rodinné úkoly
             </div>
           </div>
@@ -10251,10 +9577,21 @@ export default function App() {
             theme={theme}
             users={users}
             currentUser={currentUser}
+            customLists={customLists}
+            categoryFilter={categoryFilter}
+            onCategoryFilterChange={setCategoryFilter}
+            priorityFilter={priorityFilter}
+            onPriorityFilterChange={setPriorityFilter}
+            tagFilter={tagFilter}
+            onTagFilterChange={setTagFilter}
+            tagCounts={tagCounts}
+            dueDateFilter={dueDateFilter}
+            onDueDateFilterChange={setDueDateFilter}
             createdWhenFilter={createdWhenFilter}
             onCreatedWhenFilterChange={setCreatedWhenFilter}
             createdByFilter={createdByFilter}
             onCreatedByFilterChange={setCreatedByFilter}
+            onCreateList={() => setShowCreateList(true)}
             onClose={() => setShowMoreFilters(false)}
           />
         )}
@@ -10363,18 +9700,56 @@ export default function App() {
             dueDateFilter={dueDateFilter}
             onDueDateFilterChange={setDueDateFilter}
             viewStatus={viewStatus}
+            onTypingChange={setIsTypingMode}
           />
 
+          {/* Filter bar — schováno v typing mode */}
+          {!isTypingMode && (
+          <>
           {/* Compact filters — one row */}
           <div style={{
-            display: "flex", alignItems: "center", gap: "4px",
-            marginBottom: "8px", flexWrap: "wrap",
+            display: "flex", alignItems: "center", gap: "5px",
+            marginBottom: "6px", flexWrap: "wrap",
           }}>
-            {/* Scope filter — sloučený "Moje + Osoba" */}
+            {/* Status — primární filter */}
+            <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
+              padding: "5px 24px 5px 10px", fontSize: "11px",
+              border: `1px solid ${viewStatus !== "active" ? theme.accent : theme.inputBorder}`,
+              borderRadius: "12px",
+              background: viewStatus !== "active"
+                ? `${theme.accent}15`
+                : theme.inputBg,
+              color: viewStatus !== "active" ? theme.accent : theme.textSub,
+              fontWeight: viewStatus !== "active" ? 700 : 600,
+              fontFamily: FONT,
+              cursor: "pointer",
+              appearance: "none",
+              WebkitAppearance: "none",
+              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(viewStatus !== "active" ? theme.accent : theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 7px center",
+              backgroundSize: "10px",
+            }}>
+              <option value="today">🎯 Dnes ({stats.today || 0})</option>
+              <option value="active">📋 Aktivní ({stats.active || 0})</option>
+              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
+              <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
+              <option value="done">✓ Splněné ({stats.done || 0})</option>
+              <option value="trash">🗑 Koš ({stats.trash || 0})</option>
+              <option value="all">🌐 Vše ({stats.all || 0})</option>
+            </select>
+
+            {/* Scope filter (Moje/Pavla/...) */}
             <select value={filter} onChange={e => setFilter(e.target.value)} style={{
-              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
-              color: theme.accent, fontWeight: 600,
+              padding: "5px 24px 5px 10px", fontSize: "11px",
+              border: `1px solid ${filter !== "my" ? theme.accent : theme.inputBorder}`,
+              borderRadius: "12px",
+              background: filter !== "my" ? `${theme.accent}15` : theme.inputBg,
+              color: filter !== "my" ? theme.accent : theme.textSub,
+              fontWeight: 600, fontFamily: FONT,
+              cursor: "pointer", appearance: "none", WebkitAppearance: "none",
+              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(filter !== "my" ? theme.accent : theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
+              backgroundRepeat: "no-repeat", backgroundPosition: "right 7px center", backgroundSize: "10px",
             }}>
               <option value="my">👤 Moje ({stats.my})</option>
               <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
@@ -10387,28 +9762,16 @@ export default function App() {
               <option value="all">📋 Vše</option>
             </select>
 
-            {/* Status */}
-            <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
-              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: viewStatus !== "active" ? theme.accentSoft : "transparent",
-              border: `1px solid ${viewStatus !== "active" ? theme.accentBorder : theme.inputBorder}`,
-              color: viewStatus !== "active" ? theme.accent : theme.textSub,
-              fontWeight: viewStatus !== "active" ? 700 : 400,
-            }}>
-              <option value="today">🎯 Dnes ({stats.today || 0})</option>
-              <option value="active">📋 Aktivní ({stats.active || 0})</option>
-              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
-              <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
-              <option value="done">✓ Splněné ({stats.done || 0})</option>
-              <option value="trash">🗑 Koš ({stats.trash || 0})</option>
-              <option value="all">🌐 Vše ({stats.all || 0})</option>
-            </select>
-
             {/* Sort */}
             <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
-              ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: "transparent", border: `1px solid ${theme.inputBorder}`,
-              color: theme.textSub,
+              padding: "5px 24px 5px 10px", fontSize: "11px",
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: "12px",
+              background: theme.inputBg,
+              color: theme.textSub, fontWeight: 600, fontFamily: FONT,
+              cursor: "pointer", appearance: "none", WebkitAppearance: "none",
+              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
+              backgroundRepeat: "no-repeat", backgroundPosition: "right 7px center", backgroundSize: "10px",
             }}>
               <option value="created">↕ Nejnovější</option>
               <option value="smart">↕ Chytré</option>
@@ -10416,24 +9779,134 @@ export default function App() {
               <option value="date">↕ Termín</option>
             </select>
 
-            {/* "Více filtrů" — tlačítko otevírající MoreFiltersSheet */}
-            <button
-              onClick={() => setShowMoreFilters(true)}
-              title="Další filtry"
-              style={{
-                ...buttonStyle(),
-                padding: "4px 10px", fontSize: "11px", fontWeight: 600,
-                background: (createdWhenFilter !== "all" || createdByFilter !== "all")
-                  ? theme.accentSoft : "transparent",
-                color: (createdWhenFilter !== "all" || createdByFilter !== "all")
-                  ? theme.accent : theme.textSub,
-                border: `1px solid ${(createdWhenFilter !== "all" || createdByFilter !== "all")
-                  ? theme.accentBorder : theme.inputBorder}`,
-                cursor: "pointer",
-              }}>
-              ⋯ Více
-            </button>
+            {/* "Více filtrů" — chip styl */}
+            {(() => {
+              const hasMore = categoryFilter !== "all" || priorityFilter !== "all"
+                || tagFilter !== "all" || dueDateFilter !== "all"
+                || createdWhenFilter !== "all" || createdByFilter !== "all";
+              return (
+                <button onClick={() => setShowMoreFilters(true)}
+                  style={{
+                    ...buttonStyle(),
+                    padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                    background: hasMore ? `${theme.accent}15` : theme.inputBg,
+                    color: hasMore ? theme.accent : theme.textSub,
+                    border: `1px solid ${hasMore ? theme.accent : theme.inputBorder}`,
+                    borderRadius: "12px", cursor: "pointer",
+                  }}>
+                  ⋯ Více
+                </button>
+              );
+            })()}
           </div>
+
+          {/* Aktivní filtry — odebíratelné chips pod hlavními */}
+          {(() => {
+            const activeChips = [];
+            if (categoryFilter !== "all") {
+              if (categoryFilter.startsWith("list:")) {
+                const list = (customLists || []).find(l => `list:${l.id}` === categoryFilter);
+                if (list) {
+                  activeChips.push({
+                    key: "cat", label: `${list.emoji || "📁"} ${list.name}`,
+                    color: list.color, onRemove: () => setCategoryFilter("all"),
+                  });
+                }
+              } else {
+                const cat = getCategory(categoryFilter);
+                if (cat) {
+                  activeChips.push({
+                    key: "cat", label: `${cat.icon} ${cat.label}`,
+                    color: theme.accent, onRemove: () => setCategoryFilter("all"),
+                  });
+                }
+              }
+            }
+            if (priorityFilter !== "all") {
+              const labels = { important: "! Důležité", urgent: "‼ Urgent" };
+              activeChips.push({
+                key: "pri", label: labels[priorityFilter] || priorityFilter,
+                color: priorityFilter === "urgent" ? "#ef4444" : "#f59e0b",
+                onRemove: () => setPriorityFilter("all"),
+              });
+            }
+            if (tagFilter !== "all") {
+              const td = getTagDef(tagFilter);
+              if (td) {
+                activeChips.push({
+                  key: "tag", label: `${td.emoji} ${td.label}`,
+                  color: theme.purple, onRemove: () => setTagFilter("all"),
+                });
+              }
+            }
+            if (dueDateFilter !== "all") {
+              const labels = { today: "🎯 Dnes", week: "Tento týden", next_week: "Příští týden", month: "Tento měsíc" };
+              const lbl = dueDateFilter.startsWith("range:") ? "📆 Rozsah" : labels[dueDateFilter];
+              if (lbl) {
+                activeChips.push({
+                  key: "due", label: lbl,
+                  color: theme.accent, onRemove: () => setDueDateFilter("all"),
+                });
+              }
+            }
+            if (createdWhenFilter !== "all") {
+              const labels = { today: "Přidáno dnes", yesterday: "Přidáno včera", week: "Přidáno tento týden", month: "Přidáno tento měsíc", older: "Starší" };
+              activeChips.push({
+                key: "cw", label: labels[createdWhenFilter] || createdWhenFilter,
+                color: theme.textMid, onRemove: () => setCreatedWhenFilter("all"),
+              });
+            }
+            if (createdByFilter !== "all") {
+              activeChips.push({
+                key: "cb", label: `Přidal: ${createdByFilter}`,
+                color: theme.textMid, onRemove: () => setCreatedByFilter("all"),
+              });
+            }
+            if (activeChips.length === 0) return null;
+            return (
+              <div style={{
+                display: "flex", flexWrap: "wrap", gap: "5px",
+                marginBottom: "8px", paddingTop: "2px",
+              }}>
+                {activeChips.map(c => (
+                  <button key={c.key}
+                    onClick={c.onRemove}
+                    title={`Odebrat filter: ${c.label}`}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "4px 8px 4px 10px", fontSize: "11px", fontWeight: 600,
+                      background: `${c.color}15`, color: c.color,
+                      border: `1px solid ${c.color}40`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "5px",
+                    }}>
+                    <span>{c.label}</span>
+                    <span style={{
+                      fontSize: "12px", opacity: 0.7, marginLeft: "2px",
+                      lineHeight: 1, fontWeight: 700,
+                    }}>×</span>
+                  </button>
+                ))}
+                {activeChips.length > 1 && (
+                  <button onClick={() => {
+                    setCategoryFilter("all");
+                    setPriorityFilter("all");
+                    setTagFilter("all");
+                    setDueDateFilter("all");
+                    setCreatedWhenFilter("all");
+                    setCreatedByFilter("all");
+                  }} style={{
+                    ...buttonStyle(),
+                    padding: "4px 10px", fontSize: "10px", fontWeight: 600,
+                    background: "transparent", color: theme.red,
+                    border: `1px dashed ${theme.red}50`, borderRadius: "12px",
+                  }}>Resetovat vše</button>
+                )}
+              </div>
+            );
+          })()}
+          </>
+          )}
         </div>
 
         {/* Task list */}
@@ -10720,14 +10193,15 @@ export default function App() {
 
         {/* Copyright footer */}
         <div style={{
-          marginTop: "20px", padding: "12px 8px",
+          marginTop: "20px", padding: "14px 8px",
           textAlign: "center",
-          fontSize: "9px", color: theme.textDim,
+          fontSize: "11px", color: theme.textSub,
           fontFamily: FONT,
-          opacity: 0.7,
+          opacity: 0.85,
           userSelect: "none",
+          fontWeight: 500,
         }}>
-          © {new Date().getFullYear()} Michal Bělohlávek · Rodinné úkoly
+          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly
         </div>
       </div>
 
