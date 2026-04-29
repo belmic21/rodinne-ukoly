@@ -953,16 +953,19 @@ function CopyTaskButton({ task, theme }) {
   return (
     <button
       onClick={handleCopy}
+      title={copied ? "Zkopírováno" : "Kopírovat název do schránky"}
       style={{
         ...buttonStyle(),
-        padding: "5px 10px", fontSize: "11px", marginBottom: "8px",
-        background: copied ? `${theme.green}15` : theme.inputBg,
+        width: "28px", height: "28px", padding: 0,
+        background: copied ? `${theme.green}15` : "transparent",
         color: copied ? theme.green : theme.textSub,
         border: `1px solid ${copied ? theme.green + "40" : theme.inputBorder}`,
-        display: "inline-flex", alignItems: "center", gap: "4px",
+        borderRadius: "6px",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        fontSize: "13px",
         transition: "all 0.2s",
       }}>
-      {copied ? "✓ Zkopírováno" : "📋 Kopírovat"}
+      {copied ? "✓" : "⎘"}
     </button>
   );
 }
@@ -1037,11 +1040,12 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
 
   return (
     <div style={{
-      marginBottom: "10px",
-      background: hasEntries ? `${theme.accent}06` : "transparent",
-      border: hasEntries ? `1px solid ${theme.accentBorder}` : `1px dashed ${theme.inputBorder}`,
-      borderRadius: "8px",
-      padding: "8px 10px",
+      marginBottom: "12px",
+      background: hasEntries ? `${theme.purple}10` : `${theme.cardBorder}30`,
+      border: hasEntries ? `2px solid ${theme.purple}40` : `2px dashed ${theme.inputBorder}`,
+      borderRadius: "10px",
+      padding: "10px 12px",
+      boxShadow: hasEntries ? `0 1px 4px ${theme.purple}15` : "none",
     }}>
       {/* Header with toggle */}
       <div
@@ -1051,10 +1055,10 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           cursor: "pointer", marginBottom: expanded ? "8px" : 0,
         }}>
         <span style={{
-          fontSize: "10px", color: theme.textMid, fontWeight: 700,
-          textTransform: "uppercase", letterSpacing: "0.3px",
+          fontSize: "11px", color: hasEntries ? theme.purple : theme.textMid, fontWeight: 800,
+          textTransform: "uppercase", letterSpacing: "0.5px",
         }}>
-          📝 Pracovní deník {hasEntries && `(${task.scratchPad.length})`}
+          📔 Pracovní deník {hasEntries && `(${task.scratchPad.length})`}
         </span>
         <span style={{ fontSize: "10px", color: theme.textMid }}>
           {expanded ? "▲" : "▼"}
@@ -1942,11 +1946,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 🗑 Smazáno {formatTimeTrace(task.deletedAt)}
               </span>
             )}
-            {task.dueDate && !taskIsDone && (
-              <span style={{ color: overdue ? theme.red : theme.textSub, fontWeight: 600 }}>
-                📅 Termín: {formatDate(task.dueDate)}
-              </span>
-            )}
+            {/* dueDate je už zobrazený na kartě (vpravo nahoře) — neopakujeme */}
             {task.showFrom && daysDiff(task.showFrom) > 0 && (
               <span style={{ color: theme.purple }}>
                 ⏰ Odloženo do {formatDate(task.showFrom)}
@@ -2758,7 +2758,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
 
   if (!expanded) {
     return (
-      <button onClick={() => setExpanded(true)} title="Přidat poznámku" style={{
+      <button onClick={() => setExpanded(true)} title="Přidat poznámku k položce" style={{
         width: "24px", height: "24px", minWidth: "24px",
         borderRadius: "5px", border: "none",
         background: "transparent", cursor: "pointer",
@@ -2768,7 +2768,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
       }}
       onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
       onMouseLeave={(e) => e.currentTarget.style.opacity = 0.5}>
-        ✏️
+        📝
       </button>
     );
   }
@@ -4968,13 +4968,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
    CREATE LIST MODAL — modal pro vytvoření vlastního seznamu
    ═══════════════════════════════════════════════════════ */
 
-function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDelete, editingList = null }) {
+function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDelete, editingList = null, tasksInList = 0, allLists = [], onDeleteListAndTasks, onMoveTasksToList }) {
   const isEditing = !!editingList;
   const [name, setName] = useState(editingList?.name || "");
   const [emoji, setEmoji] = useState(editingList?.emoji || "📁");
   const [color, setColor] = useState(editingList?.color || "#3b82f6");
   const [isShared, setIsShared] = useState(editingList?.is_shared !== false);
   const [saving, setSaving] = useState(false);
+  // Delete dialog stav: null = zavřený, "ask" = ptáme se, "moving" = přesouváme do jiného seznamu
+  const [deleteDialog, setDeleteDialog] = useState(null);
 
   const EMOJIS = ["📁", "🏗", "🌴", "🏠", "💼", "🎓", "🎨", "🚗", "💪", "🍽", "🎁", "📚"];
   const COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#6366f1"];
@@ -5021,9 +5023,28 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
 
   const handleDelete = async () => {
     if (!canEdit || !editingList) return;
-    if (!confirm(`Smazat seznam "${editingList.name}"?\n\nÚkoly v něm zůstanou ale ztratí přiřazení.`)) return;
+    // Pokud má seznam úkoly, ukaž dialog s volbami
+    if (tasksInList > 0) {
+      setDeleteDialog("ask");
+      return;
+    }
+    // Žádné úkoly → smaž rovnou
+    if (!confirm(`Smazat seznam "${editingList.name}"?`)) return;
+    await performDelete("keep");
+  };
+
+  // mode: "keep" = úkoly zůstanou bez kategorie | "delete_tasks" = smaž i úkoly | "move:<listId>" = přesuň
+  const performDelete = async (mode) => {
     setSaving(true);
     try {
+      // Krok 1: vyřeš úkoly (delete / keep / move)
+      if (mode === "delete_tasks" && onDeleteListAndTasks) {
+        await onDeleteListAndTasks(editingList.id);
+      } else if (mode.startsWith("move:") && onMoveTasksToList) {
+        const targetListId = mode.slice(5);
+        await onMoveTasksToList(editingList.id, targetListId);
+      }
+      // Krok 2: smaž samotný seznam
       const { error } = await supabase.from("custom_lists")
         .delete().eq("id", editingList.id);
       if (error) throw error;
@@ -5034,6 +5055,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
       alert("Nepodařilo se smazat: " + (e.message || "neznámá chyba"));
     } finally {
       setSaving(false);
+      setDeleteDialog(null);
     }
   };
 
@@ -5193,6 +5215,108 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
             {saving ? "Ukládám..." : isEditing ? "Uložit změny" : "Vytvořit seznam"}
           </button>
         </div>
+
+        {/* Delete dialog — co s úkoly v seznamu */}
+        {deleteDialog === "ask" && editingList && (
+          <div style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+            zIndex: 1200, display: "flex", justifyContent: "center", alignItems: "center",
+            padding: "16px", animation: "fadeIn 0.15s",
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{
+              width: "100%", maxWidth: "380px",
+              background: theme.bg, borderRadius: "12px",
+              padding: "20px", display: "flex", flexDirection: "column", gap: "12px",
+              boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+            }}>
+              <div>
+                <div style={{ fontSize: "16px", fontWeight: 700, marginBottom: "4px" }}>
+                  Smazat seznam "{editingList.name}"?
+                </div>
+                <div style={{ fontSize: "12px", color: theme.textSub }}>
+                  V seznamu je <strong>{tasksInList} úkol{tasksInList === 1 ? "" : tasksInList < 5 ? "y" : "ů"}</strong>.
+                  Co s nimi udělat?
+                </div>
+              </div>
+
+              {/* Volba 1: Ponechat */}
+              <button type="button" onClick={() => performDelete("keep")}
+                disabled={saving}
+                style={{
+                  ...buttonStyle(),
+                  padding: "12px", fontSize: "12px", fontWeight: 600,
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
+                  textAlign: "left",
+                }}>
+                <div style={{ fontWeight: 700, marginBottom: "2px" }}>📁 Ponechat úkoly</div>
+                <div style={{ fontSize: "10px", color: theme.textSub }}>
+                  Zůstanou bez kategorie, ale jinak nezměněné
+                </div>
+              </button>
+
+              {/* Volba 2: Přesunout do jiného seznamu */}
+              {(() => {
+                const otherLists = (allLists || []).filter(l =>
+                  l.id !== editingList.id && (l.is_shared || l.created_by_user === currentUser.name)
+                );
+                if (otherLists.length === 0) return null;
+                return (
+                  <div>
+                    <div style={{ fontSize: "11px", fontWeight: 600, color: theme.textMid, marginBottom: "5px" }}>
+                      ↪ Přesunout do jiného seznamu:
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+                      {otherLists.map(list => (
+                        <button key={list.id} type="button"
+                          onClick={() => performDelete(`move:${list.id}`)}
+                          disabled={saving}
+                          style={{
+                            ...buttonStyle(),
+                            padding: "6px 10px", fontSize: "11px", fontWeight: 600,
+                            background: `${list.color}15`, color: list.color,
+                            border: `1px solid ${list.color}40`, borderRadius: "10px",
+                          }}>
+                          {list.emoji || "📁"} {list.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Volba 3: Smazat i úkoly */}
+              <button type="button" onClick={() => {
+                  if (confirm(`Opravdu smazat ${tasksInList} úkol(ů) navždy? Tato akce nelze vrátit zpět.`)) {
+                    performDelete("delete_tasks");
+                  }
+                }}
+                disabled={saving}
+                style={{
+                  ...buttonStyle(),
+                  padding: "12px", fontSize: "12px", fontWeight: 600,
+                  background: `${theme.red}10`, color: theme.red,
+                  border: `1px solid ${theme.red}40`, borderRadius: "8px",
+                  textAlign: "left",
+                }}>
+                <div style={{ fontWeight: 700, marginBottom: "2px" }}>🗑 Smazat seznam i úkoly</div>
+                <div style={{ fontSize: "10px", opacity: 0.85 }}>
+                  Trvale odstranit všech {tasksInList} úkol{tasksInList === 1 ? "" : tasksInList < 5 ? "y" : "ů"}
+                </div>
+              </button>
+
+              <button type="button" onClick={() => setDeleteDialog(null)}
+                disabled={saving}
+                style={{
+                  background: "none", border: "none",
+                  color: theme.textSub, fontSize: "12px",
+                  cursor: "pointer", fontFamily: FONT, padding: "8px",
+                }}>
+                Zrušit
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5279,45 +5403,46 @@ function MoreFiltersSheet({
         </div>
         <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
 
-          {/* Seznam */}
+          {/* Správa seznamů — pouze edit/create vlastních seznamů. Filter Seznam je v hlavní liště. */}
           <div style={sectionStyle}>
-            <div style={sectionLabel}>📋 Seznam</div>
+            <div style={sectionLabel}>📋 Správa seznamů</div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "8px" }}>
+              Filter podle seznamu najdeš v hlavní liště nahoře. Tady spravuješ vlastní seznamy.
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-              <button onClick={() => onCategoryFilterChange("all")}
-                style={chipStyle(categoryFilter === "all", theme.accent)}>Všechny</button>
-              {CATEGORIES.map(cat => (
-                <button key={cat.id}
-                  onClick={() => onCategoryFilterChange(cat.id)}
-                  style={chipStyle(categoryFilter === cat.id, theme.accent)}>
-                  {cat.icon} {cat.label}
-                </button>
-              ))}
+              {visibleLists.length === 0 && (
+                <div style={{ fontSize: "11px", color: theme.textSub, fontStyle: "italic" }}>
+                  Zatím nemáš vlastní seznamy.
+                </div>
+              )}
               {visibleLists.map(list => {
-                const v = `list:${list.id}`;
                 const isOwner = list.created_by_user === currentUser.name;
                 return (
                   <div key={list.id} style={{
                     display: "inline-flex", alignItems: "stretch", gap: 0,
                   }}>
-                    <button onClick={() => onCategoryFilterChange(v)}
-                      style={{
-                        ...chipStyle(categoryFilter === v, list.color),
-                        ...(isOwner ? { borderRight: "none", borderTopRightRadius: 0, borderBottomRightRadius: 0 } : {}),
-                      }}>
+                    <div style={{
+                      ...buttonStyle(),
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${list.color}15`, color: list.color,
+                      border: `1px solid ${list.color}40`,
+                      borderRadius: isOwner ? "12px 0 0 12px" : "12px",
+                      cursor: "default",
+                    }}>
                       {list.emoji || "📁"} {list.name}
-                    </button>
+                      {!isOwner && <span style={{ fontSize: "9px", opacity: 0.7, marginLeft: "4px" }}>(cizí)</span>}
+                    </div>
                     {isOwner && (
                       <button onClick={(e) => { e.stopPropagation(); onClose(); onEditList && onEditList(list); }}
                         title="Upravit seznam"
                         style={{
                           ...buttonStyle(),
-                          padding: "6px 8px", fontSize: "11px",
-                          background: categoryFilter === v ? `${list.color}25` : "transparent",
+                          padding: "6px 10px", fontSize: "11px",
+                          background: "transparent",
                           color: list.color,
-                          border: `1px solid ${categoryFilter === v ? list.color : theme.inputBorder}`,
-                          borderTopLeftRadius: 0, borderBottomLeftRadius: 0,
-                          borderTopRightRadius: "12px", borderBottomRightRadius: "12px",
-                          marginLeft: "-1px",
+                          border: `1px solid ${list.color}40`,
+                          borderLeft: "none",
+                          borderRadius: "0 12px 12px 0",
                         }}>✏️</button>
                     )}
                   </div>
@@ -5330,21 +5455,6 @@ function MoreFiltersSheet({
                   background: theme.inputBg, color: theme.accent,
                   border: `1px dashed ${theme.accent}50`, borderRadius: "12px",
                 }}>+ Vytvořit nový</button>
-            </div>
-          </div>
-
-          {/* Priorita */}
-          <div style={sectionStyle}>
-            <div style={sectionLabel}>! Priorita</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-              <button onClick={() => onPriorityFilterChange("all")}
-                style={chipStyle(priorityFilter === "all", theme.accent)}>Všechny</button>
-              <button onClick={() => onPriorityFilterChange("low")}
-                style={chipStyle(priorityFilter === "low", theme.textMid)}>Žádná</button>
-              <button onClick={() => onPriorityFilterChange("important")}
-                style={chipStyle(priorityFilter === "important", "#f59e0b")}>! Důležité</button>
-              <button onClick={() => onPriorityFilterChange("urgent")}
-                style={chipStyle(priorityFilter === "urgent", "#ef4444")}>‼ Urgent</button>
             </div>
           </div>
 
@@ -5368,26 +5478,17 @@ function MoreFiltersSheet({
             </div>
           </div>
 
-          {/* Datum splnění */}
+          {/* Datum — vlastní rozsah (presety jsou v hlavní liště) */}
           <div style={sectionStyle}>
-            <div style={sectionLabel}>📅 Datum splnění</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
-              {datePresets.map(opt => (
-                <button key={opt.value}
-                  onClick={() => onDueDateFilterChange(opt.value)}
-                  style={chipStyle(dueDateFilter === opt.value, theme.accent)}>
-                  {opt.label}
-                </button>
-              ))}
+            <div style={sectionLabel}>📆 Vlastní rozsah dat</div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "6px" }}>
+              Presety (Dnes/Týden/Měsíc) najdeš v hlavním filtru 📅 nahoře.
             </div>
             <div style={{
               padding: "10px", borderRadius: "8px",
               background: isRange ? `${theme.accent}10` : theme.inputBg,
               border: `1px solid ${isRange ? theme.accent : theme.inputBorder}`,
             }}>
-              <div style={{ fontSize: "10px", fontWeight: 700, color: theme.textMid, marginBottom: "5px" }}>
-                📆 Vlastní rozsah
-              </div>
               <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                 <input type="date" value={rangeFrom || ""}
                   onChange={(e) => {
@@ -5422,9 +5523,12 @@ function MoreFiltersSheet({
             </div>
           </div>
 
-          {/* Kdo přidal */}
+          {/* Kdo úkol vytvořil (zadavatel) */}
           <div style={sectionStyle}>
-            <div style={sectionLabel}>✏️ Kdo přidal</div>
+            <div style={sectionLabel}>✏️ Zadavatel úkolu</div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "6px" }}>
+              Kdo úkol vytvořil. Pro koho je úkol — najdeš v hlavním filtru 👤 nahoře.
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button onClick={() => onCreatedByFilterChange("all")}
                 style={chipStyle(createdByFilter === "all", theme.accent)}>Všichni</button>
@@ -9347,19 +9451,22 @@ export default function App() {
   const stats = useMemo(() => {
     if (!currentUser) return {};
     return {
-      // Scope counts — bez status filtru (= "kolik úkolů celkem v této roli, bez ohledu na view")
-      // Tj. vidíš počet i v Today view, kde úkoly nemusí mít dueDate=dnes.
-      // Aktivní úkoly (=ne smazané a ne hotové) — pokud chceš jen aktivní, použij viewStatus.
-      my: countTasks(t => t.assignedTo?.includes(currentUser.name) && !isDone(t) && !isDeleted(t), ["scope", "status"]),
+      // Scope counts — bez status filtru
+      // Skip odložené (showFrom > dnes), jinak counter ukazuje "(2)" ale view je prázdné.
+      my: countTasks(t => t.assignedTo?.includes(currentUser.name) && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
       forMe: countTasks(t =>
-        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t) && !isDeleted(t),
+        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred),
         ["scope", "status"]
       ),
       assigned: countTasks(t =>
-        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name) && !isDone(t) && !isDeleted(t),
+        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name) && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred),
         ["scope", "status"]
       ),
-      shared: countTasks(t => t.assignTo === "both" && !isDone(t) && !isDeleted(t), ["scope", "status"]),
+      shared: countTasks(t => t.assignTo === "both" && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
       // "planned" count — status skipped, counts only deferred with all other filters
       planned: countTasks(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t), ["status"]),
       // "done" count — status skipped
@@ -9766,10 +9873,30 @@ export default function App() {
             theme={theme}
             currentUser={currentUser}
             editingList={editingList}
+            allLists={customLists}
+            tasksInList={editingList ? tasks.filter(t => t.category === `list:${editingList.id}`).length : 0}
             onClose={() => { setShowCreateList(false); setEditingList(null); }}
             onCreate={(newList) => setCustomLists(prev => [...prev, newList])}
             onUpdate={(updated) => setCustomLists(prev => prev.map(l => l.id === updated.id ? updated : l))}
             onDelete={(deletedId) => setCustomLists(prev => prev.filter(l => l.id !== deletedId))}
+            onDeleteListAndTasks={async (listId) => {
+              // Smaž úkoly v daném seznamu
+              const idsToDelete = tasks.filter(t => t.category === `list:${listId}`).map(t => t.id);
+              for (const id of idsToDelete) {
+                await supabase.from("tasks").delete().eq("id", id);
+              }
+              setTasks(prev => prev.filter(t => t.category !== `list:${listId}`));
+            }}
+            onMoveTasksToList={async (fromListId, toListId) => {
+              const newCategory = `list:${toListId}`;
+              const idsToMove = tasks.filter(t => t.category === `list:${fromListId}`).map(t => t.id);
+              for (const id of idsToMove) {
+                await supabase.from("tasks").update({ category: newCategory }).eq("id", id);
+              }
+              setTasks(prev => prev.map(t =>
+                t.category === `list:${fromListId}` ? { ...t, category: newCategory } : t
+              ));
+            }}
           />
         )}
 
@@ -9871,75 +9998,68 @@ export default function App() {
           {/* Filter bar — schováno v typing mode */}
           {!isTypingMode && (
           <>
-          {/* Compact icon filters — jeden řádek */}
+          {/* Kompaktní ikonový filter row — 7 prvků, mobile-first */}
           <div style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: "4px", marginBottom: "6px",
+            display: "flex", alignItems: "stretch", gap: "3px",
+            marginBottom: "8px",
             background: theme.card,
             border: `1px solid ${theme.cardBorder}`,
-            borderRadius: "12px", padding: "6px 8px",
+            borderRadius: "12px", padding: "4px",
           }}>
-            {/* Status icon + dropdown */}
+            {/* 1) Status (Aktivní/Dnes/Splněné/Koš) */}
             {(() => {
-              const statusInfo = {
-                today:       { icon: "🎯", label: "Dnes" },
-                active:      { icon: "📋", label: "Aktivní" },
-                in_progress: { icon: "🔥", label: "Rozprac." },
-                planned:     { icon: "⏰", label: "Plán." },
-                done:        { icon: "✓",  label: "Hotové" },
-                trash:       { icon: "🗑", label: "Koš" },
-                all:         { icon: "🌐", label: "Vše" },
-              };
-              const cur = statusInfo[viewStatus] || statusInfo.active;
-              const count = stats[viewStatus === "active" ? "active" : viewStatus] || 0;
+              const opts = [
+                { value: "today",       icon: "🎯", label: "Dnes" },
+                { value: "active",      icon: "📋", label: "Aktivní" },
+                { value: "in_progress", icon: "🔥", label: "Rozprac." },
+                { value: "planned",     icon: "⏰", label: "Plán." },
+                { value: "done",        icon: "✓",  label: "Hotové" },
+                { value: "trash",       icon: "🗑", label: "Koš" },
+                { value: "all",         icon: "🌐", label: "Vše" },
+              ];
+              const cur = opts.find(o => o.value === viewStatus) || opts[1];
               const isActive = viewStatus !== "active";
               return (
                 <div style={{ position: "relative", flex: 1 }}>
-                  <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
-                    width: "100%", padding: "8px 4px",
-                    border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : "transparent",
-                    color: theme.text, fontSize: "11px", fontWeight: 700,
-                    fontFamily: FONT, cursor: "pointer",
-                    appearance: "none", WebkitAppearance: "none",
-                    textAlign: "center", textAlignLast: "center",
-                  }}>
-                    <option value="today">🎯 Dnes ({stats.today || 0})</option>
-                    <option value="active">📋 Aktivní ({stats.active || 0})</option>
-                    <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
-                    <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
-                    <option value="done">✓ Splněné ({stats.done || 0})</option>
-                    <option value="trash">🗑 Koš ({stats.trash || 0})</option>
-                    <option value="all">🌐 Vše ({stats.all || 0})</option>
+                  <select value={viewStatus} onChange={e => setViewStatus(e.target.value)}
+                    title="Status filter"
+                    style={{
+                      width: "100%", padding: "8px 0", textAlign: "center",
+                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                      borderRadius: "8px",
+                      background: isActive ? `${theme.accent}15` : "transparent",
+                      color: theme.text, fontSize: "16px",
+                      fontFamily: FONT, cursor: "pointer",
+                      appearance: "none", WebkitAppearance: "none",
+                      textAlignLast: "center",
+                    }}>
+                    {opts.map(o => (
+                      <option key={o.value} value={o.value}>
+                        {o.icon} {o.label} ({stats[o.value === "active" ? "active" : o.value] || 0})
+                      </option>
+                    ))}
                   </select>
-                  <div style={{
-                    position: "absolute", top: "2px", right: "4px",
-                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
-                    pointerEvents: "none",
-                  }}>{cur.label.toUpperCase()}</div>
                 </div>
               );
             })()}
 
-            {/* Scope (Moje/...) */}
+            {/* 2) Scope (Moje/Pavla/...) */}
             {(() => {
               const isActive = filter !== "my";
-              const labels = { my: "Moje", for_me: "Pro mě", assigned: "Zadané", shared: "Společné", unread: "Nové", all: "Vše" };
-              let curLabel = labels[filter] || "—";
-              if (filter && filter.startsWith("person:")) curLabel = filter.slice(7);
               return (
                 <div style={{ position: "relative", flex: 1 }}>
-                  <select value={filter} onChange={e => setFilter(e.target.value)} style={{
-                    width: "100%", padding: "8px 4px",
-                    border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : "transparent",
-                    color: theme.text, fontSize: "11px", fontWeight: 700,
-                    fontFamily: FONT, cursor: "pointer",
-                    appearance: "none", WebkitAppearance: "none",
-                    textAlign: "center", textAlignLast: "center",
-                  }}>
+                  <select value={filter} onChange={e => setFilter(e.target.value)}
+                    title="Pro koho je úkol"
+                    style={{
+                      width: "100%", padding: "8px 0", textAlign: "center",
+                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                      borderRadius: "8px",
+                      background: isActive ? `${theme.accent}15` : "transparent",
+                      color: theme.text, fontSize: "16px",
+                      fontFamily: FONT, cursor: "pointer",
+                      appearance: "none", WebkitAppearance: "none",
+                      textAlignLast: "center",
+                    }}>
                     <option value="my">👤 Moje ({stats.my})</option>
                     <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
                     {users.filter(u => u.name !== currentUser.name).map(u => (
@@ -9950,45 +10070,99 @@ export default function App() {
                     <option value="unread">🔴 Nové ({unreadCounts[currentUser.name] || 0})</option>
                     <option value="all">📋 Vše</option>
                   </select>
-                  <div style={{
-                    position: "absolute", top: "2px", right: "4px",
-                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
-                    pointerEvents: "none",
-                  }}>{curLabel.toUpperCase().slice(0, 7)}</div>
                 </div>
               );
             })()}
 
-            {/* Sort */}
+            {/* 3) Sort */}
             {(() => {
-              const labels = { created: "Nové", smart: "Chytré", priority: "Pri", date: "Termín" };
               return (
                 <div style={{ position: "relative", flex: 1 }}>
-                  <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
-                    width: "100%", padding: "8px 4px",
-                    border: "1.5px solid transparent",
-                    borderRadius: "10px",
-                    background: "transparent",
-                    color: theme.text, fontSize: "11px", fontWeight: 700,
-                    fontFamily: FONT, cursor: "pointer",
-                    appearance: "none", WebkitAppearance: "none",
-                    textAlign: "center", textAlignLast: "center",
-                  }}>
+                  <select value={sortMode} onChange={e => setSortMode(e.target.value)}
+                    title="Řazení"
+                    style={{
+                      width: "100%", padding: "8px 0", textAlign: "center",
+                      border: "1.5px solid transparent",
+                      borderRadius: "8px",
+                      background: "transparent",
+                      color: theme.text, fontSize: "16px",
+                      fontFamily: FONT, cursor: "pointer",
+                      appearance: "none", WebkitAppearance: "none",
+                      textAlignLast: "center",
+                    }}>
                     <option value="created">↕ Nejnovější</option>
                     <option value="smart">↕ Chytré</option>
                     <option value="priority">↕ Priorita</option>
                     <option value="date">↕ Termín</option>
                   </select>
-                  <div style={{
-                    position: "absolute", top: "2px", right: "4px",
-                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
-                    pointerEvents: "none",
-                  }}>{(labels[sortMode] || "↕").toUpperCase()}</div>
                 </div>
               );
             })()}
 
-            {/* Priority — přepínací (None → ! → ‼) */}
+            {/* 4) Datum (dnes/týden/měsíc) */}
+            {(() => {
+              const opts = [
+                { value: "all",       label: "📅 Datum: vše" },
+                { value: "today",     label: "🎯 Dnes" },
+                { value: "week",      label: "📅 Tento týden" },
+                { value: "next_week", label: "📅 Příští týden" },
+                { value: "month",     label: "📅 Tento měsíc" },
+              ];
+              const isActive = dueDateFilter !== "all";
+              return (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <select value={dueDateFilter.startsWith("range:") ? "all" : dueDateFilter}
+                    onChange={e => setDueDateFilter(e.target.value)}
+                    title="Termín splnění"
+                    style={{
+                      width: "100%", padding: "8px 0", textAlign: "center",
+                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                      borderRadius: "8px",
+                      background: isActive ? `${theme.accent}15` : "transparent",
+                      color: theme.text, fontSize: "16px",
+                      fontFamily: FONT, cursor: "pointer",
+                      appearance: "none", WebkitAppearance: "none",
+                      textAlignLast: "center",
+                    }}>
+                    {opts.map(o => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })()}
+
+            {/* 5) Seznam (Stavba/Doksy/...) */}
+            {(() => {
+              const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
+              const isActive = categoryFilter !== "all";
+              return (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+                    title="Seznam"
+                    style={{
+                      width: "100%", padding: "8px 0", textAlign: "center",
+                      border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                      borderRadius: "8px",
+                      background: isActive ? `${theme.accent}15` : "transparent",
+                      color: theme.text, fontSize: "16px",
+                      fontFamily: FONT, cursor: "pointer",
+                      appearance: "none", WebkitAppearance: "none",
+                      textAlignLast: "center",
+                    }}>
+                    <option value="all">📋 Seznam: vše</option>
+                    {CATEGORIES.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.icon} {cat.label}</option>
+                    ))}
+                    {visibleLists.map(list => (
+                      <option key={list.id} value={`list:${list.id}`}>{list.emoji || "📁"} {list.name}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })()}
+
+            {/* 6) Priority — přepínací (None → ! → ‼) */}
             {(() => {
               const cyclePriority = () => {
                 if (priorityFilter === "all" || priorityFilter === "low") setPriorityFilter("important");
@@ -10000,38 +10174,35 @@ export default function App() {
               const color = isUrg ? "#ef4444" : isImp ? "#f59e0b" : theme.textMid;
               return (
                 <button type="button" onClick={cyclePriority}
-                  title="Klik = přepnout prioritu"
+                  title="Priorita (klik = přepnout)"
                   style={{
-                    ...buttonStyle(),
-                    width: "44px", padding: "8px 0",
+                    flex: 1, padding: "8px 0",
                     background: (isImp || isUrg) ? `${color}15` : "transparent",
                     color: color, fontSize: "16px", fontWeight: 800,
                     border: `1.5px solid ${(isImp || isUrg) ? color : "transparent"}`,
-                    borderRadius: "10px",
-                    cursor: "pointer",
+                    borderRadius: "8px",
+                    cursor: "pointer", fontFamily: FONT,
                   }}>
                   {isUrg ? "‼" : "!"}
                 </button>
               );
             })()}
 
-            {/* ⋯ Více filtrů */}
+            {/* 7) Více filtrů (Tag, Zadavatel, Kdy přidáno) */}
             {(() => {
-              const hasMore = categoryFilter !== "all" || tagFilter !== "all"
-                || dueDateFilter !== "all"
-                || createdWhenFilter !== "all" || createdByFilter !== "all";
+              const hasMore = tagFilter !== "all" ||
+                createdWhenFilter !== "all" || createdByFilter !== "all";
               return (
                 <button onClick={() => setShowMoreFilters(true)}
                   title="Více filtrů"
                   style={{
-                    ...buttonStyle(),
-                    width: "44px", padding: "8px 0",
+                    flex: 1, padding: "8px 0",
                     background: hasMore ? `${theme.accent}15` : "transparent",
                     color: hasMore ? theme.accent : theme.textMid,
                     fontSize: "18px", fontWeight: 800,
                     border: `1.5px solid ${hasMore ? theme.accent : "transparent"}`,
-                    borderRadius: "10px",
-                    cursor: "pointer",
+                    borderRadius: "8px",
+                    cursor: "pointer", fontFamily: FONT,
                   }}>
                   ⋯
                 </button>
