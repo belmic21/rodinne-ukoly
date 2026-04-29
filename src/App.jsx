@@ -2936,7 +2936,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [] }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -3270,8 +3270,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
       style={{
       background: actionAnim ? `${animColor}15`
         : recentlyAdded ? `${theme.green}${Math.round((1 - fadeProgress) * 0x14).toString(16).padStart(2, "0")}`
+        : isToday && !taskIsDone && !taskIsDeleted ? `${theme.accent}05`
         : cardBackground,
-      border: `1px solid ${actionAnim ? animColor : cardBorderColor}`,
+      border: `1px solid ${actionAnim ? animColor : (isToday && !taskIsDone && !taskIsDeleted ? theme.accent + "60" : cardBorderColor)}`,
       borderRadius: "12px",
       borderLeft: `5px solid ${
         actionAnim ? animColor
@@ -3829,17 +3830,47 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active" }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
   const [type, setType] = useState("simple");
-  // Default termín = týden (7 dní od dnes)
-  const defaultDueDateWeek = () => {
+  // Smart default termín — podle aktivního filtru.
+  // Filter Datum/ViewStatus ovlivňuje co dostane nový úkol.
+  const smartDefaultDueDate = () => {
+    const today = new Date(); today.setHours(12, 0, 0, 0);
+    const day = (today.getDay() + 6) % 7; // 0=Po, 6=Ne
+
+    // Filter Dnes nebo viewStatus today → dnes
+    if (dueDateFilter === "today" || viewStatus === "today") {
+      return today.toISOString().slice(0, 10);
+    }
+    // Filter Tento týden → konec týdne (sobota)
+    if (dueDateFilter === "week") {
+      const sat = new Date(today); sat.setDate(sat.getDate() + (5 - day));
+      if (sat.getTime() < today.getTime()) sat.setDate(sat.getDate() + 7);
+      return sat.toISOString().slice(0, 10);
+    }
+    // Filter Příští týden → příští neděle
+    if (dueDateFilter === "next_week") {
+      const nextSun = new Date(today); nextSun.setDate(nextSun.getDate() + (6 - day) + 7);
+      return nextSun.toISOString().slice(0, 10);
+    }
+    // Filter Tento měsíc → konec měsíce
+    if (dueDateFilter === "month") {
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 12, 0, 0);
+      return endOfMonth.toISOString().slice(0, 10);
+    }
+    // Filter Vlastní rozsah → 'od' datum
+    if (dueDateFilter && dueDateFilter.startsWith("range:")) {
+      const [from] = dueDateFilter.slice(6).split(",");
+      if (from) return from;
+    }
+    // Default = za týden
     const d = new Date(); d.setDate(d.getDate() + 7); d.setHours(12, 0, 0, 0);
     return d.toISOString().slice(0, 10);
   };
-  const [dueDate, setDueDate] = useState(defaultDueDateWeek);
+  const [dueDate, setDueDate] = useState(smartDefaultDueDate);
   const [recurrence, setRecurrence] = useState(0);
   const [category, setCategory] = useState("other");
   const [initialChecklist, setInitialChecklist] = useState([]);
@@ -3858,6 +3889,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const inputRef = useRef();
   const segmentBarRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
+
+  // Auto-update default termín při změně filtru — jen když není text/uživatel nepíše a není showFull
+  useEffect(() => {
+    if (!text.trim() && !showFull) {
+      setDueDate(smartDefaultDueDate());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dueDateFilter, viewStatus]);
 
   // Close open segment dropdown when clicking outside the segment bar
   useEffect(() => {
@@ -3891,6 +3930,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   const createTaskObject = (title) => {
     const { assignTo, assignedTo } = computeAssignment();
+    // Filter propagace: pokud user explicitně nevybral, použij aktivní filter
+    const effectivePriority = quickPriority || (priorityFilter !== "all" ? priorityFilter : "low");
+    const effectiveCategory = quickCategory
+      || (categoryFilter !== "all" ? categoryFilter : null)
+      || (category === "other" ? autoDetectCategory(title) : category);
     return {
       id: generateId(),
       title,
@@ -3899,11 +3943,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       createdBy: currentUser.name,
       assignTo,
       assignedTo,
-      priority: quickPriority || "low",
+      priority: effectivePriority,
       dueDate: dueDate || null,
       showFrom: showFrom || null,
       recDays: recurrence,
-      category: quickCategory || (category === "other" ? autoDetectCategory(title) : category),
+      category: effectiveCategory,
       activeMo: [],
       status: "active",
       doneBy: [],
@@ -3933,7 +3977,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   };
 
   const resetForm = () => {
-    setText(""); setNote(""); setDueDate(defaultDueDateWeek()); setRecurrence(0);
+    setText(""); setNote(""); setDueDate(smartDefaultDueDate()); setRecurrence(0);
     setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
@@ -4107,6 +4151,89 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</span>
               </button>
             ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ═══ RYCHLÉ CHIPS — termín + priorita, jen v typing mode ═══ */}
+      {(() => {
+        const isTyping = text.trim().length > 0;
+        if (!isTyping || showFull) return null;
+
+        const today = new Date(); today.setHours(12, 0, 0, 0);
+        const todayStr = today.toISOString().slice(0, 10);
+        const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+        const day = (today.getDay() + 6) % 7;
+        const sat = new Date(today); sat.setDate(sat.getDate() + (5 - day));
+        if (sat.getTime() < today.getTime()) sat.setDate(sat.getDate() + 7);
+        const satStr = sat.toISOString().slice(0, 10);
+        const weekFromNow = new Date(today); weekFromNow.setDate(weekFromNow.getDate() + 7);
+        const weekStr = weekFromNow.toISOString().slice(0, 10);
+
+        const dueChips = [
+          { label: "🎯 Dnes", value: todayStr },
+          { label: "Zítra", value: tomorrowStr },
+          { label: "Sobota", value: satStr },
+          { label: "Týden", value: weekStr },
+        ];
+        const priChips = [
+          { label: "! Důl.", value: "important", color: "#f59e0b" },
+          { label: "‼ Urgent", value: "urgent", color: "#ef4444" },
+        ];
+
+        return (
+          <div style={{
+            marginTop: "8px",
+            padding: "6px 0",
+          }}>
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              marginBottom: "5px", padding: "0 2px",
+              display: "flex", alignItems: "center", gap: "5px",
+            }}>
+              <span>⚡</span>
+              <span>Rychle</span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+              {dueChips.map(c => {
+                const isSel = dueDate === c.value;
+                return (
+                  <button key={c.value} type="button"
+                    onClick={() => setDueDate(c.value)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 11px", fontSize: "11px", fontWeight: 600,
+                      background: isSel ? theme.accent : theme.inputBg,
+                      color: isSel ? "#fff" : theme.textSub,
+                      border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
+                      borderRadius: "12px",
+                    }}>
+                    {c.label}
+                  </button>
+                );
+              })}
+              {/* Separator */}
+              <span style={{ color: theme.cardBorder, alignSelf: "center", padding: "0 2px" }}>·</span>
+              {priChips.map(c => {
+                const isSel = quickPriority === c.value;
+                return (
+                  <button key={c.value} type="button"
+                    onClick={() => setQuickPriority(isSel ? null : c.value)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 11px", fontSize: "11px", fontWeight: 600,
+                      background: isSel ? c.color : theme.inputBg,
+                      color: isSel ? "#fff" : c.color,
+                      border: `1px solid ${isSel ? c.color : c.color + "40"}`,
+                      borderRadius: "12px",
+                    }}>
+                    {c.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
@@ -9269,13 +9396,35 @@ export default function App() {
       items.push({ type: "section_divider", key: "section-divider-stale" });
     }
 
-    // ═══ Seskupování podle vlastních seznamů (3+ úkolů) ═══
-    // Pokud má aktivní view 3+ úkolů ze stejného vlastního seznamu, automaticky seskupíme.
-    // Funguje jen v "active" view.
+    // ═══ Seskupování — nejdřív Dnes, pak vlastní seznamy (3+), pak ostatní ═══
     if (viewStatus === "active") {
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+
+      // 1) Úkoly s dueDate=dnes
+      const todayTasks = [];
+      const remainingNonToday = [];
+      remainingActive.forEach(task => {
+        if (task.dueDate) {
+          const due = new Date(task.dueDate);
+          if (due >= todayStart && due <= todayEnd) {
+            todayTasks.push(task);
+            return;
+          }
+        }
+        remainingNonToday.push(task);
+      });
+
+      if (todayTasks.length > 0) {
+        items.push({ type: "section_header_today", key: "section-today", count: todayTasks.length });
+        todayTasks.forEach(task => items.push({ type: "task", task, key: task.id, isToday: true }));
+        items.push({ type: "section_divider", key: "section-divider-today" });
+      }
+
+      // 2) Seskupit ostatní podle vlastních seznamů (3+ úkolů)
       const groupedByList = {};  // listId → [tasks]
       const ungrouped = [];
-      remainingActive.forEach(task => {
+      remainingNonToday.forEach(task => {
         if (task.category && task.category.startsWith("list:")) {
           const listId = task.category.slice(5);
           if (!groupedByList[listId]) groupedByList[listId] = [];
@@ -9290,7 +9439,6 @@ export default function App() {
         if (tasks.length >= 3) {
           bigGroups.push({ listId, tasks });
         } else {
-          // < 3 → vrátit do ungrouped
           ungrouped.push(...tasks);
         }
       });
@@ -9926,6 +10074,7 @@ export default function App() {
             onEditList={(list) => setEditingList(list)}
             dueDateFilter={dueDateFilter}
             onDueDateFilterChange={setDueDateFilter}
+            viewStatus={viewStatus}
           />
 
           {/* Compact filters — one row */}
@@ -10086,6 +10235,31 @@ export default function App() {
                     </div>
                   );
                 }
+                if (item.type === "section_header_today") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "4px 0 8px",
+                      padding: "8px 12px",
+                      background: `${theme.accent}10`,
+                      border: `2px solid ${theme.accent}`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.accent, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.3px",
+                      }}>
+                        🎯 Dnes ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        termín na dnes
+                      </span>
+                    </div>
+                  );
+                }
                 if (item.type === "section_header_list") {
                   const list = item.list;
                   return (
@@ -10240,6 +10414,7 @@ export default function App() {
                       progressItem={item.type === "progress" ? item.checklistItem : null}
                       recentlyAdded={item.recentlyAdded === true}
                       fadeProgress={item.fadeProgress || 0}
+                      isToday={item.isToday === true}
                       customLists={customLists}
                       onStartFocus={(taskId) => {
                         setFocusInitialTask(taskId);
