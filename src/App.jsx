@@ -811,6 +811,17 @@ async function apiDeleteUser(name) {
   }
 }
 
+async function apiUpdateUserPin(name, newPin) {
+  try {
+    const { error } = await supabase.from("users").update({ pin: newPin }).eq("name", name);
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    console.error("apiUpdateUserPin failed:", e);
+    return false;
+  }
+}
+
 async function apiCreateTask(task) {
   // Always update local cache
   const cached = cacheGet(CACHE_TASKS) || [];
@@ -8089,9 +8100,41 @@ function NotificationPanel({ currentUser, onClose, theme }) {
   );
 }
 
-function AdminPanel({ users, onAdd, onRemove, onClose, theme }) {
+function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme }) {
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
+  // Per-user state pro reset PIN dialog
+  const [showPinFor, setShowPinFor] = useState(null); // user name který má zobrazený PIN
+  const [editingPinFor, setEditingPinFor] = useState(null); // user name který se právě edituje
+  const [newPinInput, setNewPinInput] = useState("");
+  const [resetMessage, setResetMessage] = useState(null); // { name, pin } po úspěšném resetu
+  const [savingFor, setSavingFor] = useState(null);
+
+  const generateRandomPin = () => {
+    return String(Math.floor(1000 + Math.random() * 9000));
+  };
+
+  const handleResetPin = async (userName, pinValue) => {
+    if (!/^\d{4}$/.test(pinValue)) {
+      alert("PIN musí být 4 číslice");
+      return;
+    }
+    setSavingFor(userName);
+    const ok = await onResetPin(userName, pinValue);
+    setSavingFor(null);
+    if (ok) {
+      setResetMessage({ name: userName, pin: pinValue });
+      setEditingPinFor(null);
+      setNewPinInput("");
+      setShowPinFor(null);
+      // Auto-clear po 30s
+      setTimeout(() => {
+        setResetMessage(prev => prev?.name === userName ? null : prev);
+      }, 30000);
+    } else {
+      alert("Reset PINu selhal. Zkus to znovu.");
+    }
+  };
 
   return (
     <div style={{ ...cardStyle(theme), padding: "16px", marginBottom: "14px", animation: "slideUp 0.2s" }}>
@@ -8100,22 +8143,158 @@ function AdminPanel({ users, onAdd, onRemove, onClose, theme }) {
         <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "18px" }}>×</button>
       </div>
 
-      {users.map(u => (
-        <div key={u.name} style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "8px 0", borderBottom: `1px solid ${theme.cardBorder}`,
+      {/* Reset confirmation message */}
+      {resetMessage && (
+        <div style={{
+          padding: "10px 12px", marginBottom: "12px",
+          background: `${theme.green}15`,
+          border: `2px solid ${theme.green}`, borderRadius: "8px",
+          fontSize: "12px",
         }}>
-          <span style={{ fontSize: "13px" }}>
-            {u.name} {u.admin && <span style={{ fontSize: "10px", color: theme.textSub }}>(admin)</span>}
-          </span>
-          {!u.admin && (
-            <button onClick={() => onRemove(u.name)} style={{
-              background: "none", border: "none", color: theme.red,
-              fontSize: "11px", cursor: "pointer", fontFamily: FONT, fontWeight: 600,
-            }}>Odebrat</button>
-          )}
+          <div style={{ fontWeight: 700, color: theme.green, marginBottom: "4px" }}>
+            ✓ PIN pro {resetMessage.name} byl změněn
+          </div>
+          <div style={{ color: theme.text, marginBottom: "6px" }}>
+            Nový PIN: <span style={{
+              fontFamily: "monospace", fontSize: "18px", fontWeight: 800,
+              letterSpacing: "4px", color: theme.green,
+              background: `${theme.green}20`, padding: "2px 10px", borderRadius: "4px",
+            }}>{resetMessage.pin}</span>
+          </div>
+          <div style={{ fontSize: "10px", color: theme.textSub }}>
+            Předej tento PIN uživateli ústně. Tato zpráva zmizí za 30 sekund.
+          </div>
+          <button onClick={() => setResetMessage(null)} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: "10px", cursor: "pointer", marginTop: "4px",
+            fontFamily: FONT, textDecoration: "underline",
+          }}>Skrýt</button>
         </div>
-      ))}
+      )}
+
+      {users.map(u => {
+        const isShowingPin = showPinFor === u.name;
+        const isEditing = editingPinFor === u.name;
+        return (
+          <div key={u.name} style={{
+            padding: "10px 0", borderBottom: `1px solid ${theme.cardBorder}`,
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: "8px",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
+                <span style={{ fontSize: "13px", fontWeight: 600 }}>{u.name}</span>
+                {u.admin && (
+                  <span style={{
+                    fontSize: "9px", color: theme.accent,
+                    background: theme.accentSoft, padding: "1px 6px", borderRadius: "4px",
+                    fontWeight: 700, textTransform: "uppercase",
+                  }}>admin</span>
+                )}
+                {/* PIN display + eye toggle */}
+                {!isEditing && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "8px" }}>
+                    <span style={{
+                      fontFamily: "monospace", fontSize: "12px",
+                      letterSpacing: "3px", color: theme.textMid,
+                    }}>
+                      {isShowingPin ? u.pin : "••••"}
+                    </span>
+                    <button onClick={() => setShowPinFor(isShowingPin ? null : u.name)}
+                      title={isShowingPin ? "Skrýt PIN" : "Zobrazit PIN"}
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        fontSize: "11px", padding: "2px",
+                        color: theme.textSub,
+                      }}>
+                      {isShowingPin ? "🙈" : "👁"}
+                    </button>
+                  </span>
+                )}
+              </div>
+              {!isEditing && (
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <button onClick={() => {
+                    setEditingPinFor(u.name);
+                    setNewPinInput("");
+                  }} title="Resetovat PIN" style={{
+                    ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
+                    background: theme.accentSoft, color: theme.accent,
+                    border: `1px solid ${theme.accentBorder}`, fontWeight: 600,
+                  }}>🔑 Reset</button>
+                  {!u.admin && (
+                    <button onClick={() => {
+                      if (confirm(`Opravdu chceš odebrat uživatele "${u.name}"? Jeho úkoly zůstanou.`)) {
+                        onRemove(u.name);
+                      }
+                    }} style={{
+                      background: "none", border: "none", color: theme.red,
+                      fontSize: "11px", cursor: "pointer", fontFamily: FONT, fontWeight: 600,
+                      padding: "5px 8px",
+                    }}>Odebrat</button>
+                  )}
+                </div>
+              )}
+            </div>
+            {/* Edit PIN form */}
+            {isEditing && (
+              <div style={{
+                marginTop: "8px", padding: "10px",
+                background: theme.inputBg, borderRadius: "6px",
+                display: "flex", flexDirection: "column", gap: "8px",
+              }}>
+                <div style={{ fontSize: "11px", color: theme.textMid, fontWeight: 600 }}>
+                  Nový PIN pro {u.name}:
+                </div>
+                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  <input
+                    type="tel" inputMode="numeric" maxLength={4}
+                    placeholder="••••"
+                    value={newPinInput}
+                    onChange={e => { if (/^\d{0,4}$/.test(e.target.value)) setNewPinInput(e.target.value); }}
+                    onKeyDown={e => e.key === "Enter" && newPinInput.length === 4 && handleResetPin(u.name, newPinInput)}
+                    autoFocus
+                    style={{
+                      ...inputStyle(theme), width: "80px", textAlign: "center",
+                      letterSpacing: "4px", fontSize: "16px", padding: "6px",
+                    }} />
+                  <button
+                    onClick={() => setNewPinInput(generateRandomPin())}
+                    title="Vygenerovat náhodný PIN"
+                    style={{
+                      ...buttonStyle(), padding: "6px 10px", fontSize: "11px",
+                      background: theme.inputBg, color: theme.text,
+                      border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                    }}>🎲 Náhodný</button>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    onClick={() => { setEditingPinFor(null); setNewPinInput(""); }}
+                    style={{
+                      background: "none", border: "none", color: theme.textSub,
+                      fontSize: "11px", cursor: "pointer", fontFamily: FONT,
+                      padding: "6px 8px",
+                    }}>Zrušit</button>
+                  <button
+                    onClick={() => handleResetPin(u.name, newPinInput)}
+                    disabled={newPinInput.length !== 4 || savingFor === u.name}
+                    style={{
+                      ...buttonStyle(), padding: "6px 12px", fontSize: "11px",
+                      background: newPinInput.length === 4 ? theme.green : theme.inputBorder,
+                      color: "#fff", fontWeight: 700,
+                      cursor: newPinInput.length === 4 ? "pointer" : "default",
+                    }}>
+                    {savingFor === u.name ? "Ukládám..." : "Uložit"}
+                  </button>
+                </div>
+                <div style={{ fontSize: "10px", color: theme.textSub }}>
+                  💡 Po nastavení uvidíš nový PIN nahoře — předej ho uživateli ústně.
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <div style={{ display: "flex", gap: "6px", marginTop: "12px" }}>
         <input placeholder="Jméno" value={name} onChange={e => setName(e.target.value)}
@@ -9895,6 +10074,14 @@ export default function App() {
             users={users}
             onAdd={async u => apiCreateUser(u)}
             onRemove={async n => apiDeleteUser(n)}
+            onResetPin={async (name, newPin) => {
+              const ok = await apiUpdateUserPin(name, newPin);
+              if (ok) {
+                // Update local state
+                setUsers(prev => prev.map(u => u.name === name ? { ...u, pin: newPin } : u));
+              }
+              return ok;
+            }}
             onClose={() => setShowAdmin(false)}
             theme={theme}
           />
