@@ -5752,7 +5752,10 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
           </label>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
             {EMOJIS.map(e => (
-              <button key={e} onClick={() => canEdit !== false && setEmoji(e)}
+              <button key={e} onClick={() => {
+                if (isEditing && !canEdit) return; // jen pro view-only edit
+                setEmoji(e);
+              }}
                 disabled={isEditing && !canEdit}
                 style={{
                   width: "34px", height: "34px",
@@ -5772,7 +5775,10 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
           </label>
           <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
             {COLORS.map(c => (
-              <button key={c} onClick={() => canEdit !== false && setColor(c)}
+              <button key={c} onClick={() => {
+                if (isEditing && !canEdit) return;
+                setColor(c);
+              }}
                 disabled={isEditing && !canEdit}
                 style={{
                   width: "28px", height: "28px",
@@ -5791,7 +5797,10 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
             Sdílení
           </label>
           <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-            <button onClick={() => canEdit !== false && setIsShared(true)}
+            <button onClick={() => {
+              if (isEditing && !canEdit) return;
+              setIsShared(true);
+            }}
               disabled={isEditing && !canEdit}
               style={{
                 ...buttonStyle(),
@@ -5801,7 +5810,10 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 border: `1px solid ${isShared ? color : theme.cardBorder}`,
                 fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
               }}>👥 Sdílený — vidí všichni v rodině</button>
-            <button onClick={() => canEdit !== false && setIsShared(false)}
+            <button onClick={() => {
+              if (isEditing && !canEdit) return;
+              setIsShared(false);
+            }}
               disabled={isEditing && !canEdit}
               style={{
                 ...buttonStyle(),
