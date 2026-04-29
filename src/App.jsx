@@ -5210,7 +5210,7 @@ function MoreFiltersSheet({
   dueDateFilter, onDueDateFilterChange,
   createdWhenFilter, onCreatedWhenFilterChange,
   createdByFilter, onCreatedByFilterChange,
-  onCreateList,
+  onCreateList, onEditList,
 }) {
   const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
   const whenOptions = [
@@ -5241,8 +5241,14 @@ function MoreFiltersSheet({
   });
 
   const sectionLabel = {
-    fontSize: "11px", fontWeight: 700, color: theme.textMid,
-    textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+    fontSize: "11px", fontWeight: 800, color: theme.accent,
+    textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
+  };
+  const sectionStyle = {
+    padding: "12px",
+    background: theme.card,
+    border: `1px solid ${theme.cardBorder}`,
+    borderRadius: "10px",
   };
 
   const hasAny = categoryFilter !== "all" || priorityFilter !== "all" ||
@@ -5274,7 +5280,7 @@ function MoreFiltersSheet({
         <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
 
           {/* Seznam */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>📋 Seznam</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button onClick={() => onCategoryFilterChange("all")}
@@ -5288,12 +5294,33 @@ function MoreFiltersSheet({
               ))}
               {visibleLists.map(list => {
                 const v = `list:${list.id}`;
+                const isOwner = list.created_by_user === currentUser.name;
                 return (
-                  <button key={list.id}
-                    onClick={() => onCategoryFilterChange(v)}
-                    style={chipStyle(categoryFilter === v, list.color)}>
-                    {list.emoji || "📁"} {list.name}
-                  </button>
+                  <div key={list.id} style={{
+                    display: "inline-flex", alignItems: "stretch", gap: 0,
+                  }}>
+                    <button onClick={() => onCategoryFilterChange(v)}
+                      style={{
+                        ...chipStyle(categoryFilter === v, list.color),
+                        ...(isOwner ? { borderRight: "none", borderTopRightRadius: 0, borderBottomRightRadius: 0 } : {}),
+                      }}>
+                      {list.emoji || "📁"} {list.name}
+                    </button>
+                    {isOwner && (
+                      <button onClick={(e) => { e.stopPropagation(); onClose(); onEditList && onEditList(list); }}
+                        title="Upravit seznam"
+                        style={{
+                          ...buttonStyle(),
+                          padding: "6px 8px", fontSize: "11px",
+                          background: categoryFilter === v ? `${list.color}25` : "transparent",
+                          color: list.color,
+                          border: `1px solid ${categoryFilter === v ? list.color : theme.inputBorder}`,
+                          borderTopLeftRadius: 0, borderBottomLeftRadius: 0,
+                          borderTopRightRadius: "12px", borderBottomRightRadius: "12px",
+                          marginLeft: "-1px",
+                        }}>✏️</button>
+                    )}
+                  </div>
                 );
               })}
               <button onClick={() => { onClose(); onCreateList && onCreateList(); }}
@@ -5307,7 +5334,7 @@ function MoreFiltersSheet({
           </div>
 
           {/* Priorita */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>! Priorita</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button onClick={() => onPriorityFilterChange("all")}
@@ -5322,7 +5349,7 @@ function MoreFiltersSheet({
           </div>
 
           {/* Tag */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>🏷 Tag (auto-detekce)</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button onClick={() => onTagFilterChange("all")}
@@ -5342,7 +5369,7 @@ function MoreFiltersSheet({
           </div>
 
           {/* Datum splnění */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>📅 Datum splnění</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
               {datePresets.map(opt => (
@@ -5382,7 +5409,7 @@ function MoreFiltersSheet({
           </div>
 
           {/* Přidáno kdy */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>📅 Přidáno kdy</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               {whenOptions.map(opt => (
@@ -5396,7 +5423,7 @@ function MoreFiltersSheet({
           </div>
 
           {/* Kdo přidal */}
-          <div>
+          <div style={sectionStyle}>
             <div style={sectionLabel}>✏️ Kdo přidal</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               <button onClick={() => onCreatedByFilterChange("all")}
@@ -8227,18 +8254,32 @@ export default function App() {
   // Auto-hide header při scroll dolů, ukázat při scroll nahoru
   useEffect(() => {
     let ticking = false;
+    let lastChange = 0;
+    const MIN_CHANGE_INTERVAL = 250; // ms — zabraňuje rapid toggle
+    const SCROLL_THRESHOLD = 25;     // px — větší threshold = klidnější přechody
     const onScroll = () => {
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
         const y = window.scrollY;
         const last = lastScrollYRef.current;
-        // Threshold 10px aby se nehybalo při lehkém scrollu
-        if (Math.abs(y - last) > 10) {
-          if (y > last && y > 60) {
-            setHeaderHidden(true); // scroll dolů
+        const now = Date.now();
+        // Cooldown — neměň stav příliš často
+        if (now - lastChange < MIN_CHANGE_INTERVAL) {
+          ticking = false;
+          return;
+        }
+        if (Math.abs(y - last) > SCROLL_THRESHOLD) {
+          if (y > last && y > 100) {
+            setHeaderHidden(prev => {
+              if (prev !== true) lastChange = now;
+              return true;
+            });
           } else if (y < last) {
-            setHeaderHidden(false); // scroll nahoru
+            setHeaderHidden(prev => {
+              if (prev !== false) lastChange = now;
+              return false;
+            });
           }
           lastScrollYRef.current = y;
         }
@@ -9416,10 +9457,11 @@ export default function App() {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         position: "sticky", top: 0, zIndex: 30,
         // Auto-hide: posun nahoru o vlastní výšku → schované
+        // Bez margin-tricku, jen čistý transform + sticky position
+        // (margin při scrollu vyvolával oscilaci/vibraci)
         transform: (headerHidden || isTypingMode) ? "translateY(-100%)" : "translateY(0)",
-        transition: "transform 0.25s ease",
-        // Když schované, neblokuje scroll dál (height 0)
-        marginBottom: (headerHidden || isTypingMode) ? "-58px" : "0",
+        transition: "transform 0.3s ease-out",
+        willChange: "transform",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Focus mode trigger - vlevo */}
@@ -9714,6 +9756,7 @@ export default function App() {
             createdByFilter={createdByFilter}
             onCreatedByFilterChange={setCreatedByFilter}
             onCreateList={() => setShowCreateList(true)}
+            onEditList={(list) => setEditingList(list)}
             onClose={() => setShowMoreFilters(false)}
           />
         )}
@@ -9828,101 +9871,175 @@ export default function App() {
           {/* Filter bar — schováno v typing mode */}
           {!isTypingMode && (
           <>
-          {/* Compact filters — one row */}
+          {/* Compact icon filters — jeden řádek */}
           <div style={{
-            display: "flex", alignItems: "center", gap: "5px",
-            marginBottom: "6px", flexWrap: "wrap",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: "4px", marginBottom: "6px",
+            background: theme.card,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "12px", padding: "6px 8px",
           }}>
-            {/* Status — primární filter */}
-            <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
-              padding: "5px 24px 5px 10px", fontSize: "11px",
-              border: `1px solid ${viewStatus !== "active" ? theme.accent : theme.inputBorder}`,
-              borderRadius: "12px",
-              background: viewStatus !== "active"
-                ? `${theme.accent}15`
-                : theme.inputBg,
-              color: viewStatus !== "active" ? theme.accent : theme.textSub,
-              fontWeight: viewStatus !== "active" ? 700 : 600,
-              fontFamily: FONT,
-              cursor: "pointer",
-              appearance: "none",
-              WebkitAppearance: "none",
-              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(viewStatus !== "active" ? theme.accent : theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
-              backgroundRepeat: "no-repeat",
-              backgroundPosition: "right 7px center",
-              backgroundSize: "10px",
-            }}>
-              <option value="today">🎯 Dnes ({stats.today || 0})</option>
-              <option value="active">📋 Aktivní ({stats.active || 0})</option>
-              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
-              <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
-              <option value="done">✓ Splněné ({stats.done || 0})</option>
-              <option value="trash">🗑 Koš ({stats.trash || 0})</option>
-              <option value="all">🌐 Vše ({stats.all || 0})</option>
-            </select>
+            {/* Status icon + dropdown */}
+            {(() => {
+              const statusInfo = {
+                today:       { icon: "🎯", label: "Dnes" },
+                active:      { icon: "📋", label: "Aktivní" },
+                in_progress: { icon: "🔥", label: "Rozprac." },
+                planned:     { icon: "⏰", label: "Plán." },
+                done:        { icon: "✓",  label: "Hotové" },
+                trash:       { icon: "🗑", label: "Koš" },
+                all:         { icon: "🌐", label: "Vše" },
+              };
+              const cur = statusInfo[viewStatus] || statusInfo.active;
+              const count = stats[viewStatus === "active" ? "active" : viewStatus] || 0;
+              const isActive = viewStatus !== "active";
+              return (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
+                    width: "100%", padding: "8px 4px",
+                    border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : "transparent",
+                    color: theme.text, fontSize: "11px", fontWeight: 700,
+                    fontFamily: FONT, cursor: "pointer",
+                    appearance: "none", WebkitAppearance: "none",
+                    textAlign: "center", textAlignLast: "center",
+                  }}>
+                    <option value="today">🎯 Dnes ({stats.today || 0})</option>
+                    <option value="active">📋 Aktivní ({stats.active || 0})</option>
+                    <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
+                    <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
+                    <option value="done">✓ Splněné ({stats.done || 0})</option>
+                    <option value="trash">🗑 Koš ({stats.trash || 0})</option>
+                    <option value="all">🌐 Vše ({stats.all || 0})</option>
+                  </select>
+                  <div style={{
+                    position: "absolute", top: "2px", right: "4px",
+                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
+                    pointerEvents: "none",
+                  }}>{cur.label.toUpperCase()}</div>
+                </div>
+              );
+            })()}
 
-            {/* Scope filter (Moje/Pavla/...) */}
-            <select value={filter} onChange={e => setFilter(e.target.value)} style={{
-              padding: "5px 24px 5px 10px", fontSize: "11px",
-              border: `1px solid ${filter !== "my" ? theme.accent : theme.inputBorder}`,
-              borderRadius: "12px",
-              background: filter !== "my" ? `${theme.accent}15` : theme.inputBg,
-              color: filter !== "my" ? theme.accent : theme.textSub,
-              fontWeight: 600, fontFamily: FONT,
-              cursor: "pointer", appearance: "none", WebkitAppearance: "none",
-              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(filter !== "my" ? theme.accent : theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
-              backgroundRepeat: "no-repeat", backgroundPosition: "right 7px center", backgroundSize: "10px",
-            }}>
-              <option value="my">👤 Moje ({stats.my})</option>
-              <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
-              {users.filter(u => u.name !== currentUser.name).map(u => (
-                <option key={u.name} value={`person:${u.name}`}>👤 {u.name}</option>
-              ))}
-              <option value="assigned">📤 Zadané ({stats.assigned})</option>
-              <option value="shared">👥 Společné ({stats.shared})</option>
-              <option value="unread">🔴 Nové ({unreadCounts[currentUser.name] || 0})</option>
-              <option value="all">📋 Vše</option>
-            </select>
+            {/* Scope (Moje/...) */}
+            {(() => {
+              const isActive = filter !== "my";
+              const labels = { my: "Moje", for_me: "Pro mě", assigned: "Zadané", shared: "Společné", unread: "Nové", all: "Vše" };
+              let curLabel = labels[filter] || "—";
+              if (filter && filter.startsWith("person:")) curLabel = filter.slice(7);
+              return (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <select value={filter} onChange={e => setFilter(e.target.value)} style={{
+                    width: "100%", padding: "8px 4px",
+                    border: `1.5px solid ${isActive ? theme.accent : "transparent"}`,
+                    borderRadius: "10px",
+                    background: isActive ? `${theme.accent}15` : "transparent",
+                    color: theme.text, fontSize: "11px", fontWeight: 700,
+                    fontFamily: FONT, cursor: "pointer",
+                    appearance: "none", WebkitAppearance: "none",
+                    textAlign: "center", textAlignLast: "center",
+                  }}>
+                    <option value="my">👤 Moje ({stats.my})</option>
+                    <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
+                    {users.filter(u => u.name !== currentUser.name).map(u => (
+                      <option key={u.name} value={`person:${u.name}`}>👤 {u.name}</option>
+                    ))}
+                    <option value="assigned">📤 Zadané ({stats.assigned})</option>
+                    <option value="shared">👥 Společné ({stats.shared})</option>
+                    <option value="unread">🔴 Nové ({unreadCounts[currentUser.name] || 0})</option>
+                    <option value="all">📋 Vše</option>
+                  </select>
+                  <div style={{
+                    position: "absolute", top: "2px", right: "4px",
+                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
+                    pointerEvents: "none",
+                  }}>{curLabel.toUpperCase().slice(0, 7)}</div>
+                </div>
+              );
+            })()}
 
             {/* Sort */}
-            <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
-              padding: "5px 24px 5px 10px", fontSize: "11px",
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: "12px",
-              background: theme.inputBg,
-              color: theme.textSub, fontWeight: 600, fontFamily: FONT,
-              cursor: "pointer", appearance: "none", WebkitAppearance: "none",
-              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(theme.textSub)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e")`,
-              backgroundRepeat: "no-repeat", backgroundPosition: "right 7px center", backgroundSize: "10px",
-            }}>
-              <option value="created">↕ Nejnovější</option>
-              <option value="smart">↕ Chytré</option>
-              <option value="priority">↕ Priorita</option>
-              <option value="date">↕ Termín</option>
-            </select>
-
-            {/* "Více filtrů" — chip styl */}
             {(() => {
-              const hasMore = categoryFilter !== "all" || priorityFilter !== "all"
-                || tagFilter !== "all" || dueDateFilter !== "all"
+              const labels = { created: "Nové", smart: "Chytré", priority: "Pri", date: "Termín" };
+              return (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <select value={sortMode} onChange={e => setSortMode(e.target.value)} style={{
+                    width: "100%", padding: "8px 4px",
+                    border: "1.5px solid transparent",
+                    borderRadius: "10px",
+                    background: "transparent",
+                    color: theme.text, fontSize: "11px", fontWeight: 700,
+                    fontFamily: FONT, cursor: "pointer",
+                    appearance: "none", WebkitAppearance: "none",
+                    textAlign: "center", textAlignLast: "center",
+                  }}>
+                    <option value="created">↕ Nejnovější</option>
+                    <option value="smart">↕ Chytré</option>
+                    <option value="priority">↕ Priorita</option>
+                    <option value="date">↕ Termín</option>
+                  </select>
+                  <div style={{
+                    position: "absolute", top: "2px", right: "4px",
+                    fontSize: "8px", fontWeight: 700, color: theme.textMid,
+                    pointerEvents: "none",
+                  }}>{(labels[sortMode] || "↕").toUpperCase()}</div>
+                </div>
+              );
+            })()}
+
+            {/* Priority — přepínací (None → ! → ‼) */}
+            {(() => {
+              const cyclePriority = () => {
+                if (priorityFilter === "all" || priorityFilter === "low") setPriorityFilter("important");
+                else if (priorityFilter === "important") setPriorityFilter("urgent");
+                else setPriorityFilter("all");
+              };
+              const isImp = priorityFilter === "important";
+              const isUrg = priorityFilter === "urgent";
+              const color = isUrg ? "#ef4444" : isImp ? "#f59e0b" : theme.textMid;
+              return (
+                <button type="button" onClick={cyclePriority}
+                  title="Klik = přepnout prioritu"
+                  style={{
+                    ...buttonStyle(),
+                    width: "44px", padding: "8px 0",
+                    background: (isImp || isUrg) ? `${color}15` : "transparent",
+                    color: color, fontSize: "16px", fontWeight: 800,
+                    border: `1.5px solid ${(isImp || isUrg) ? color : "transparent"}`,
+                    borderRadius: "10px",
+                    cursor: "pointer",
+                  }}>
+                  {isUrg ? "‼" : "!"}
+                </button>
+              );
+            })()}
+
+            {/* ⋯ Více filtrů */}
+            {(() => {
+              const hasMore = categoryFilter !== "all" || tagFilter !== "all"
+                || dueDateFilter !== "all"
                 || createdWhenFilter !== "all" || createdByFilter !== "all";
               return (
                 <button onClick={() => setShowMoreFilters(true)}
+                  title="Více filtrů"
                   style={{
                     ...buttonStyle(),
-                    padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                    background: hasMore ? `${theme.accent}15` : theme.inputBg,
-                    color: hasMore ? theme.accent : theme.textSub,
-                    border: `1px solid ${hasMore ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "12px", cursor: "pointer",
+                    width: "44px", padding: "8px 0",
+                    background: hasMore ? `${theme.accent}15` : "transparent",
+                    color: hasMore ? theme.accent : theme.textMid,
+                    fontSize: "18px", fontWeight: 800,
+                    border: `1.5px solid ${hasMore ? theme.accent : "transparent"}`,
+                    borderRadius: "10px",
+                    cursor: "pointer",
                   }}>
-                  ⋯ Více
+                  ⋯
                 </button>
               );
             })()}
           </div>
 
-          {/* Aktivní filtry — odebíratelné chips pod hlavními */}
+          {/* Vybrané filtry — vlastní sekce s nadpisem */}
           {(() => {
             const activeChips = [];
             if (categoryFilter !== "all") {
@@ -9943,14 +10060,6 @@ export default function App() {
                   });
                 }
               }
-            }
-            if (priorityFilter !== "all") {
-              const labels = { important: "! Důležité", urgent: "‼ Urgent" };
-              activeChips.push({
-                key: "pri", label: labels[priorityFilter] || priorityFilter,
-                color: priorityFilter === "urgent" ? "#ef4444" : "#f59e0b",
-                onRemove: () => setPriorityFilter("all"),
-              });
             }
             if (tagFilter !== "all") {
               const td = getTagDef(tagFilter);
@@ -9987,43 +10096,53 @@ export default function App() {
             if (activeChips.length === 0) return null;
             return (
               <div style={{
-                display: "flex", flexWrap: "wrap", gap: "5px",
-                marginBottom: "8px", paddingTop: "2px",
+                marginBottom: "8px",
+                background: `${theme.accent}05`,
+                border: `1px solid ${theme.accent}30`,
+                borderRadius: "8px",
+                padding: "6px 8px",
               }}>
-                {activeChips.map(c => (
-                  <button key={c.key}
-                    onClick={c.onRemove}
-                    title={`Odebrat filter: ${c.label}`}
-                    style={{
-                      ...buttonStyle(),
-                      padding: "4px 8px 4px 10px", fontSize: "11px", fontWeight: 600,
-                      background: `${c.color}15`, color: c.color,
-                      border: `1px solid ${c.color}40`,
-                      borderRadius: "12px",
-                      display: "inline-flex", alignItems: "center", gap: "5px",
-                    }}>
-                    <span>{c.label}</span>
-                    <span style={{
-                      fontSize: "12px", opacity: 0.7, marginLeft: "2px",
-                      lineHeight: 1, fontWeight: 700,
-                    }}>×</span>
-                  </button>
-                ))}
-                {activeChips.length > 1 && (
+                <div style={{
+                  fontSize: "9px", fontWeight: 800, color: theme.accent,
+                  textTransform: "uppercase", letterSpacing: "0.4px",
+                  marginBottom: "5px",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}>
+                  <span>🎯 Vybrané filtry ({activeChips.length})</span>
                   <button onClick={() => {
                     setCategoryFilter("all");
-                    setPriorityFilter("all");
                     setTagFilter("all");
                     setDueDateFilter("all");
                     setCreatedWhenFilter("all");
                     setCreatedByFilter("all");
                   }} style={{
                     ...buttonStyle(),
-                    padding: "4px 10px", fontSize: "10px", fontWeight: 600,
+                    padding: "2px 8px", fontSize: "9px", fontWeight: 700,
                     background: "transparent", color: theme.red,
-                    border: `1px dashed ${theme.red}50`, borderRadius: "12px",
-                  }}>Resetovat vše</button>
-                )}
+                    border: `1px solid ${theme.red}40`, borderRadius: "8px",
+                    textTransform: "uppercase",
+                  }}>Resetovat</button>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+                  {activeChips.map(c => (
+                    <button key={c.key} onClick={c.onRemove}
+                      title={`Odebrat: ${c.label}`}
+                      style={{
+                        ...buttonStyle(),
+                        padding: "4px 8px 4px 10px", fontSize: "11px", fontWeight: 600,
+                        background: `${c.color}15`, color: c.color,
+                        border: `1px solid ${c.color}40`, borderRadius: "12px",
+                        display: "inline-flex", alignItems: "center", gap: "4px",
+                      }}>
+                      <span>{c.label}</span>
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        width: "14px", height: "14px", fontSize: "11px",
+                        opacity: 0.7,
+                      }}>✕</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             );
           })()}
