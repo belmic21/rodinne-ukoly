@@ -4378,11 +4378,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         );
       })()}
 
-      {/* Stará Segmented filter bar — odstraněna, nahrazena App-level kompaktní lištou */}
-
-
-      {/* Bottom sheet: filter/picker panel — big icons, touch-friendly */}
-      /* picker modal odstraněn */
+      {/* Stará Segmented filter bar a picker modal odstraněn — nahrazeno App-level kompaktní lištou + ⋯ Více sheetem */}
 
       {/* Extended form */}
       {showFull && (
@@ -4574,15 +4570,141 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             />
           )}
 
-          {/* Informační hint — Pro koho a Prioritu nastavuješ v liště nad formulářem */}
-          <div style={{
-            fontSize: "11px", color: theme.textSub, marginBottom: "10px",
-            padding: "6px 10px", background: `${theme.accent}08`,
-            border: `1px dashed ${theme.accentBorder}`, borderRadius: "6px",
-            lineHeight: 1.4,
-          }}>
-            💡 <strong>Pro koho</strong> a <strong>Prioritu</strong> nastavuješ v liště nad formulářem (segmenty Kategorie / Priorita / Osoba).
+          {/* Pro koho — výběr osoby (chips) */}
+          <div style={{ marginBottom: "10px" }}>
+            <div style={{
+              ...labelStyle, fontSize: "10px", fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase",
+              letterSpacing: "0.4px", marginBottom: "5px",
+            }}>👤 Pro koho</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+              {users.map(u => {
+                const isSel = quickAssignees.includes(u.name);
+                const isMe = u.name === currentUser.name;
+                return (
+                  <button key={u.name} type="button"
+                    onClick={() => {
+                      if (isSel) {
+                        setQuickAssignees(prev => prev.filter(n => n !== u.name));
+                      } else {
+                        setQuickAssignees(prev => [...prev, u.name]);
+                      }
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                      background: isSel ? theme.accent : theme.inputBg,
+                      color: isSel ? "#fff" : theme.text,
+                      border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
+                      borderRadius: "16px",
+                    }}>
+                    {isMe ? "Já" : u.name}
+                  </button>
+                );
+              })}
+              {quickAssignees.length > 0 && (
+                <button type="button"
+                  onClick={() => setQuickAssignees([])}
+                  title="Vyčistit"
+                  style={{
+                    ...buttonStyle(),
+                    padding: "6px 10px", fontSize: "11px",
+                    background: "transparent", color: theme.red,
+                    border: `1px solid ${theme.red}40`, borderRadius: "16px",
+                  }}>✕</button>
+              )}
+            </div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginTop: "4px" }}>
+              {quickAssignees.length === 0 ? "Bez výběru = úkol je pro mě"
+                : quickAssignees.length === users.length ? "Pro všechny v rodině"
+                : `Pro: ${quickAssignees.join(", ")}`}
+            </div>
           </div>
+
+          {/* Priorita — chips */}
+          <div style={{ marginBottom: "10px" }}>
+            <div style={{
+              ...labelStyle, fontSize: "10px", fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase",
+              letterSpacing: "0.4px", marginBottom: "5px",
+            }}>! Priorita</div>
+            <div style={{ display: "flex", gap: "5px" }}>
+              {[
+                { value: null, label: "Žádná", color: theme.textSub },
+                { value: "important", label: "! Důležité", color: "#f59e0b" },
+                { value: "urgent", label: "‼ Urgent", color: "#ef4444" },
+              ].map(p => {
+                const isSel = (quickPriority || null) === p.value;
+                return (
+                  <button key={p.value || "none"} type="button"
+                    onClick={() => setQuickPriority(p.value)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 700,
+                      background: isSel ? p.color : theme.inputBg,
+                      color: isSel ? "#fff" : p.color,
+                      border: `1px solid ${isSel ? p.color : p.color + "40"}`,
+                      borderRadius: "16px",
+                    }}>
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Seznam (kategorie) — výběr seznamu */}
+          {(() => {
+            const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
+            return (
+              <div style={{ marginBottom: "10px" }}>
+                <div style={{
+                  ...labelStyle, fontSize: "10px", fontWeight: 700,
+                  color: theme.textMid, textTransform: "uppercase",
+                  letterSpacing: "0.4px", marginBottom: "5px",
+                }}>📋 Seznam</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+                  <button type="button"
+                    onClick={() => setQuickCategory(null)}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      background: !quickCategory ? theme.accent : theme.inputBg,
+                      color: !quickCategory ? "#fff" : theme.textSub,
+                      border: `1px solid ${!quickCategory ? theme.accent : theme.inputBorder}`,
+                      borderRadius: "12px",
+                    }}>Žádný</button>
+                  {visibleLists.map(list => {
+                    const v = `list:${list.id}`;
+                    const isSel = quickCategory === v;
+                    return (
+                      <button key={list.id} type="button"
+                        onClick={() => setQuickCategory(isSel ? null : v)}
+                        style={{
+                          ...buttonStyle(),
+                          padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                          background: isSel ? list.color : `${list.color}15`,
+                          color: isSel ? "#fff" : list.color,
+                          border: `1px solid ${list.color}`,
+                          borderRadius: "12px",
+                          display: "inline-flex", gap: "4px", alignItems: "center",
+                        }}>
+                        <span>{list.emoji || "📁"}</span><span>{list.name}</span>
+                      </button>
+                    );
+                  })}
+                  <button type="button"
+                    onClick={() => onCreateList && onCreateList()}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      background: "transparent", color: theme.accent,
+                      border: `1px dashed ${theme.accent}50`, borderRadius: "12px",
+                    }}>+ Nový</button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Opakování — řádek tlačítek */}
           <div style={{ marginBottom: "8px" }}>
