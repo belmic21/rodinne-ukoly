@@ -5145,6 +5145,102 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 </div>
               );
             })()}
+
+            {/* Mini-kalendář pro měsíční opakování */}
+            {recurrence === 30 && (() => {
+              const today = new Date();
+              const yyyy = today.getFullYear();
+              const mm = today.getMonth();
+              const monthNames = ["Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
+                                   "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
+              const dayNamesShort = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+              // Aktuální měsíc - pro výběr dne
+              const firstOfMonth = new Date(yyyy, mm, 1);
+              const lastOfMonth = new Date(yyyy, mm + 1, 0);
+              const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+              const daysInMonth = lastOfMonth.getDate();
+
+              const cells = [];
+              for (let i = 0; i < firstWeekday; i++) cells.push(null);
+              for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+              const selDay = dueDate ? new Date(dueDate).getDate() : -1;
+              const todayDay = today.getDate();
+
+              return (
+                <div style={{ marginTop: "10px" }}>
+                  <div style={{ ...labelStyle, fontSize: "10px", marginBottom: "6px" }}>
+                    Den v měsíci pro opakování
+                  </div>
+                  <div style={{
+                    background: theme.inputBg,
+                    border: `1px solid ${theme.inputBorder}`,
+                    borderRadius: "8px", padding: "8px",
+                  }}>
+                    <div style={{
+                      fontSize: "11px", fontWeight: 700, color: theme.text,
+                      textAlign: "center", marginBottom: "6px",
+                    }}>
+                      {monthNames[mm]} {yyyy}
+                    </div>
+                    {/* Day name header */}
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px",
+                      marginBottom: "3px",
+                    }}>
+                      {dayNamesShort.map(d => (
+                        <div key={d} style={{
+                          textAlign: "center", fontSize: "9px", fontWeight: 700,
+                          color: theme.textMid,
+                        }}>{d}</div>
+                      ))}
+                    </div>
+                    {/* Days grid */}
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px",
+                    }}>
+                      {cells.map((d, idx) => {
+                        if (d === null) return <div key={"e_" + idx} />;
+                        const isSel = d === selDay;
+                        const isTodayCell = d === todayDay;
+                        return (
+                          <button key={d} type="button"
+                            onClick={() => {
+                              // Najdi datum: pokud je den >= dnešní, nastav v aktuálním měsíci, jinak příští měsíc
+                              const next = new Date(yyyy, mm, d, 12, 0, 0);
+                              if (next.getTime() < today.getTime()) {
+                                next.setMonth(next.getMonth() + 1);
+                              }
+                              setDueDate(next.toISOString().slice(0, 10));
+                            }}
+                            style={{
+                              ...buttonStyle(),
+                              aspectRatio: "1",
+                              padding: 0,
+                              background: isSel ? theme.accent : "transparent",
+                              color: isSel ? "#fff" : theme.text,
+                              border: isTodayCell && !isSel ? `1px solid ${theme.accent}` : `1px solid transparent`,
+                              borderRadius: "6px",
+                              fontSize: "11px", fontWeight: isSel ? 800 : 600,
+                              cursor: "pointer",
+                            }}>
+                            {d}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {selDay > 0 && (
+                      <div style={{
+                        marginTop: "8px", fontSize: "10px",
+                        color: theme.textSub, textAlign: "center",
+                      }}>
+                        Opakovat každý {selDay}. den v měsíci
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Quick dates */}
@@ -5557,6 +5653,298 @@ function MoreFiltersSheet({ theme, onClose, createdWhenFilter, onCreatedWhenFilt
               background: theme.inputBg, color: theme.textSub,
               border: `1px solid ${theme.inputBorder}`,
             }}>Resetovat všechny filtry</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   CALENDAR SHEET — měsíční kalendář s úkoly
+   ═══════════════════════════════════════════════════════ */
+
+function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
+  // Aktuální zobrazený měsíc
+  const [viewMonth, setViewMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() }; // month 0-11
+  });
+  const [selectedDay, setSelectedDay] = useState(() => {
+    const d = new Date();
+    return d.toISOString().slice(0, 10);
+  });
+
+  // Mapa: "YYYY-MM-DD" → array tasků
+  const tasksByDay = useMemo(() => {
+    const map = {};
+    const userNameLc = (currentUser.name || "").trim().toLowerCase();
+    tasks.forEach(t => {
+      // Privacy filter
+      if (!currentUser.admin) {
+        const createdByLc = (t.createdBy || "").trim().toLowerCase();
+        const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
+        if (createdByLc !== userNameLc && !assignedToLc.includes(userNameLc)) return;
+      }
+      // Skip deleted
+      if (isDeleted(t)) return;
+      // Use dueDate
+      if (!t.dueDate) return;
+      const key = t.dueDate.slice(0, 10);
+      if (!map[key]) map[key] = [];
+      map[key].push(t);
+    });
+    return map;
+  }, [tasks, currentUser]);
+
+  const monthNames = ["Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
+                       "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
+  const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+
+  // Generovat dny pro měsíc
+  const calendarDays = useMemo(() => {
+    const firstOfMonth = new Date(viewMonth.year, viewMonth.month, 1);
+    const lastOfMonth = new Date(viewMonth.year, viewMonth.month + 1, 0);
+    // Po-pondělní start (0 = Po, 6 = Ne)
+    const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+    const daysInMonth = lastOfMonth.getDate();
+
+    const days = [];
+    // Předchozí měsíc — vyplnit prázdná místa
+    for (let i = 0; i < firstWeekday; i++) {
+      days.push(null);
+    }
+    // Aktuální měsíc
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(viewMonth.year, viewMonth.month, d, 12, 0, 0);
+      days.push(date);
+    }
+    return days;
+  }, [viewMonth]);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  const goPrev = () => {
+    const m = viewMonth.month - 1;
+    if (m < 0) setViewMonth({ year: viewMonth.year - 1, month: 11 });
+    else setViewMonth({ ...viewMonth, month: m });
+  };
+  const goNext = () => {
+    const m = viewMonth.month + 1;
+    if (m > 11) setViewMonth({ year: viewMonth.year + 1, month: 0 });
+    else setViewMonth({ ...viewMonth, month: m });
+  };
+  const goToday = () => {
+    const d = new Date();
+    setViewMonth({ year: d.getFullYear(), month: d.getMonth() });
+    setSelectedDay(d.toISOString().slice(0, 10));
+  };
+
+  const selectedTasks = tasksByDay[selectedDay] || [];
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-end",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        background: theme.bg, borderTopLeftRadius: "16px", borderTopRightRadius: "16px",
+        overflow: "auto",
+        boxShadow: "0 -8px 24px rgba(0,0,0,0.2)",
+      }}>
+        {/* Header */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 2, background: theme.bg,
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: theme.text }}>
+            📅 Kalendář
+          </h2>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "4px 8px",
+          }}>×</button>
+        </div>
+
+        {/* Month navigation */}
+        <div style={{
+          padding: "10px 16px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: "8px",
+        }}>
+          <button onClick={goPrev} style={{
+            ...buttonStyle(), padding: "6px 12px", fontSize: "13px",
+            background: theme.inputBg, color: theme.text,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>‹</button>
+          <div style={{ flex: 1, textAlign: "center" }}>
+            <div style={{ fontSize: "15px", fontWeight: 700 }}>
+              {monthNames[viewMonth.month]} {viewMonth.year}
+            </div>
+          </div>
+          <button onClick={goNext} style={{
+            ...buttonStyle(), padding: "6px 12px", fontSize: "13px",
+            background: theme.inputBg, color: theme.text,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>›</button>
+          <button onClick={goToday} style={{
+            ...buttonStyle(), padding: "6px 10px", fontSize: "11px", fontWeight: 600,
+            background: theme.accentSoft, color: theme.accent,
+            border: `1px solid ${theme.accentBorder}`,
+          }}>Dnes</button>
+        </div>
+
+        {/* Day name header */}
+        <div style={{
+          padding: "0 16px",
+          display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px",
+          marginBottom: "4px",
+        }}>
+          {dayNames.map(d => (
+            <div key={d} style={{
+              textAlign: "center", fontSize: "10px", fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase",
+            }}>{d}</div>
+          ))}
+        </div>
+
+        {/* Days grid */}
+        <div style={{
+          padding: "0 16px",
+          display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px",
+        }}>
+          {calendarDays.map((date, idx) => {
+            if (!date) {
+              return <div key={"empty_" + idx} style={{ aspectRatio: "1" }} />;
+            }
+            const dStr = date.toISOString().slice(0, 10);
+            const dayTasks = tasksByDay[dStr] || [];
+            const isToday = dStr === todayStr;
+            const isSelected = dStr === selectedDay;
+            const undoneCount = dayTasks.filter(t => !isDone(t)).length;
+            const doneCount = dayTasks.filter(t => isDone(t)).length;
+            const hasUrgent = dayTasks.some(t => !isDone(t) && t.priority === "urgent");
+
+            return (
+              <button
+                key={dStr}
+                onClick={() => setSelectedDay(dStr)}
+                style={{
+                  ...buttonStyle(),
+                  aspectRatio: "1",
+                  padding: "2px 0",
+                  background: isSelected ? theme.accent
+                    : isToday ? theme.accentSoft
+                    : "transparent",
+                  color: isSelected ? "#fff"
+                    : isToday ? theme.accent
+                    : theme.text,
+                  border: isToday && !isSelected ? `2px solid ${theme.accent}` : `1px solid ${isSelected ? theme.accent : theme.inputBorder}`,
+                  borderRadius: "8px",
+                  display: "flex", flexDirection: "column",
+                  alignItems: "center", justifyContent: "flex-start",
+                  fontSize: "13px", fontWeight: isToday ? 800 : 600,
+                  cursor: "pointer",
+                  position: "relative",
+                  paddingTop: "4px",
+                }}>
+                <span>{date.getDate()}</span>
+                {dayTasks.length > 0 && (
+                  <div style={{
+                    display: "flex", gap: "2px", marginTop: "2px",
+                    flexWrap: "wrap", justifyContent: "center",
+                  }}>
+                    {/* Tečky podle počtu úkolů (max 3 + číslo) */}
+                    {undoneCount > 0 && (
+                      <span style={{
+                        width: "5px", height: "5px", borderRadius: "50%",
+                        background: hasUrgent
+                          ? (isSelected ? "#fff" : theme.red)
+                          : (isSelected ? "#fff" : theme.accent),
+                      }} />
+                    )}
+                    {doneCount > 0 && (
+                      <span style={{
+                        width: "5px", height: "5px", borderRadius: "50%",
+                        background: isSelected ? "#fff" : theme.green,
+                      }} />
+                    )}
+                  </div>
+                )}
+                {dayTasks.length > 0 && (
+                  <span style={{
+                    fontSize: "9px", fontWeight: 700,
+                    color: isSelected ? "#fff" : theme.textMid,
+                    marginTop: "1px",
+                  }}>
+                    {dayTasks.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Selected day's tasks */}
+        <div style={{
+          padding: "16px",
+          marginTop: "8px",
+          borderTop: `1px solid ${theme.cardBorder}`,
+        }}>
+          <div style={{
+            fontSize: "12px", fontWeight: 700, color: theme.textMid,
+            textTransform: "uppercase", letterSpacing: "0.4px",
+            marginBottom: "10px",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span>📋 {(() => {
+              const d = new Date(selectedDay);
+              return `${d.getDate()}. ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+            })()}</span>
+            <span style={{ fontSize: "11px", color: theme.textSub }}>
+              {selectedTasks.length} {selectedTasks.length === 1 ? "úkol" : selectedTasks.length < 5 ? "úkoly" : "úkolů"}
+            </span>
+          </div>
+
+          {selectedTasks.length === 0 ? (
+            <div style={{ textAlign: "center", color: theme.textMid, fontSize: "12px", padding: "20px" }}>
+              Žádné úkoly s termínem na tento den
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+              {selectedTasks.map(t => (
+                <button key={t.id}
+                  onClick={() => { onNavigate(t.id); onClose(); }}
+                  style={{
+                    ...buttonStyle(),
+                    textAlign: "left", padding: "9px 12px",
+                    background: theme.card,
+                    border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: "8px",
+                    display: "flex", flexDirection: "column", gap: "3px",
+                    cursor: "pointer",
+                    opacity: isDone(t) ? 0.55 : 1,
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                  <div style={{
+                    fontSize: "13px", fontWeight: 600, color: theme.text,
+                    textDecoration: isDone(t) ? "line-through" : "none",
+                  }}>
+                    {isDone(t) && "✓ "}
+                    {t.priority === "urgent" && "‼ "}
+                    {t.priority === "important" && "! "}
+                    {t.title}
+                  </div>
+                  <div style={{ fontSize: "10px", color: theme.textMid }}>
+                    {t.assignedTo?.join(", ") || "—"}
+                  </div>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -6806,34 +7194,61 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
               }}>
                 Seznam ({currentTask.checklist.filter(i => i.done).length}/{currentTask.checklist.length})
               </div>
-              {currentTask.checklist.map(item => (
-                <div key={item.id} style={{
-                  display: "flex", alignItems: "center", gap: "10px",
-                  padding: "10px 12px", marginBottom: "4px",
-                  background: item.done ? `${theme.green}08` : theme.inputBg,
-                  border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
-                  borderRadius: "8px", cursor: "pointer",
-                }}
-                onClick={() => toggleChecklistItem(item.id)}>
-                  <div style={{
-                    width: "28px", height: "28px", minWidth: "28px",
-                    borderRadius: "6px",
-                    border: `2px solid ${item.done ? theme.green : theme.textDim}`,
-                    background: item.done ? theme.green : "transparent",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "#fff", fontSize: "14px", fontWeight: 800,
+              {currentTask.checklist.map(item => {
+                const hasNotes = (item.notes || []).length > 0;
+                return (
+                  <div key={item.id} style={{
+                    marginBottom: "6px",
+                    background: item.done ? `${theme.green}08` : theme.inputBg,
+                    border: `1px solid ${item.done ? theme.green + "15" : theme.inputBorder}`,
+                    borderRadius: "8px",
+                    overflow: "hidden",
                   }}>
-                    {item.done && "✓"}
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr auto",
+                      alignItems: "center", gap: "10px",
+                      padding: "10px 12px",
+                    }}>
+                      <button
+                        onClick={() => toggleChecklistItem(item.id)}
+                        style={{
+                          width: "28px", height: "28px", minWidth: "28px",
+                          borderRadius: "6px",
+                          border: `2px solid ${item.done ? theme.green : theme.textDim}`,
+                          background: item.done ? theme.green : "transparent",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: "#fff", fontSize: "14px", fontWeight: 800,
+                          cursor: "pointer",
+                        }}>
+                        {item.done && "✓"}
+                      </button>
+                      <span
+                        onClick={() => toggleChecklistItem(item.id)}
+                        style={{
+                          fontSize: "14px",
+                          color: item.done ? theme.textSub : theme.text,
+                          textDecoration: item.done ? "line-through" : "none",
+                          cursor: "pointer",
+                        }}>
+                        {item.text}
+                      </span>
+                      <ChecklistItemNotes
+                        item={item}
+                        currentUser={currentUser}
+                        theme={theme}
+                        defaultExpanded={hasNotes}
+                        onUpdateItem={(itemId, patch) => {
+                          const updated = currentTask.checklist.map(it =>
+                            it.id === itemId ? { ...it, ...patch } : it
+                          );
+                          onUpdate(currentTask.id, { checklist: updated });
+                        }}
+                      />
+                    </div>
                   </div>
-                  <span style={{
-                    flex: 1, fontSize: "14px",
-                    color: item.done ? theme.textSub : theme.text,
-                    textDecoration: item.done ? "line-through" : "none",
-                  }}>
-                    {item.text}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -7865,6 +8280,7 @@ export default function App() {
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showCreateList, setShowCreateList] = useState(false);
   const [editingList, setEditingList] = useState(null);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
   const [focusInitialTask, setFocusInitialTask] = useState(null); // taskId to start Focus at, or null for default (first by urgency)
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
@@ -8976,6 +9392,18 @@ export default function App() {
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             📊
           </button>
+          {/* Calendar ikona */}
+          <button onClick={() => setShowCalendar(true)}
+            title="Kalendář"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            📅
+          </button>
           {/* Notifications - jen badge když existují */}
           <button onClick={() => setUpdatesPanelOpen(true)}
             title="Zprávy"
@@ -9124,6 +9552,29 @@ export default function App() {
             users={users}
             theme={theme}
             onClose={() => setShowStatsSheet(false)}
+          />
+        )}
+
+        {showCalendar && (
+          <CalendarSheet
+            tasks={tasks}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowCalendar(false)}
+            onNavigate={(taskId) => {
+              const t = tasks.find(x => x.id === taskId);
+              if (t) {
+                if (isDeleted(t)) setViewStatus("trash");
+                else if (t.status === "done") setViewStatus("done");
+                else setViewStatus("active");
+                setFilter("all");
+                setCategoryFilter("all");
+                setPriorityFilter("all");
+                setTagFilter("all");
+              }
+              setScrollToTaskId(taskId);
+              setHighlightedTaskId(taskId);
+            }}
           />
         )}
 
@@ -9303,7 +9754,7 @@ export default function App() {
               fontWeight: viewStatus !== "active" ? 700 : 400,
             }}>
               <option value="today">🎯 Dnes ({stats.today || 0})</option>
-              <option value="active">📋 Vše aktivní ({stats.active || 0})</option>
+              <option value="active">📋 Aktivní ({stats.active || 0})</option>
               <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
               <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
               <option value="done">✓ Splněné ({stats.done || 0})</option>
