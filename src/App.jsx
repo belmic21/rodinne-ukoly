@@ -780,13 +780,26 @@ async function apiLoadUsers() {
   }
 }
 
-async function apiLoadTasks() {
+async function apiLoadTasks(localEdits = {}) {
   try {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (error) throw error;
-    const tasks = (data || []).map(dbToTask);
-    cacheSet(CACHE_TASKS, tasks); // Cache for offline
-    return tasks;
+    const serverTasks = (data || []).map(dbToTask);
+    // Pokud jsme nedávno (< 10s) měnili úkol lokálně, použij cache verzi
+    // pro dané úkoly, ne server verzi (server může mít staré data kvůli replication delay).
+    const cached = cacheGet(CACHE_TASKS) || [];
+    const cachedById = Object.fromEntries(cached.map(t => [t.id, t]));
+    const now = Date.now();
+    const merged = serverTasks.map(serverTask => {
+      const editedAt = localEdits[serverTask.id];
+      if (editedAt && now - editedAt < 10000) {
+        // Lokální edit byl v posledních 10s → použij cache verzi
+        return cachedById[serverTask.id] || serverTask;
+      }
+      return serverTask;
+    });
+    cacheSet(CACHE_TASKS, merged);
+    return merged;
   } catch (e) {
     console.warn("apiLoadTasks offline, using cache");
     return cacheGet(CACHE_TASKS) || [];
@@ -8854,8 +8867,18 @@ export default function App() {
         setPendingCount(0);
       }
 
+      // Načti localEdits (recently edited tasks) z localStorage pro správný merge se serverem
+      let localEdits = {};
+      try {
+        const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
+        const now = Date.now();
+        Object.entries(stored).forEach(([id, ts]) => {
+          if (now - ts < 30000) localEdits[id] = ts;
+        });
+      } catch (e) { /* ignore */ }
+
       const [loadedUsers, loadedTasks, loadedComments] = await Promise.all([
-        apiLoadUsers(), apiLoadTasks(), apiLoadComments()
+        apiLoadUsers(), apiLoadTasks(localEdits), apiLoadComments()
       ]);
       setUsers(loadedUsers);
       setComments(loadedComments);
@@ -9034,8 +9057,19 @@ export default function App() {
   }, [undoState]);
 
   const withUndo = useCallback((message, taskId, updater) => {
-    // Echo prevention
-    localEditsRef.current[taskId] = Date.now();
+    // Echo prevention + persist do localStorage pro refresh-resilience
+    const now = Date.now();
+    localEditsRef.current[taskId] = now;
+    try {
+      const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
+      stored[taskId] = now;
+      // Vyčistit staré (>30s)
+      const cleaned = {};
+      Object.entries(stored).forEach(([id, ts]) => {
+        if (now - ts < 30000) cleaned[id] = ts;
+      });
+      localStorage.setItem("ft_local_edits", JSON.stringify(cleaned));
+    } catch (e) { /* ignore */ }
     setTasks(prev => {
       const next = updater(prev);
       const updated = next.find(t => t.id === taskId);
