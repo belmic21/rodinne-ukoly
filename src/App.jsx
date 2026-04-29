@@ -239,6 +239,45 @@ function getTagDef(tagId) {
   return TAGS.find(t => t.id === tagId);
 }
 
+// Filter úkolů podle data splnění (dueDate).
+// filterValue: "all" | "today" | "week" | "next_week" | "month" | "range:YYYY-MM-DD,YYYY-MM-DD"
+function matchesDueDateFilter(task, filterValue) {
+  if (filterValue === "all" || !filterValue) return true;
+  if (!task.dueDate) return false;
+  const dueMs = new Date(task.dueDate).getTime();
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+
+  if (filterValue === "today") {
+    return dueMs >= todayStart.getTime() && dueMs <= todayEnd.getTime();
+  }
+  if (filterValue === "week") {
+    const day = (todayStart.getDay() + 6) % 7;
+    const monday = new Date(todayStart); monday.setDate(monday.getDate() - day);
+    const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6); sunday.setHours(23, 59, 59, 999);
+    return dueMs >= monday.getTime() && dueMs <= sunday.getTime();
+  }
+  if (filterValue === "next_week") {
+    const day = (todayStart.getDay() + 6) % 7;
+    const nextMon = new Date(todayStart); nextMon.setDate(nextMon.getDate() - day + 7);
+    const nextSun = new Date(nextMon); nextSun.setDate(nextSun.getDate() + 6); nextSun.setHours(23, 59, 59, 999);
+    return dueMs >= nextMon.getTime() && dueMs <= nextSun.getTime();
+  }
+  if (filterValue === "month") {
+    const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+    const monthEnd = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0); monthEnd.setHours(23, 59, 59, 999);
+    return dueMs >= monthStart.getTime() && dueMs <= monthEnd.getTime();
+  }
+  if (filterValue.startsWith("range:")) {
+    const [from, to] = filterValue.slice(6).split(",");
+    if (!from || !to) return true;
+    const fromMs = new Date(from).getTime();
+    const toEnd = new Date(to); toEnd.setHours(23, 59, 59, 999);
+    return dueMs >= fromMs && dueMs <= toEnd.getTime();
+  }
+  return true;
+}
+
 // Normalizace stringu pro porovnávání (lowercase, trim, bez diakritiky)
 function normalizeString(s) {
   if (!s) return "";
@@ -2897,7 +2936,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0 }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [] }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -3458,11 +3497,31 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             )}
 
             {/* Category */}
-            {task.category && task.category !== "other" && (
+            {task.category && task.category !== "other" && !task.category.startsWith("list:") && (
               <span style={{ fontSize: "10px", color: theme.textMid }}>
                 {getCategory(task.category).icon}
               </span>
             )}
+
+            {/* Custom list badge */}
+            {task.category && task.category.startsWith("list:") && (() => {
+              const listId = task.category.slice(5);
+              const list = customLists.find(l => l.id === listId);
+              if (!list) return null;
+              return (
+                <span title={list.name} style={{
+                  fontSize: "10px", fontWeight: 700,
+                  color: list.color,
+                  padding: "1px 6px", borderRadius: "8px",
+                  background: `${list.color}15`,
+                  border: `1px solid ${list.color}40`,
+                  display: "inline-flex", alignItems: "center", gap: "3px",
+                }}>
+                  <span>{list.emoji || "📁"}</span>
+                  <span>{list.name}</span>
+                </span>
+              );
+            })()}
 
             {/* Checklist progress */}
             {checklistTotal > 0 && (
@@ -3770,7 +3829,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
@@ -4489,6 +4548,94 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           </div>
         );
 
+        // Datum filter dropdown — presety + vlastní rozsah
+        const dueDateDropdown = !isTyping && (() => {
+          const presets = [
+            { value: "all", label: "Všechna data", icon: "📅" },
+            { value: "today", label: "Dnes", icon: "🎯" },
+            { value: "week", label: "Tento týden", icon: "📅" },
+            { value: "next_week", label: "Příští týden", icon: "📅" },
+            { value: "month", label: "Tento měsíc", icon: "📅" },
+          ];
+          const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
+          const [rangeFrom, rangeTo] = isRange ? dueDateFilter.slice(6).split(",") : ["", ""];
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+              {presets.map(opt => {
+                const isSel = dueDateFilter === opt.value;
+                return (
+                  <button key={opt.value}
+                    onClick={() => {
+                      onDueDateFilterChange && onDueDateFilterChange(opt.value);
+                      setOpenSegment(null);
+                    }}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "7px 10px", fontSize: "12px",
+                      background: isSel ? theme.accentSoft : "transparent",
+                      color: isSel ? theme.accent : theme.text,
+                      border: "none", textAlign: "left", borderRadius: "6px",
+                      display: "flex", alignItems: "center", gap: "8px",
+                    }}
+                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = theme.inputBg; }}
+                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ width: "16px" }}>{opt.icon}</span>
+                    <span style={{ flex: 1 }}>{opt.label}</span>
+                    {isSel && <span style={{ color: theme.accent, fontSize: "11px" }}>✓</span>}
+                  </button>
+                );
+              })}
+
+              {/* Vlastní rozsah */}
+              <div style={{
+                marginTop: "6px", padding: "8px",
+                borderTop: `1px solid ${theme.cardBorder}`,
+                background: isRange ? theme.accentSoft : "transparent",
+                borderRadius: "0 0 6px 6px",
+              }}>
+                <div style={{
+                  fontSize: "10px", fontWeight: 700, color: theme.textMid,
+                  textTransform: "uppercase", letterSpacing: "0.3px",
+                  marginBottom: "5px",
+                }}>📆 Vlastní rozsah</div>
+                <div style={{ display: "flex", gap: "5px", alignItems: "center", marginBottom: "5px" }}>
+                  <input type="date" value={rangeFrom || ""}
+                    onChange={(e) => {
+                      const newFrom = e.target.value;
+                      if (newFrom && rangeTo) {
+                        onDueDateFilterChange && onDueDateFilterChange(`range:${newFrom},${rangeTo}`);
+                      } else if (newFrom) {
+                        onDueDateFilterChange && onDueDateFilterChange(`range:${newFrom},${newFrom}`);
+                      }
+                    }}
+                    style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
+                  <span style={{ fontSize: "11px", color: theme.textMid }}>→</span>
+                  <input type="date" value={rangeTo || ""}
+                    onChange={(e) => {
+                      const newTo = e.target.value;
+                      const fromVal = rangeFrom || newTo;
+                      if (newTo) {
+                        onDueDateFilterChange && onDueDateFilterChange(`range:${fromVal},${newTo}`);
+                      }
+                    }}
+                    style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
+                </div>
+                {isRange && (
+                  <button onClick={() => {
+                    onDueDateFilterChange && onDueDateFilterChange("all");
+                    setOpenSegment(null);
+                  }} style={{
+                    ...buttonStyle(), width: "100%",
+                    padding: "5px", fontSize: "10px",
+                    background: "transparent", color: theme.red,
+                    border: `1px solid ${theme.red}25`, borderRadius: "4px",
+                  }}>✕ Zrušit rozsah</button>
+                )}
+              </div>
+            </div>
+          );
+        })();
+
         const chips = [];
         if (isTyping) {
           if (quickCategory) {
@@ -4603,6 +4750,22 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
                 theme.accent, !!currentPersonLabel, perDropdown
               )}
+              {!isTyping && (() => {
+                const labels = { today: "Dnes", week: "Tento týden", next_week: "Příští týden", month: "Tento měsíc" };
+                let activeLabel = "Datum";
+                if (dueDateFilter !== "all") {
+                  if (dueDateFilter.startsWith("range:")) {
+                    activeLabel = <><span>📆</span><span>Rozsah</span></>;
+                  } else if (labels[dueDateFilter]) {
+                    activeLabel = <><span>📅</span><span>{labels[dueDateFilter]}</span></>;
+                  }
+                }
+                return renderSegment("date",
+                  <><span>📅</span><span>Datum</span></>,
+                  activeLabel,
+                  theme.accent, dueDateFilter !== "all", dueDateDropdown
+                );
+              })()}
               {!isTyping && (() => {
                 let activeLabel = "Tag";
                 if (tagFilter !== "all" && getTagDef(tagFilter)) {
@@ -8241,6 +8404,8 @@ export default function App() {
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
   const [tagFilter, setTagFilter] = useState("all"); // "all" or tag id
   const [createdWhenFilter, setCreatedWhenFilter] = useState("all"); // "all" | "today" | "yesterday" | "week" | "month"
+  // Filtr podle data splnění (dueDate): "all", "today", "week", "next_week", "month", "range:YYYY-MM-DD,YYYY-MM-DD"
+  const [dueDateFilter, setDueDateFilter] = useState("all");
   const [createdByFilter, setCreatedByFilter] = useState("all"); // "all" | "<user.name>"
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
@@ -8981,6 +9146,11 @@ export default function App() {
       result = result.filter(t => detectTags(t.title).includes(tagFilter));
     }
 
+    // Due date filter (Datum splnění)
+    if (dueDateFilter !== "all") {
+      result = result.filter(t => matchesDueDateFilter(t, dueDateFilter));
+    }
+
     // Created-when filter — when was the task added
     if (createdWhenFilter !== "all") {
       const now = Date.now();
@@ -9044,7 +9214,7 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
 
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
@@ -9099,7 +9269,48 @@ export default function App() {
       items.push({ type: "section_divider", key: "section-divider-stale" });
     }
 
-    remainingActive.forEach(task => items.push({ type: "task", task, key: task.id }));
+    // ═══ Seskupování podle vlastních seznamů (3+ úkolů) ═══
+    // Pokud má aktivní view 3+ úkolů ze stejného vlastního seznamu, automaticky seskupíme.
+    // Funguje jen v "active" view.
+    if (viewStatus === "active") {
+      const groupedByList = {};  // listId → [tasks]
+      const ungrouped = [];
+      remainingActive.forEach(task => {
+        if (task.category && task.category.startsWith("list:")) {
+          const listId = task.category.slice(5);
+          if (!groupedByList[listId]) groupedByList[listId] = [];
+          groupedByList[listId].push(task);
+        } else {
+          ungrouped.push(task);
+        }
+      });
+      // Sekce jen pro seznamy s 3+ úkoly. Menší zůstávají v "ungrouped"
+      const bigGroups = [];
+      Object.entries(groupedByList).forEach(([listId, tasks]) => {
+        if (tasks.length >= 3) {
+          bigGroups.push({ listId, tasks });
+        } else {
+          // < 3 → vrátit do ungrouped
+          ungrouped.push(...tasks);
+        }
+      });
+      // Render bigGroups (sekce + jejich úkoly), pak ungrouped
+      bigGroups.forEach(({ listId, tasks }) => {
+        const list = (customLists || []).find(l => l.id === listId);
+        if (list) {
+          items.push({
+            type: "section_header_list",
+            key: "section-list-" + listId,
+            list,
+            count: tasks.length,
+          });
+        }
+        tasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+      });
+      ungrouped.forEach(task => items.push({ type: "task", task, key: task.id }));
+    } else {
+      remainingActive.forEach(task => items.push({ type: "task", task, key: task.id }));
+    }
 
     // Progress + done items
     const progressCards = [];
@@ -9130,7 +9341,7 @@ export default function App() {
     deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
 
     return items;
-  }, [filteredTasks, viewStatus, currentUser, recentlyAdded]);
+  }, [filteredTasks, viewStatus, currentUser, recentlyAdded, customLists]);
 
   // Helper: apply all filters EXCEPT the one being computed for.
   // `skip` parameter: "scope" | "status" | "category" | "priority" — omits that filter from counting.
@@ -9202,6 +9413,10 @@ export default function App() {
       if (!skip.includes("tag")) {
         if (tagFilter !== "all" && !detectTags(t.title).includes(tagFilter)) return false;
       }
+      // Due date filter — skip if counting dueDates
+      if (!skip.includes("dueDate")) {
+        if (dueDateFilter !== "all" && !matchesDueDateFilter(t, dueDateFilter)) return false;
+      }
       // Created-when filter
       if (!skip.includes("createdWhen") && createdWhenFilter !== "all") {
         if (!t.createdAt) return false;
@@ -9223,7 +9438,7 @@ export default function App() {
       }
       return true;
     }).length;
-  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, showDeferred, createdWhenFilter, createdByFilter]);
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -9391,18 +9606,6 @@ export default function App() {
             onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             📊
-          </button>
-          {/* Calendar ikona */}
-          <button onClick={() => setShowCalendar(true)}
-            title="Kalendář"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            📅
           </button>
           {/* Notifications - jen badge když existují */}
           <button onClick={() => setUpdatesPanelOpen(true)}
@@ -9721,6 +9924,8 @@ export default function App() {
             customLists={customLists}
             onCreateList={() => setShowCreateList(true)}
             onEditList={(list) => setEditingList(list)}
+            dueDateFilter={dueDateFilter}
+            onDueDateFilterChange={setDueDateFilter}
           />
 
           {/* Compact filters — one row */}
@@ -9881,6 +10086,34 @@ export default function App() {
                     </div>
                   );
                 }
+                if (item.type === "section_header_list") {
+                  const list = item.list;
+                  return (
+                    <div key={item.key} style={{
+                      margin: "12px 0 6px",
+                      padding: "6px 10px",
+                      background: `${list.color}10`,
+                      borderLeft: `3px solid ${list.color}`,
+                      borderRadius: "0 6px 6px 0",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{ fontSize: "13px" }}>{list.emoji || "📁"}</span>
+                      <span style={{
+                        fontSize: "11px", fontWeight: 800,
+                        color: list.color,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                        flex: 1,
+                      }}>
+                        {list.name}
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                      }}>
+                        {item.count} {item.count === 1 ? "úkol" : item.count < 5 ? "úkoly" : "úkolů"}
+                      </span>
+                    </div>
+                  );
+                }
                 if (item.type === "section_divider") {
                   return (
                     <div key={item.key} style={{
@@ -10007,6 +10240,7 @@ export default function App() {
                       progressItem={item.type === "progress" ? item.checklistItem : null}
                       recentlyAdded={item.recentlyAdded === true}
                       fadeProgress={item.fadeProgress || 0}
+                      customLists={customLists}
                       onStartFocus={(taskId) => {
                         setFocusInitialTask(taskId);
                         setShowFocus(true);
