@@ -4063,11 +4063,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
-      {/* ═══ PREDICTIONS CHIPS — pod inputem, live filter ═══ */}
+      {/* ═══ PREDICTIONS CHIPS — pod inputem, JEN když uživatel píše ═══ */}
       {(() => {
         const trimmed = text.trim();
-        // Show predictions when input is empty, or user typed something short (max 15 chars, 1 word)
-        const showPredictions = !showFull && (trimmed.length === 0 || (trimmed.length <= 15 && !trimmed.includes(" ")));
+        // Predikce zobrazujeme JEN když uživatel něco píše (krátký text, 1 slovo)
+        // Když nic nepíše = nic doplňovat → schované, šetří místo
+        const showPredictions = !showFull && trimmed.length > 0 && trimmed.length <= 15 && !trimmed.includes(" ");
         if (!showPredictions) return null;
         const predictions = getPredictions(allTasks || [], currentUser.name);
 
@@ -4837,9 +4838,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         return (
           <div ref={segmentBarRef} style={{
-            marginTop: "10px",
-            paddingTop: "8px",
-            borderTop: `1px solid ${theme.cardBorder}`,
+            marginTop: "12px",
+            paddingTop: "10px",
+            borderTop: `2px dashed ${theme.cardBorder}`,
           }}>
             <div style={{
               fontSize: "9px", fontWeight: 800, color: theme.textMid,
@@ -4877,12 +4878,46 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                   theme.accent, !!currentCategory, catDropdown
                 );
               })()}
-              {renderSegment("pri",
-                <><span style={{ fontWeight: 900 }}>!</span><span>Priorita</span></>,
-                currentPriority ? <><span style={{ fontWeight: 900, color: theme.priority[currentPriority].text }}>{getPriority(currentPriority).sym}</span><span>{getPriority(currentPriority).label}</span></> : "Priorita",
-                currentPriority ? theme.priority[currentPriority].text : theme.accent,
-                !!currentPriority, priDropdown
-              )}
+              {/* Priority - přepínací tlačítko (cyklus None → ! → !! → None) */}
+              {(() => {
+                const cyclePriority = () => {
+                  // Cyklus: null/low → important → urgent → null/low
+                  if (isTyping) {
+                    if (!quickPriority || quickPriority === "low") setQuickPriority("important");
+                    else if (quickPriority === "important") setQuickPriority("urgent");
+                    else setQuickPriority(null);
+                  } else {
+                    if (priorityFilter === "all" || priorityFilter === "low") onPriorityFilterChange("important");
+                    else if (priorityFilter === "important") onPriorityFilterChange("urgent");
+                    else onPriorityFilterChange("all");
+                  }
+                };
+                const isImp = currentPriority === "important";
+                const isUrg = currentPriority === "urgent";
+                const color = isUrg ? theme.red : isImp ? "#f59e0b" : theme.textSub;
+                return (
+                  <button onClick={cyclePriority} type="button"
+                    title="Klik = přepnout prioritu (žádná → ! → !! → žádná)"
+                    style={{
+                      ...buttonStyle(),
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 700,
+                      background: isImp || isUrg ? `${color}15` : "transparent",
+                      color: color,
+                      border: `1px solid ${isImp || isUrg ? color : theme.inputBorder}`,
+                      borderRadius: "16px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                      cursor: "pointer", fontFamily: FONT,
+                      minWidth: "auto",
+                    }}>
+                    <span style={{ fontSize: "14px", fontWeight: 900 }}>
+                      {isUrg ? "‼" : isImp ? "!" : "!"}
+                    </span>
+                    <span>
+                      {isUrg ? "Urgent" : isImp ? "Důležité" : "Priorita"}
+                    </span>
+                  </button>
+                );
+              })()}
               {renderSegment("per",
                 <><span>👤</span><span>Osoba</span></>,
                 currentPersonLabel ? <><span>👤</span><span>{currentPersonLabel}</span></> : "Osoba",
@@ -5762,19 +5797,20 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
             Ikona
           </label>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
-            {EMOJIS.map(e => (
-              <button key={e} onClick={() => {
-                if (isEditing && !canEdit) return; // jen pro view-only edit
-                setEmoji(e);
-              }}
+            {EMOJIS.map(emo => (
+              <button key={emo} type="button"
+                onClick={() => {
+                  if (isEditing && !canEdit) return;
+                  setEmoji(emo);
+                }}
                 disabled={isEditing && !canEdit}
                 style={{
                   width: "34px", height: "34px",
-                  border: `2px solid ${emoji === e ? color : theme.cardBorder}`,
-                  background: emoji === e ? `${color}15` : theme.inputBg,
+                  border: `2px solid ${emoji === emo ? color : theme.cardBorder}`,
+                  background: emoji === emo ? `${color}15` : theme.inputBg,
                   borderRadius: "8px", cursor: (isEditing && !canEdit) ? "not-allowed" : "pointer",
                   fontSize: "16px", opacity: (isEditing && !canEdit) ? 0.5 : 1,
-                }}>{e}</button>
+                }}>{emo}</button>
             ))}
           </div>
         </div>
@@ -5786,10 +5822,11 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
           </label>
           <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
             {COLORS.map(c => (
-              <button key={c} onClick={() => {
-                if (isEditing && !canEdit) return;
-                setColor(c);
-              }}
+              <button key={c} type="button"
+                onClick={() => {
+                  if (isEditing && !canEdit) return;
+                  setColor(c);
+                }}
                 disabled={isEditing && !canEdit}
                 style={{
                   width: "28px", height: "28px",
@@ -5808,7 +5845,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
             Sdílení
           </label>
           <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-            <button onClick={() => {
+            <button type="button" onClick={() => {
               if (isEditing && !canEdit) return;
               setIsShared(true);
             }}
@@ -5821,7 +5858,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 border: `1px solid ${isShared ? color : theme.cardBorder}`,
                 fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
               }}>👥 Sdílený — vidí všichni v rodině</button>
-            <button onClick={() => {
+            <button type="button" onClick={() => {
               if (isEditing && !canEdit) return;
               setIsShared(false);
             }}
