@@ -7130,6 +7130,16 @@ function LoginScreen({ users, onLogin, themeName }) {
           </div>
         )}
       </div>
+      {/* Footer s licencí */}
+      <div style={{
+        position: "fixed", bottom: "12px", left: 0, right: 0,
+        textAlign: "center",
+        fontSize: "10px", color: theme.textDim,
+        fontFamily: FONT,
+        userSelect: "none",
+      }}>
+        © Michal Bělohlávek · Rodinné úkoly
+      </div>
     </div>
   );
 }
@@ -10133,6 +10143,14 @@ export default function App() {
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <span>⏻</span><span>Odhlásit se</span>
             </button>
+            <div style={{
+              padding: "8px 12px 4px", fontSize: "9px", color: theme.textDim,
+              borderTop: `1px solid ${theme.cardBorder}`, marginTop: "4px",
+              textAlign: "center", lineHeight: 1.4,
+            }}>
+              © {new Date().getFullYear()} Michal Bělohlávek<br/>
+              Rodinné úkoly
+            </div>
           </div>
         </>
       )}
@@ -10699,6 +10717,18 @@ export default function App() {
         )}
 
         <Legend theme={theme} />
+
+        {/* Copyright footer */}
+        <div style={{
+          marginTop: "20px", padding: "12px 8px",
+          textAlign: "center",
+          fontSize: "9px", color: theme.textDim,
+          fontFamily: FONT,
+          opacity: 0.7,
+          userSelect: "none",
+        }}>
+          © {new Date().getFullYear()} Michal Bělohlávek · Rodinné úkoly
+        </div>
       </div>
 
       <Snackbar
