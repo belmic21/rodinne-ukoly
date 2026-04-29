@@ -4037,8 +4037,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 if (inputRef.current) inputRef.current.focus();
               }} title={`Použito ${p.count}× — klik vyplní celý název`} style={{
                 ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
-                background: `${theme.purple}10`, color: theme.purple,
-                border: `1px solid ${theme.purple}30`,
+                background: theme.inputBg, color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`,
                 borderRadius: "12px", fontWeight: 600,
                 display: "inline-flex", gap: "4px", alignItems: "center",
                 maxWidth: "200px",
