@@ -3775,7 +3775,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [showFull, setShowFull] = useState(false);
   const [note, setNote] = useState("");
   const [type, setType] = useState("simple");
-  const [dueDate, setDueDate] = useState("");
+  // Default termín = týden (7 dní od dnes)
+  const defaultDueDateWeek = () => {
+    const d = new Date(); d.setDate(d.getDate() + 7); d.setHours(12, 0, 0, 0);
+    return d.toISOString().slice(0, 10);
+  };
+  const [dueDate, setDueDate] = useState(defaultDueDateWeek);
   const [recurrence, setRecurrence] = useState(0);
   const [category, setCategory] = useState("other");
   const [initialChecklist, setInitialChecklist] = useState([]);
@@ -3869,7 +3874,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   };
 
   const resetForm = () => {
-    setText(""); setNote(""); setDueDate(""); setRecurrence(0);
+    setText(""); setNote(""); setDueDate(defaultDueDateWeek()); setRecurrence(0);
     setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
@@ -3992,9 +3997,21 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         return (
           <div style={{
-            display: "flex", flexWrap: "wrap", gap: "5px",
-            padding: "4px 4px 0", marginTop: "4px",
+            marginTop: "8px",
+            padding: "6px 0",
           }}>
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              marginBottom: "5px", padding: "0 2px",
+              display: "flex", alignItems: "center", gap: "5px",
+            }}>
+              <span>✨</span>
+              <span>Nápovědy</span>
+            </div>
+            <div style={{
+              display: "flex", flexWrap: "wrap", gap: "5px",
+            }}>
             {verbsToShow.slice(0, 4).map(v => (
               <button key={"v_" + v.id} onClick={() => {
                 // Vloží sloveso na začátek + mezeru, focus na input
@@ -4031,6 +4048,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</span>
               </button>
             ))}
+            </div>
           </div>
         );
       })()}
@@ -4533,7 +4551,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         }
 
         return (
-          <div ref={segmentBarRef} style={{ marginTop: "6px" }}>
+          <div ref={segmentBarRef} style={{
+            marginTop: "10px",
+            paddingTop: "8px",
+            borderTop: `1px solid ${theme.cardBorder}`,
+          }}>
+            <div style={{
+              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px",
+              marginBottom: "5px", padding: "0 2px",
+              display: "flex", alignItems: "center", gap: "5px",
+            }}>
+              <span>🎛</span>
+              <span>Filtry</span>
+            </div>
             {/* Row of segmented buttons */}
             <div style={{
               display: "flex", gap: "6px", alignItems: "center",
@@ -4903,12 +4934,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             </div>
           )}
 
-          <textarea placeholder="Poznámka..." value={note} onChange={e => setNote(e.target.value)}
-            rows={2} style={{
-              ...inputStyle(theme), fontSize: "13px", marginBottom: "8px",
-              resize: "vertical", lineHeight: 1.4,
-            }}
-          />
+          {/* Pro simple — poznámka nahoře. Pro complex (s checklistem) — pod checklistem */}
+          {type !== "complex" && (
+            <textarea placeholder="Poznámka..." value={note} onChange={e => setNote(e.target.value)}
+              rows={2} style={{
+                ...inputStyle(theme), fontSize: "13px", marginBottom: "8px",
+                resize: "vertical", lineHeight: 1.4,
+              }}
+            />
+          )}
 
           {/* Checklist builder for complex type */}
           {type === "complex" && (
@@ -5024,6 +5058,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             </div>
           )}
 
+          {/* Pro complex — poznámka pod checklistem (sekundární info) */}
+          {type === "complex" && (
+            <textarea placeholder="Poznámka k úkolu (volitelné)..." value={note} onChange={e => setNote(e.target.value)}
+              rows={2} style={{
+                ...inputStyle(theme), fontSize: "13px", marginBottom: "8px",
+                resize: "vertical", lineHeight: 1.4,
+              }}
+            />
+          )}
+
           {/* Informační hint — Pro koho a Prioritu nastavuješ v liště nad formulářem */}
           <div style={{
             fontSize: "11px", color: theme.textSub, marginBottom: "10px",
@@ -5049,9 +5093,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     style={{
                       ...buttonStyle(),
                       padding: "5px 10px", fontSize: "11px", fontWeight: 600,
-                      background: isSel ? theme.accentSoft : theme.inputBg,
-                      color: isSel ? theme.accent : theme.textSub,
-                      border: `1px solid ${isSel ? theme.accentBorder : theme.inputBorder}`,
+                      background: isSel ? theme.accent : theme.inputBg,
+                      color: isSel ? "#fff" : theme.textSub,
+                      border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
                       borderRadius: "12px",
                     }}>
                     {r.label}
@@ -5059,6 +5103,48 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 );
               })}
             </div>
+            {/* Day-of-week picker pro "Každý týden" */}
+            {recurrence === 7 && (() => {
+              const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+              const currentDay = dueDate ? ((new Date(dueDate).getDay() + 6) % 7) : -1;
+              return (
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ ...labelStyle, fontSize: "10px", marginBottom: "5px" }}>
+                    Den opakování
+                  </div>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                    {dayNames.map((dayName, idx) => {
+                      const isSel = currentDay === idx;
+                      return (
+                        <button key={idx} type="button"
+                          onClick={() => {
+                            // Najdi nejbližší termín pro daný den (od zítra dál)
+                            const today = new Date();
+                            const todayDay = (today.getDay() + 6) % 7;
+                            let daysAhead = idx - todayDay;
+                            if (daysAhead <= 0) daysAhead += 7;
+                            const next = new Date(today);
+                            next.setDate(next.getDate() + daysAhead);
+                            next.setHours(12, 0, 0, 0);
+                            setDueDate(next.toISOString().slice(0, 10));
+                          }}
+                          style={{
+                            ...buttonStyle(),
+                            padding: "6px 10px", fontSize: "11px", fontWeight: 700,
+                            background: isSel ? theme.accent : theme.inputBg,
+                            color: isSel ? "#fff" : theme.textSub,
+                            border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
+                            borderRadius: "8px",
+                            minWidth: "36px",
+                          }}>
+                          {dayName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Quick dates */}
@@ -5067,10 +5153,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
                 <button key={qd.label} onClick={() => setDueDate(qd.value)} style={{
-                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
-                  background: dueDate === qd.value ? theme.accentSoft : theme.inputBg,
-                  color: dueDate === qd.value ? theme.accent : theme.textSub,
-                  border: `1px solid ${dueDate === qd.value ? theme.accentBorder : theme.inputBorder}`,
+                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                  background: dueDate === qd.value ? theme.accent : theme.inputBg,
+                  color: dueDate === qd.value ? "#fff" : theme.textSub,
+                  border: `1px solid ${dueDate === qd.value ? theme.accent : theme.inputBorder}`,
+                  borderRadius: "12px",
                 }}>{qd.label}</button>
               ))}
               {dueDate && (
@@ -5104,10 +5191,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     if (shifted) setDueDate(shifted);
                   }
                 }} style={{
-                  ...buttonStyle(), padding: "4px 7px", fontSize: "10px",
-                  background: showFrom === sf.value ? theme.accentSoft : theme.inputBg,
-                  color: showFrom === sf.value ? theme.accent : theme.textSub,
-                  border: `1px solid ${showFrom === sf.value ? theme.accentBorder : theme.inputBorder}`,
+                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                  background: showFrom === sf.value ? theme.accent : theme.inputBg,
+                  color: showFrom === sf.value ? "#fff" : theme.textSub,
+                  border: `1px solid ${showFrom === sf.value ? theme.accent : theme.inputBorder}`,
+                  borderRadius: "12px",
                 }}>{sf.label}</button>
               ))}
               {showFrom && (
@@ -8375,17 +8463,39 @@ export default function App() {
     }
 
     // Status filter
-    if (viewStatus === "today" || viewStatus === "active") {
-      const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
+    const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
+    if (viewStatus === "today") {
+      // Dnes = úkoly s dueDate=dnes + dnes splněné/smazané
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+      result = result.filter(t => {
+        // Recently completed/deleted dnes
+        if (t.status === "done" && t.completedAt) {
+          const cms = new Date(t.completedAt).getTime();
+          return cms >= todayStart.getTime() && cms <= todayEnd.getTime();
+        }
+        if (t.status === "deleted" && t.deletedAt) {
+          const dms = new Date(t.deletedAt).getTime();
+          return dms >= todayStart.getTime() && dms <= todayEnd.getTime();
+        }
+        // Aktivní úkoly s due date dnes
+        if (!isDone(t) && !isDeleted(t)) {
+          if (!t.dueDate) return false;
+          const due = new Date(t.dueDate);
+          return due >= todayStart && due <= todayEnd;
+        }
+        return false;
+      });
+    }
+    else if (viewStatus === "active") {
+      // Aktivní = všechny nesplněné, bez ohledu na termín
       result = result.filter(t => {
         if (!isDone(t) && !isDeleted(t)) {
-          // Hide planned (future showFrom) tasks UNLESS showDeferred is on
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
-        // Show recently completed tasks (within 24h) crossed out
+        // Recently completed/deleted (24h)
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
-        // Show recently deleted tasks (within 24h) for undo possibility
         if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
         return false;
       });
@@ -8455,15 +8565,30 @@ export default function App() {
     // Search
     if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
 
-    // Sort — completed tasks always at bottom in active view
-    if (viewStatus === "today") {
-      // Today view = urgencyScore descending (new-from-others at very top)
-      result = [...result].sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
+    // Sort — pokud user nastaví sortMode, respektujeme to vždy
+    // (i v Today view). Pokud nechá default "created", v Today view použijeme smart urgency.
+    if (sortMode === "smart") {
+      result = [...result].sort(smartSort);
+    } else if (sortMode === "priority") {
+      result = [...result].sort((a, b) => getPriority(a.priority).weight - getPriority(b.priority).weight);
+    } else if (sortMode === "date") {
+      result = [...result].sort((a, b) => {
+        const aDays = daysDiff(a.dueDate);
+        const bDays = daysDiff(b.dueDate);
+        // Úkoly bez termínu (NaN) na konec
+        if (isNaN(aDays) && isNaN(bDays)) return 0;
+        if (isNaN(aDays)) return 1;
+        if (isNaN(bDays)) return -1;
+        return aDays - bDays;
+      });
+    } else if (sortMode === "created") {
+      // V Today view a smart kontextu = urgency-based; jinak nejnovější
+      if (viewStatus === "today") {
+        result = [...result].sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
+      } else {
+        result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      }
     }
-    else if (sortMode === "smart") result = [...result].sort(smartSort);
-    else if (sortMode === "priority") result = [...result].sort((a, b) => getPriority(a.priority).weight - getPriority(b.priority).weight);
-    else if (sortMode === "date") result = [...result].sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate));
-    else if (sortMode === "created") result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     // In active/today view, push completed to bottom, then deleted below completed
     if (viewStatus === "active" || viewStatus === "today") {
@@ -8476,7 +8601,7 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter]);
 
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
@@ -8578,12 +8703,33 @@ export default function App() {
       }
       // Status filter (viewStatus) — skip if counting statuses
       if (!skip.includes("status")) {
-        if (viewStatus === "active" && (isDone(t) || isDeleted(t))) return false;
-        if (viewStatus === "active" && t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
-        if (viewStatus === "in_progress" && (t.status !== "in_progress" || isDeleted(t))) return false;
-        if (viewStatus === "planned" && !(t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t))) return false;
-        if (viewStatus === "done" && t.status !== "done") return false;
-        if (viewStatus === "trash" && t.status !== "deleted") return false;
+        if (viewStatus === "today") {
+          // Dnes = aktivní s dueDate=dnes + dnes splněné/smazané
+          const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+          const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+          let pass = false;
+          if (t.status === "done" && t.completedAt) {
+            const cms = new Date(t.completedAt).getTime();
+            pass = cms >= todayStart.getTime() && cms <= todayEnd.getTime();
+          } else if (t.status === "deleted" && t.deletedAt) {
+            const dms = new Date(t.deletedAt).getTime();
+            pass = dms >= todayStart.getTime() && dms <= todayEnd.getTime();
+          } else if (!isDone(t) && !isDeleted(t)) {
+            if (t.dueDate) {
+              const due = new Date(t.dueDate);
+              pass = due >= todayStart && due <= todayEnd;
+            }
+          }
+          if (!pass) return false;
+        }
+        else if (viewStatus === "active") {
+          if (isDone(t) || isDeleted(t)) return false;
+          if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+        }
+        else if (viewStatus === "in_progress" && (t.status !== "in_progress" || isDeleted(t))) return false;
+        else if (viewStatus === "planned" && !(t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t))) return false;
+        else if (viewStatus === "done" && t.status !== "done") return false;
+        else if (viewStatus === "trash" && t.status !== "deleted") return false;
       }
       // Scope filter — skip if counting scopes
       if (!skip.includes("scope")) {
@@ -8639,17 +8785,19 @@ export default function App() {
   const stats = useMemo(() => {
     if (!currentUser) return {};
     return {
-      // "my" count — scope skipped (counting per-scope)
-      my: countTasks(t => t.assignedTo?.includes(currentUser.name), ["scope"]),
+      // Scope counts — bez status filtru (= "kolik úkolů celkem v této roli, bez ohledu na view")
+      // Tj. vidíš počet i v Today view, kde úkoly nemusí mít dueDate=dnes.
+      // Aktivní úkoly (=ne smazané a ne hotové) — pokud chceš jen aktivní, použij viewStatus.
+      my: countTasks(t => t.assignedTo?.includes(currentUser.name) && !isDone(t) && !isDeleted(t), ["scope", "status"]),
       forMe: countTasks(t =>
-        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name,
-        ["scope"]
+        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t) && !isDeleted(t),
+        ["scope", "status"]
       ),
       assigned: countTasks(t =>
-        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name),
-        ["scope"]
+        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name) && !isDone(t) && !isDeleted(t),
+        ["scope", "status"]
       ),
-      shared: countTasks(t => t.assignTo === "both", ["scope"]),
+      shared: countTasks(t => t.assignTo === "both" && !isDone(t) && !isDeleted(t), ["scope", "status"]),
       // "planned" count — status skipped, counts only deferred with all other filters
       planned: countTasks(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t), ["status"]),
       // "done" count — status skipped
