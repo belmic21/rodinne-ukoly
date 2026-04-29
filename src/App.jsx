@@ -5860,7 +5860,7 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
     const userNameLc = (currentUser.name || "").trim().toLowerCase();
     return tasks
       .filter(t => {
-        if (isDeleted(t)) return false;
+        // Search hledá ve VŠECH úkolech — i v koši, splněné, plánované.
         // Privacy filter — search vždy ukazuje jen úkoly relevantní pro currentUser
         // (autor nebo přiřazen), bez ohledu na admin flag
         const createdByLc = (t.createdBy || "").trim().toLowerCase();
@@ -5950,11 +5950,37 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
                     onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text }}>
-                      {isDone(t) && "✓ "}{t.title}
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text,
+                      textDecoration: isDeleted(t) ? "line-through" : "none",
+                      opacity: isDeleted(t) ? 0.6 : isDone(t) ? 0.75 : 1,
+                    }}>
+                      {isDeleted(t) && "🗑 "}
+                      {!isDeleted(t) && isDone(t) && "✓ "}
+                      {t.title}
                     </div>
-                    <div style={{ fontSize: "10px", color: theme.textMid }}>
-                      {t.assignedTo?.join(", ") || "—"} · {t.createdAt && formatTimeTrace(t.createdAt)}
+                    <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center" }}>
+                      {isDeleted(t) && (
+                        <span style={{
+                          fontSize: "9px", fontWeight: 800, color: theme.red,
+                          background: `${theme.red}15`, padding: "1px 5px", borderRadius: "4px",
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                        }}>Koš</span>
+                      )}
+                      {!isDeleted(t) && isDone(t) && (
+                        <span style={{
+                          fontSize: "9px", fontWeight: 800, color: theme.green,
+                          background: `${theme.green}15`, padding: "1px 5px", borderRadius: "4px",
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                        }}>Splněné</span>
+                      )}
+                      {!isDeleted(t) && !isDone(t) && t.status === "in_progress" && (
+                        <span style={{
+                          fontSize: "9px", fontWeight: 800, color: "#ea580c",
+                          background: "#ea580c15", padding: "1px 5px", borderRadius: "4px",
+                          textTransform: "uppercase", letterSpacing: "0.3px",
+                        }}>Rozprac.</span>
+                      )}
+                      <span>{t.assignedTo?.join(", ") || "—"} · {t.createdAt && formatTimeTrace(t.createdAt)}</span>
                     </div>
                   </button>
                 ))}
@@ -7794,7 +7820,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
   const [filter, setFilter] = useState("my");
-  const [viewStatus, setViewStatus] = useState("today");
+  const [viewStatus, setViewStatus] = useState("active");
   const [sortMode, setSortMode] = useState("created");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
@@ -8508,6 +8534,7 @@ export default function App() {
     }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
+    // viewStatus === "all" — neaplikuje status filtr, vrátí všechny úkoly
 
     // Scope filter
     if (filter === "my") result = result.filter(t => t.assignedTo?.includes(currentUser.name));
@@ -8808,6 +8835,26 @@ export default function App() {
       active: countTasks(t => !isDone(t) && !isDeleted(t), ["status"]),
       // "in_progress" count
       in_progress: countTasks(t => t.status === "in_progress" && !isDeleted(t), ["status"]),
+      // "today" count — úkoly s dueDate=dnes nebo dnes splněné/smazané
+      today: countTasks(t => {
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        if (t.status === "done" && t.completedAt) {
+          const cms = new Date(t.completedAt).getTime();
+          return cms >= todayStart.getTime() && cms <= todayEnd.getTime();
+        }
+        if (t.status === "deleted" && t.deletedAt) {
+          const dms = new Date(t.deletedAt).getTime();
+          return dms >= todayStart.getTime() && dms <= todayEnd.getTime();
+        }
+        if (!isDone(t) && !isDeleted(t) && t.dueDate) {
+          const due = new Date(t.dueDate);
+          return due >= todayStart && due <= todayEnd;
+        }
+        return false;
+      }, ["status"]),
+      // "all" count — všechny úkoly bez status filtru
+      all: countTasks(() => true, ["status"]),
     };
   }, [currentUser, countTasks]);
 
@@ -9088,6 +9135,21 @@ export default function App() {
             theme={theme}
             onClose={() => setShowSearchSheet(false)}
             onNavigate={(taskId) => {
+              // Pokud je úkol v jiném view než aktuální, přepneme
+              const t = tasks.find(x => x.id === taskId);
+              if (t) {
+                if (isDeleted(t)) setViewStatus("trash");
+                else if (t.status === "done") setViewStatus("done");
+                else if (t.showFrom && daysDiff(t.showFrom) > 0) setViewStatus("planned");
+                else setViewStatus("active");
+                // Reset všech ostatních filtrů aby úkol bylo vidět
+                setFilter("all");
+                setCategoryFilter("all");
+                setPriorityFilter("all");
+                setTagFilter("all");
+                setCreatedWhenFilter("all");
+                setCreatedByFilter("all");
+              }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
             }}
@@ -9235,17 +9297,18 @@ export default function App() {
             {/* Status */}
             <select value={viewStatus} onChange={e => setViewStatus(e.target.value)} style={{
               ...inputStyle(theme), width: "auto", padding: "4px 8px", fontSize: "11px",
-              background: viewStatus === "today" ? theme.accentSoft : "transparent",
-              border: `1px solid ${viewStatus === "today" ? theme.accentBorder : theme.inputBorder}`,
-              color: viewStatus === "today" ? theme.accent : theme.textSub,
-              fontWeight: viewStatus === "today" ? 700 : 400,
+              background: viewStatus !== "active" ? theme.accentSoft : "transparent",
+              border: `1px solid ${viewStatus !== "active" ? theme.accentBorder : theme.inputBorder}`,
+              color: viewStatus !== "active" ? theme.accent : theme.textSub,
+              fontWeight: viewStatus !== "active" ? 700 : 400,
             }}>
-              <option value="today">🎯 Dnes ({stats.active || 0})</option>
-              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
+              <option value="today">🎯 Dnes ({stats.today || 0})</option>
               <option value="active">📋 Vše aktivní ({stats.active || 0})</option>
+              <option value="in_progress">🔥 Rozpracované ({stats.in_progress || 0})</option>
               <option value="planned">⏰ Plánované ({stats.planned || 0})</option>
               <option value="done">✓ Splněné ({stats.done || 0})</option>
               <option value="trash">🗑 Koš ({stats.trash || 0})</option>
+              <option value="all">🌐 Vše ({stats.all || 0})</option>
             </select>
 
             {/* Sort */}
