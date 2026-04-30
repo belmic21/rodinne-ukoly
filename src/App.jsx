@@ -10101,7 +10101,11 @@ export default function App() {
           />
 
           {/* App-level filter bar — pouze v filter mode (v typing mode má QuickAddBar svůj TypingFilterRow) */}
-          {!isTypingMode && (
+          {!isTypingMode && (() => {
+            // Sdílená proměnná pro ikony i popover (musí být v jednom scope kvůli TDZ)
+            const visibleListsForFilter = (customLists || []).filter(l =>
+              l.is_shared || l.created_by_user === currentUser.name);
+            return (
           <>
           {/* Kompaktní ikonový filter row — popovery s nadpisem */}
           <div style={{ position: "relative", marginBottom: "8px" }} data-filter-icon-row>
@@ -10150,8 +10154,6 @@ export default function App() {
 
                 // List icon
                 let listIcon = "📁";
-                const visibleListsForFilter = (customLists || []).filter(l =>
-                  l.is_shared || l.created_by_user === currentUser.name);
                 if (categoryFilter.startsWith("list:")) {
                   const list = visibleListsForFilter.find(l => `list:${l.id}` === categoryFilter);
                   if (list) listIcon = list.emoji || "📁";
@@ -10563,7 +10565,8 @@ export default function App() {
             );
           })()}
           </>
-          )}
+            );
+          })()}
         </div>
 
         {/* Task list */}
