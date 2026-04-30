@@ -4896,6 +4896,18 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 );
               })}
             </div>
+            {/* Hint pro intervaly bez specifického day-pickeru (1/3/14/90) */}
+            {recurrence > 0 && recurrence !== 7 && recurrence !== 30 && (
+              <div style={{
+                fontSize: "10px", color: theme.textSub,
+                marginTop: "5px", padding: "5px 8px",
+                background: theme.inputBg, borderRadius: "5px",
+                lineHeight: 1.4,
+              }}>
+                💡 V poli „Termín splnění" níže nastav <strong>datum prvního výskytu</strong>.
+                Úkol se bude opakovat každých <strong>{recurrence} {recurrence === 1 ? "den" : recurrence < 5 ? "dny" : "dní"}</strong> od tohoto data.
+              </div>
+            )}
             {/* Day-of-week picker pro "Každý týden" */}
             {recurrence === 7 && (() => {
               const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
