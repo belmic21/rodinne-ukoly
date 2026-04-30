@@ -2464,6 +2464,17 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
               {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
+            {editRecDays > 0 && editRecDays !== 7 && editRecDays !== 30 && (
+              <div style={{
+                fontSize: "10px", color: theme.textSub,
+                marginTop: "5px", padding: "5px 8px",
+                background: theme.inputBg, borderRadius: "5px",
+                lineHeight: 1.4,
+              }}>
+                💡 Datum prvního výskytu nastav v poli „Datum prvního výskytu" níže.
+                Úkol se bude opakovat každých <strong>{editRecDays} dní</strong> od tohoto data.
+              </div>
+            )}
             {/* Den v týdnu pro týdenní opakování */}
             {editRecDays === 7 && (() => {
               const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
@@ -2553,7 +2564,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           {/* ── Due date with quick picks ── */}
           <div style={{ marginBottom: "8px" }}>
             <div style={labelStyle}>
-              Termín splnění {editDueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editDueDate)}</span>}
+              {editRecDays > 0 ? "Datum prvního výskytu" : "Termín splnění"} {editDueDate && <span style={{ fontWeight: 400, textTransform: "none" }}>— {formatDate(editDueDate)}</span>}
             </div>
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
@@ -4599,6 +4610,36 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     <span style={{ width: "20px" }}>—</span>
                     <span style={{ flex: 1 }}>Žádný seznam</span>
                   </button>
+                  {/* Předdefinované kategorie */}
+                  {CATEGORIES.map(cat => {
+                    const isSel = quickCategory === cat.id;
+                    return (
+                      <button key={cat.id} type="button"
+                        onClick={() => { setQuickCategory(cat.id); setOpenSegment(null); }}
+                        style={{
+                          ...buttonStyle(),
+                          padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                          background: isSel ? theme.accentSoft : "transparent",
+                          color: isSel ? theme.accent : theme.text,
+                          border: "none", textAlign: "left", borderRadius: "6px",
+                          display: "flex", alignItems: "center", gap: "8px",
+                        }}>
+                        <span style={{ width: "20px" }}>{cat.icon}</span>
+                        <span style={{ flex: 1 }}>{cat.label}</span>
+                        {isSel && <span style={{ color: theme.accent }}>✓</span>}
+                      </button>
+                    );
+                  })}
+                  {/* Sekce pro vlastní seznamy — jen pokud existují */}
+                  {visibleLists.length > 0 && (
+                    <div style={{
+                      margin: "6px 0 4px", paddingTop: "6px",
+                      borderTop: `1px solid ${theme.cardBorder}`,
+                      fontSize: "9px", fontWeight: 800, color: theme.textMid,
+                      textTransform: "uppercase", letterSpacing: "0.4px",
+                      paddingLeft: "8px",
+                    }}>Vlastní seznamy</div>
+                  )}
                   {visibleLists.map(list => {
                     const v = `list:${list.id}`;
                     const isSel = quickCategory === v;
@@ -9950,10 +9991,11 @@ export default function App() {
                 if (isDeleted(t)) setViewStatus("trash");
                 else if (t.status === "done") setViewStatus("done");
                 else setViewStatus("active");
-                setFilter("all");
+                // ZACHOVAT scope filter (moje/...) — privacy
                 setCategoryFilter("all");
                 setPriorityFilter("all");
                 setTagFilter("all");
+                setDueDateFilter("all");
               }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
@@ -9976,13 +10018,19 @@ export default function App() {
                 else if (t.status === "done") setViewStatus("done");
                 else if (t.showFrom && daysDiff(t.showFrom) > 0) setViewStatus("planned");
                 else setViewStatus("active");
-                // Reset všech ostatních filtrů aby úkol bylo vidět
-                setFilter("all");
+                // Inteligentně nastavit scope
+                const isMine = t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name;
+                if (isMine) {
+                  setFilter("my");
+                } else if (currentUser.admin) {
+                  setFilter("all");
+                }
                 setCategoryFilter("all");
                 setPriorityFilter("all");
                 setTagFilter("all");
                 setCreatedWhenFilter("all");
                 setCreatedByFilter("all");
+                setDueDateFilter("all");
               }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
@@ -10093,6 +10141,26 @@ export default function App() {
           open={updatesPanelOpen}
           onToggle={() => setUpdatesPanelOpen(o => !o)}
           onNavigate={(taskId) => {
+            const t = tasks.find(x => x.id === taskId);
+            if (t) {
+              if (isDeleted(t)) setViewStatus("trash");
+              else if (t.status === "done") setViewStatus("done");
+              else if (t.showFrom && daysDiff(t.showFrom) > 0) setViewStatus("planned");
+              else setViewStatus("active");
+              // Inteligentně nastavit scope tak aby úkol byl vidět
+              const isMine = t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name;
+              if (isMine) {
+                setFilter("my");
+              } else {
+                // Úkol není ve scope "my" → admin pohled, zachovat aktuální nebo "all"
+                if (currentUser.admin) setFilter("all");
+              }
+              // Reset ostatních filtrů aby úkol byl vidět
+              setCategoryFilter("all");
+              setPriorityFilter("all");
+              setTagFilter("all");
+              setDueDateFilter("all");
+            }
             setScrollToTaskId(taskId);
             setHighlightedTaskId(taskId);
             setUpdatesPanelOpen(false);
