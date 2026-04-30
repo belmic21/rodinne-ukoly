@@ -4006,7 +4006,36 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [openSegment, setOpenSegment] = useState(null);
   const inputRef = useRef();
   const segmentBarRef = useRef();
+  const containerRef = useRef();
   const otherUsers = users.filter(u => u.name !== currentUser.name);
+
+  // Click outside QuickAddBar — pokud je typing mode aktivní a uživatel klikne mimo
+  // formulář (= ne na input, ne na ikonu, ne na popover), vystoupit z typing mode.
+  // Předpoklad: pokud uživatel nic nenapsal, vystoupíme. Pokud má rozepsaný text, ponecháme.
+  useEffect(() => {
+    if (!isTypingPersist) return;
+    const onDocClick = (e) => {
+      if (!containerRef.current) return;
+      // Klik dovnitř formuláře — neukončit
+      if (containerRef.current.contains(e.target)) return;
+      // Klik na popover (mimo container, ale uvnitř popoveru)
+      if (e.target.closest("[data-typing-popover]")) return;
+      // Pokud má text, neukončit (uživatel zatím není hotov)
+      if (text.trim().length > 0) return;
+      // Klik mimo + prázdný input → ukončit typing mode
+      setIsTypingPersist(false);
+      setOpenSegment(null);
+      if (onTypingChange) onTypingChange(false);
+    };
+    // Delay aby se nezavřelo hned při focusu
+    const t = setTimeout(() => {
+      document.addEventListener("click", onDocClick);
+    }, 100);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("click", onDocClick);
+    };
+  }, [isTypingPersist, text, onTypingChange]);
 
   // Auto-update default termín při změně filtru — jen když není text/uživatel nepíše a není showFull
   useEffect(() => {
@@ -4129,7 +4158,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   ];
 
   return (
-    <div style={{ marginBottom: "14px" }}>
+    <div ref={containerRef} style={{ marginBottom: "14px" }}>
       {/* Always visible quick input. V complex módu se pole stane "hint" - uživatel zadá název dole.  */}
       <div style={{
         ...cardStyle(theme), padding: "6px 8px",
