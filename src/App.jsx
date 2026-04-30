@@ -3948,6 +3948,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange }) {
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
+  // Persistent typing mode — zůstává otevřený dokud uživatel explicitně nezavře (×)
+  // i když input ztratí focus (klik na ikony popoverů)
+  const [isTypingPersist, setIsTypingPersist] = useState(false);
   const [note, setNote] = useState("");
   const [type, setType] = useState("simple");
   // Smart default termín — podle aktivního filtru.
@@ -4103,6 +4106,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
   const resetForm = () => {
     setText(""); setNote(""); setDueDate(smartDefaultDueDate()); setRecurrence(0);
+    setIsTypingPersist(false);
     if (onTypingChange) onTypingChange(false);
     setCategory("other");
     setType("simple"); setShowFull(false); setShowFrom("");
@@ -4145,6 +4149,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           }}
           onFocus={() => {
             // Klik do inputu = typing mode (i když je prázdné, klávesnice se otevře)
+            setIsTypingPersist(true);
             if (onTypingChange) onTypingChange(true);
             // Scroll input do viditelné oblasti
             setTimeout(() => {
@@ -4183,10 +4188,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           </button>
         )}
         {/* Cancel typing mode — pouze v typing mode bez textu */}
-        {!text.trim() && document.activeElement !== inputRef.current && onTypingChange && (
+        {!text.trim() && isTypingPersist && (
           <button
             onClick={() => {
-              onTypingChange(false);
+              setIsTypingPersist(false);
+              if (onTypingChange) onTypingChange(false);
               setQuickAssignees([]); setQuickPriority(null); setQuickCategory(null);
               setOpenSegment(null);
             }}
@@ -4320,9 +4326,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
       {/* ═══ TypingFilterRow — ikony pro nastavení parametrů úkolu (typing mode) ═══ */}
       {(() => {
-        const isInputFocused = document.activeElement === inputRef.current;
-        const isTypingActive = text.trim().length > 0 || isInputFocused;
-        if (!isTypingActive || showFull) return null;
+        // Persistent typing mode — ikony zůstávají dokud uživatel explicitně nezavře
+        if (!isTypingPersist || showFull) return null;
 
         // Helper na popover pozicování
         const popoverWrap = {
