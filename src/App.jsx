@@ -785,16 +785,18 @@ async function apiLoadTasks(localEdits = {}) {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (error) throw error;
     const serverTasks = (data || []).map(dbToTask);
-    // Pokud jsme nedávno (< 10s) měnili úkol lokálně, použij cache verzi
-    // pro dané úkoly, ne server verzi (server může mít staré data kvůli replication delay).
+    // Inteligentní merge: pokud jsme nedávno (< 30s) editovali úkol lokálně,
+    // použij cache verzi. Speciálně řeší race condition: smažeš → refresh → server
+    // ještě nemá update → vrátí "active" → ale my chceme "deleted" z cache.
     const cached = cacheGet(CACHE_TASKS) || [];
     const cachedById = Object.fromEntries(cached.map(t => [t.id, t]));
     const now = Date.now();
     const merged = serverTasks.map(serverTask => {
       const editedAt = localEdits[serverTask.id];
-      if (editedAt && now - editedAt < 10000) {
-        // Lokální edit byl v posledních 10s → použij cache verzi
-        return cachedById[serverTask.id] || serverTask;
+      if (editedAt && now - editedAt < 30000) {
+        // Lokální edit byl v posledních 30s → použij cache verzi
+        const cachedTask = cachedById[serverTask.id];
+        if (cachedTask) return cachedTask;
       }
       return serverTask;
     });
@@ -8822,10 +8824,59 @@ export default function App() {
         }
       }).subscribe();
 
+    // Custom lists realtime
+    const listsChannel = supabase.channel("custom-lists-realtime-v1")
+      .on("postgres_changes", { event: "*", schema: "public", table: "custom_lists" }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          setCustomLists(prev => prev.find(l => l.id === payload.new.id) ? prev : [...prev, payload.new]);
+        } else if (payload.eventType === "UPDATE") {
+          setCustomLists(prev => prev.map(l => l.id === payload.new.id ? payload.new : l));
+        } else if (payload.eventType === "DELETE") {
+          setCustomLists(prev => prev.filter(l => l.id !== payload.old.id));
+        }
+      }).subscribe();
+
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(commentsChannel);
+      supabase.removeChannel(listsChannel);
+    };
+  }, [loading]);
+
+  // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout)
+  useEffect(() => {
+    if (loading) return;
+    const onFocus = async () => {
+      // Načti localEdits z localStorage pro merge (echo prevention při refresh)
+      let localEdits = {};
+      try {
+        const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
+        const now = Date.now();
+        Object.entries(stored).forEach(([id, ts]) => {
+          if (now - ts < 60000) localEdits[id] = ts;
+        });
+      } catch (e) { /* ignore */ }
+      try {
+        const [freshTasks, freshComments] = await Promise.all([
+          apiLoadTasks(localEdits),
+          apiLoadComments(),
+        ]);
+        setTasks(freshTasks);
+        setComments(freshComments);
+        // custom_lists raw fetch
+        const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
+        if (data) setCustomLists(data);
+      } catch (e) {
+        console.warn("Focus refresh failed:", e);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") onFocus();
+    });
+    return () => {
+      window.removeEventListener("focus", onFocus);
     };
   }, [loading]);
 
@@ -8861,10 +8912,10 @@ export default function App() {
     try {
       const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
       stored[taskId] = now;
-      // Vyčistit staré (>30s)
+      // Vyčistit staré (>60s — dřív bylo 30s, prodlouženo pro pomalejší síť)
       const cleaned = {};
       Object.entries(stored).forEach(([id, ts]) => {
-        if (now - ts < 30000) cleaned[id] = ts;
+        if (now - ts < 60000) cleaned[id] = ts;
       });
       localStorage.setItem("ft_local_edits", JSON.stringify(cleaned));
     } catch (e) { /* ignore */ }
