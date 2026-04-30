@@ -8437,6 +8437,9 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [scrollToTaskId]);
+  // Filter popover open state — pro filter row ikony (status/scope/sort/date/list)
+  // MUSÍ být deklarováno PŘED useEffect který ho používá (TDZ)
+  const [filterPopover, setFilterPopover] = useState(null);
   // Click outside zavírá filter popover
   useEffect(() => {
     if (!filterPopover) return;
@@ -8513,8 +8516,6 @@ export default function App() {
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
-  // Filter popover open state — pro filter row ikony (status/scope/sort/date/list)
-  const [filterPopover, setFilterPopover] = useState(null); // null | "status" | "scope" | "sort" | "date" | "list"
   const [showCreateList, setShowCreateList] = useState(false);
   const [editingList, setEditingList] = useState(null);
   const [showCalendar, setShowCalendar] = useState(false);
