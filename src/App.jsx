@@ -2464,6 +2464,90 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               style={{ ...inputStyle(theme), padding: "8px", fontSize: "12px" }}>
               {RECURRENCE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
+            {/* Den v týdnu pro týdenní opakování */}
+            {editRecDays === 7 && (() => {
+              const dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+              const currentDay = editDueDate ? ((new Date(editDueDate).getDay() + 6) % 7) : -1;
+              return (
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ ...labelStyle, fontSize: "10px", marginBottom: "5px" }}>
+                    Den opakování
+                  </div>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                    {dayNames.map((dayName, idx) => {
+                      const isSel = currentDay === idx;
+                      return (
+                        <button key={idx} type="button"
+                          onClick={() => {
+                            const today = new Date();
+                            const todayDay = (today.getDay() + 6) % 7;
+                            let daysAhead = idx - todayDay;
+                            if (daysAhead <= 0) daysAhead += 7;
+                            const next = new Date(today);
+                            next.setDate(next.getDate() + daysAhead);
+                            next.setHours(12, 0, 0, 0);
+                            setEditDueDate(next.toISOString().slice(0, 10));
+                          }}
+                          style={{
+                            ...buttonStyle(),
+                            padding: "6px 10px", fontSize: "11px", fontWeight: 700,
+                            background: isSel ? theme.accent : theme.inputBg,
+                            color: isSel ? "#fff" : theme.textSub,
+                            border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
+                            borderRadius: "8px", minWidth: "36px",
+                          }}>
+                          {dayName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+            {/* Den v měsíci pro měsíční opakování */}
+            {editRecDays === 30 && (() => {
+              const selDay = editDueDate ? new Date(editDueDate).getDate() : -1;
+              return (
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ ...labelStyle, fontSize: "10px", marginBottom: "5px" }}>
+                    Den v měsíci
+                  </div>
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "3px",
+                    background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                    borderRadius: "8px", padding: "6px",
+                  }}>
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(d => {
+                      const isSel = selDay === d;
+                      return (
+                        <button key={d} type="button"
+                          onClick={() => {
+                            const today = new Date();
+                            const target = new Date(today.getFullYear(), today.getMonth(), d);
+                            if (target < today) target.setMonth(target.getMonth() + 1);
+                            target.setHours(12, 0, 0, 0);
+                            setEditDueDate(target.toISOString().slice(0, 10));
+                          }}
+                          style={{
+                            padding: "6px 0", fontSize: "11px", fontWeight: 600,
+                            background: isSel ? theme.accent : "transparent",
+                            color: isSel ? "#fff" : theme.text,
+                            border: "none", borderRadius: "5px", cursor: "pointer",
+                            fontFamily: FONT,
+                          }}>
+                          {d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selDay > 0 && (
+                    <div style={{ fontSize: "10px", color: theme.textSub, marginTop: "5px" }}>
+                      Bude se opakovat každého {selDay}. dne v měsíci
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* ── Due date with quick picks ── */}
@@ -4057,23 +4141,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           onChange={e => {
             setText(e.target.value);
             // Když text > 0, jsme v typing mode
-            if (onTypingChange) onTypingChange(e.target.value.trim().length > 0);
+            if (onTypingChange) onTypingChange(true);
           }}
           onFocus={() => {
             // Klik do inputu = typing mode (i když je prázdné, klávesnice se otevře)
             if (onTypingChange) onTypingChange(true);
-            // Scroll input do viditelné oblasti (klávesnice se otevře pod ním)
-            // Po 300ms — počkáme na otevření klávesnice
+            // Scroll input do viditelné oblasti
             setTimeout(() => {
               if (inputRef.current) {
                 inputRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
               }
             }, 300);
           }}
-          onBlur={() => {
-            // Pokud uživatel klikne mimo a text je prázdný, vrátit do filter mode
-            if (!text.trim() && onTypingChange) onTypingChange(false);
-          }}
+          // onBlur záměrně neukončuje typing mode — uživatel může klikat na ikony popoverů.
+          // Zavře se jen vědomě (✕ tlačítko), nebo po vytvoření úkolu.
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (showFull) fullSubmit(); else quickSubmit(); } }}
           disabled={showFull && type === "complex"}
           style={{
@@ -4099,6 +4180,25 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               animation: "fadeIn 0.15s",
             }}>
             ✓
+          </button>
+        )}
+        {/* Cancel typing mode — pouze v typing mode bez textu */}
+        {!text.trim() && document.activeElement !== inputRef.current && onTypingChange && (
+          <button
+            onClick={() => {
+              onTypingChange(false);
+              setQuickAssignees([]); setQuickPriority(null); setQuickCategory(null);
+              setOpenSegment(null);
+            }}
+            title="Zavřít — vrátit zpět k filtrům"
+            style={{
+              ...buttonStyle(), width: "32px", height: "32px",
+              background: theme.inputBg, color: theme.textSub,
+              border: `1px solid ${theme.inputBorder}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "16px", flexShrink: 0,
+            }}>
+            ×
           </button>
         )}
         <button onClick={() => setShowFull(!showFull)} title="Podrobnosti" style={{
@@ -4364,7 +4464,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
             {/* Datum popover */}
             {openSegment === "t_date" && (
-              <div style={popoverWrap} onClick={e => e.stopPropagation()}>
+              <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
                 <div style={popoverHeader}>📅 Termín splnění</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   {dateOptions.map(opt => {
@@ -4400,7 +4500,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
             {/* Pro koho popover */}
             {openSegment === "t_who" && (
-              <div style={popoverWrap} onClick={e => e.stopPropagation()}>
+              <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
                 <div style={popoverHeader}>👤 Komu úkol zadávám</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   {users.map(u => {
@@ -4449,7 +4549,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
             {/* Seznam popover */}
             {openSegment === "t_list" && (
-              <div style={popoverWrap} onClick={e => e.stopPropagation()}>
+              <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
                 <div style={popoverHeader}>📁 Seznam</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <button type="button"
@@ -8337,6 +8437,26 @@ export default function App() {
       return () => clearTimeout(t);
     }
   }, [scrollToTaskId]);
+  // Click outside zavírá filter popover
+  useEffect(() => {
+    if (!filterPopover) return;
+    const onDocClick = (e) => {
+      // Ne-zavřít pokud klik je uvnitř popoveru nebo ikonového řádku
+      const popoverEl = e.target.closest("[data-filter-popover]");
+      const iconBtn = e.target.closest("[data-filter-icon-row]");
+      if (!popoverEl && !iconBtn) {
+        setFilterPopover(null);
+      }
+    };
+    // Delay 1ms aby se nezavřel hned po kliknutí na ikonu
+    const t = setTimeout(() => {
+      document.addEventListener("click", onDocClick);
+    }, 50);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("click", onDocClick);
+    };
+  }, [filterPopover]);
   // Clear highlight po 2.5s
   useEffect(() => {
     if (highlightedTaskId) {
@@ -8393,6 +8513,8 @@ export default function App() {
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
+  // Filter popover open state — pro filter row ikony (status/scope/sort/date/list)
+  const [filterPopover, setFilterPopover] = useState(null); // null | "status" | "scope" | "sort" | "date" | "list"
   const [showCreateList, setShowCreateList] = useState(false);
   const [editingList, setEditingList] = useState(null);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -9947,16 +10069,9 @@ export default function App() {
         />
 
         <div style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 20,
-          background: theme.bg,
+          // Není sticky — při scrollu se odsunuje, takže detail úkolu není překryt
           paddingTop: "2px",
           paddingBottom: "4px",
-          marginLeft: "-2px",
-          marginRight: "-2px",
-          paddingLeft: "2px",
-          paddingRight: "2px",
         }}>
           <QuickAddBar
             currentUser={currentUser}
@@ -9988,261 +10103,355 @@ export default function App() {
           {/* App-level filter bar — pouze v filter mode (v typing mode má QuickAddBar svůj TypingFilterRow) */}
           {!isTypingMode && (
           <>
-          {/* Kompaktní ikonový filter row — 7 prvků, jen ikony */}
-          <div style={{
-            display: "flex", alignItems: "stretch", gap: "4px",
-            marginBottom: "8px",
-          }}>
-            {/* 1) Status */}
-            {(() => {
-              const opts = [
-                { value: "today",       icon: "🎯", label: "Dnes" },
-                { value: "active",      icon: "📋", label: "Aktivní" },
-                { value: "in_progress", icon: "🔥", label: "Rozpracované" },
-                { value: "planned",     icon: "⏰", label: "Plánované" },
-                { value: "done",        icon: "✓",  label: "Splněné" },
-                { value: "trash",       icon: "🗑", label: "Koš" },
-                { value: "all",         icon: "🌐", label: "Vše" },
-              ];
-              const cur = opts.find(o => o.value === viewStatus) || opts[1];
-              const count = stats[viewStatus === "active" ? "active" : viewStatus] || 0;
-              const isActive = viewStatus !== "active";
-              return (
-                <div style={{ position: "relative", flex: 1 }}>
-                  <div style={{
-                    width: "100%", height: "44px",
-                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : theme.inputBg,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "20px", position: "relative",
-                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
-                  }} title={`Status: ${cur.label} (${count})`}>
-                    <span>{cur.icon}</span>
-                    {count > 0 && isActive && (
-                      <span style={{
-                        position: "absolute", top: "-4px", right: "-4px",
-                        background: theme.accent, color: "#fff",
-                        fontSize: "9px", fontWeight: 700,
-                        minWidth: "16px", height: "16px",
-                        borderRadius: "8px", padding: "0 4px",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>{count}</span>
-                    )}
-                  </div>
-                  <select value={viewStatus} onChange={e => setViewStatus(e.target.value)}
-                    title="Status úkolu"
+          {/* Kompaktní ikonový filter row — popovery s nadpisem */}
+          <div style={{ position: "relative", marginBottom: "8px" }} data-filter-icon-row>
+            <div style={{
+              display: "flex", alignItems: "stretch", gap: "4px",
+            }}>
+              {(() => {
+                // Helper IconBtn s aktivním stavem a klikem
+                const IconBtn = ({ icon, color, isActive, onClick, title, popoverKey }) => (
+                  <button type="button" onClick={onClick} title={title}
                     style={{
-                      position: "absolute", inset: 0, width: "100%", height: "100%",
-                      opacity: 0, cursor: "pointer", border: "none",
+                      flex: 1, height: "44px",
+                      background: isActive ? `${color}15` : theme.inputBg,
+                      color: isActive ? color : theme.textMid,
+                      border: `1.5px solid ${isActive ? color : theme.inputBorder}`,
+                      borderRadius: "10px",
+                      fontSize: "20px", fontWeight: 700,
+                      cursor: "pointer", fontFamily: FONT,
+                      boxShadow: isActive ? `0 1px 4px ${color}25` : "none",
+                      transition: "all 0.15s",
                     }}>
-                    {opts.map(o => (
-                      <option key={o.value} value={o.value}>
-                        {o.icon} {o.label} ({stats[o.value === "active" ? "active" : o.value] || 0})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })()}
+                    {icon}
+                  </button>
+                );
 
-            {/* 2) Scope */}
-            {(() => {
-              const isActive = filter !== "my";
-              const labels = { my: "👤", for_me: "📥", assigned: "📤", shared: "👥", unread: "🔴", all: "📋" };
-              let icon = labels[filter] || "👤";
-              if (filter && filter.startsWith("person:")) icon = "👤";
-              return (
-                <div style={{ position: "relative", flex: 1 }}>
-                  <div style={{
-                    width: "100%", height: "44px",
-                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : theme.inputBg,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "20px",
-                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
-                  }} title="Pro koho je úkol">
-                    <span>{icon}</span>
-                  </div>
-                  <select value={filter} onChange={e => setFilter(e.target.value)}
-                    title="Pro koho je úkol"
-                    style={{
-                      position: "absolute", inset: 0, width: "100%", height: "100%",
-                      opacity: 0, cursor: "pointer", border: "none",
-                    }}>
-                    <option value="my">👤 Moje ({stats.my})</option>
-                    <option value="for_me">📥 Pro mě ({stats.forMe || 0})</option>
-                    {users.filter(u => u.name !== currentUser.name).map(u => (
-                      <option key={u.name} value={`person:${u.name}`}>👤 {u.name}</option>
-                    ))}
-                    <option value="assigned">📤 Zadané ({stats.assigned})</option>
-                    <option value="shared">👥 Společné ({stats.shared})</option>
-                    <option value="unread">🔴 Nové ({unreadCounts[currentUser.name] || 0})</option>
-                    <option value="all">📋 Vše</option>
-                  </select>
-                </div>
-              );
-            })()}
+                // Status icon výběr
+                const statusIcons = {
+                  today: "🎯", active: "📋", in_progress: "🔥",
+                  planned: "⏰", done: "✓", trash: "🗑", all: "🌐",
+                };
+                const statusIcon = statusIcons[viewStatus] || "📋";
+                const statusActive = viewStatus !== "active";
 
-            {/* 3) Sort */}
-            {(() => {
-              return (
-                <div style={{ position: "relative", flex: 1 }}>
-                  <div style={{
-                    width: "100%", height: "44px",
-                    border: `1.5px solid ${theme.inputBorder}`,
-                    borderRadius: "10px", background: theme.inputBg,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "20px",
-                  }} title="Řazení">
-                    <span>↕</span>
-                  </div>
-                  <select value={sortMode} onChange={e => setSortMode(e.target.value)}
-                    title="Řazení"
-                    style={{
-                      position: "absolute", inset: 0, width: "100%", height: "100%",
-                      opacity: 0, cursor: "pointer", border: "none",
-                    }}>
-                    <option value="created">↕ Nejnovější</option>
-                    <option value="smart">↕ Chytré</option>
-                    <option value="priority">↕ Priorita</option>
-                    <option value="date">↕ Termín</option>
-                  </select>
-                </div>
-              );
-            })()}
+                // Scope icon
+                const scopeIcons = { my: "👤", for_me: "📥", assigned: "📤",
+                                     shared: "👥", unread: "🔴", all: "📋" };
+                let scopeIcon = scopeIcons[filter] || "👤";
+                if (filter && filter.startsWith("person:")) scopeIcon = "👤";
+                const scopeActive = filter !== "my";
 
-            {/* 4) Datum */}
-            {(() => {
-              const opts = [
-                { value: "all",       label: "Všechna data", icon: "📅" },
-                { value: "today",     label: "Dnes",         icon: "🎯" },
-                { value: "week",      label: "Tento týden",  icon: "📅" },
-                { value: "next_week", label: "Příští týden", icon: "📅" },
-                { value: "month",     label: "Tento měsíc",  icon: "📅" },
-              ];
-              const isActive = dueDateFilter !== "all";
-              const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
-              const cur = opts.find(o => o.value === dueDateFilter);
-              const icon = isRange ? "📆" : (cur?.icon || "📅");
-              return (
-                <div style={{ position: "relative", flex: 1 }}>
-                  <div style={{
-                    width: "100%", height: "44px",
-                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : theme.inputBg,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "20px",
-                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
-                  }} title="Termín splnění">
-                    <span>{icon}</span>
-                  </div>
-                  <select value={isRange ? "all" : dueDateFilter}
-                    onChange={e => setDueDateFilter(e.target.value)}
-                    title="Termín splnění"
-                    style={{
-                      position: "absolute", inset: 0, width: "100%", height: "100%",
-                      opacity: 0, cursor: "pointer", border: "none",
-                    }}>
-                    {opts.map(o => (
-                      <option key={o.value} value={o.value}>{o.icon} {o.label}</option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })()}
+                // Date icon
+                let dateIcon = "📅";
+                if (dueDateFilter === "today") dateIcon = "🎯";
+                else if (dueDateFilter && dueDateFilter.startsWith("range:")) dateIcon = "📆";
+                const dateActive = dueDateFilter !== "all";
 
-            {/* 5) Seznam */}
-            {(() => {
-              const visibleLists = (customLists || []).filter(l => l.is_shared || l.created_by_user === currentUser.name);
-              const isActive = categoryFilter !== "all";
-              let icon = "📁";
-              if (categoryFilter.startsWith("list:")) {
-                const list = visibleLists.find(l => `list:${l.id}` === categoryFilter);
-                if (list) icon = list.emoji || "📁";
-              } else if (isActive) {
-                const cat = CATEGORIES.find(c => c.id === categoryFilter);
-                if (cat) icon = cat.icon;
-              }
-              return (
-                <div style={{ position: "relative", flex: 1 }}>
-                  <div style={{
-                    width: "100%", height: "44px",
-                    border: `1.5px solid ${isActive ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    background: isActive ? `${theme.accent}15` : theme.inputBg,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "20px",
-                    boxShadow: isActive ? `0 1px 4px ${theme.accent}25` : "none",
-                  }} title="Seznam">
-                    <span>{icon}</span>
-                  </div>
-                  <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
-                    title="Seznam"
-                    style={{
-                      position: "absolute", inset: 0, width: "100%", height: "100%",
-                      opacity: 0, cursor: "pointer", border: "none",
-                    }}>
-                    <option value="all">📁 Všechny seznamy</option>
-                    {CATEGORIES.map(cat => (
-                      <option key={cat.id} value={cat.id}>{cat.icon} {cat.label}</option>
-                    ))}
-                    {visibleLists.map(list => (
-                      <option key={list.id} value={`list:${list.id}`}>{list.emoji || "📁"} {list.name}</option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })()}
+                // List icon
+                let listIcon = "📁";
+                const visibleListsForFilter = (customLists || []).filter(l =>
+                  l.is_shared || l.created_by_user === currentUser.name);
+                if (categoryFilter.startsWith("list:")) {
+                  const list = visibleListsForFilter.find(l => `list:${l.id}` === categoryFilter);
+                  if (list) listIcon = list.emoji || "📁";
+                } else if (categoryFilter !== "all") {
+                  const cat = CATEGORIES.find(c => c.id === categoryFilter);
+                  if (cat) listIcon = cat.icon;
+                }
+                const listActive = categoryFilter !== "all";
 
-            {/* 6) Priority — přepínací */}
-            {(() => {
-              const cyclePriority = () => {
-                if (priorityFilter === "all" || priorityFilter === "low") setPriorityFilter("important");
-                else if (priorityFilter === "important") setPriorityFilter("urgent");
-                else setPriorityFilter("all");
+                // Priority
+                const isImp = priorityFilter === "important";
+                const isUrg = priorityFilter === "urgent";
+                const priColor = isUrg ? "#ef4444" : isImp ? "#f59e0b" : theme.textMid;
+                const priIcon = isUrg ? "‼" : "!";
+                const priActive = isImp || isUrg;
+
+                // More filters
+                const hasMore = tagFilter !== "all" ||
+                  createdWhenFilter !== "all" || createdByFilter !== "all";
+
+                return (
+                  <>
+                    <IconBtn icon={statusIcon} color={theme.accent}
+                      isActive={statusActive}
+                      title="Status úkolu"
+                      onClick={() => setFilterPopover(filterPopover === "status" ? null : "status")} />
+                    <IconBtn icon={scopeIcon} color={theme.accent}
+                      isActive={scopeActive}
+                      title="Pro koho je úkol"
+                      onClick={() => setFilterPopover(filterPopover === "scope" ? null : "scope")} />
+                    <IconBtn icon="↕" color={theme.accent}
+                      isActive={false}
+                      title="Řazení"
+                      onClick={() => setFilterPopover(filterPopover === "sort" ? null : "sort")} />
+                    <IconBtn icon={dateIcon} color={theme.accent}
+                      isActive={dateActive}
+                      title="Termín splnění"
+                      onClick={() => setFilterPopover(filterPopover === "date" ? null : "date")} />
+                    <IconBtn icon={listIcon} color={theme.accent}
+                      isActive={listActive}
+                      title="Seznam"
+                      onClick={() => setFilterPopover(filterPopover === "list" ? null : "list")} />
+                    <button type="button" onClick={() => {
+                        if (priorityFilter === "all" || priorityFilter === "low") setPriorityFilter("important");
+                        else if (priorityFilter === "important") setPriorityFilter("urgent");
+                        else setPriorityFilter("all");
+                      }}
+                      title="Priorita"
+                      style={{
+                        flex: 1, height: "44px",
+                        background: priActive ? `${priColor}15` : theme.inputBg,
+                        color: priColor, fontSize: "22px", fontWeight: 800,
+                        border: `1.5px solid ${priActive ? priColor : theme.inputBorder}`,
+                        borderRadius: "10px",
+                        cursor: "pointer", fontFamily: FONT,
+                        boxShadow: priActive ? `0 1px 4px ${priColor}25` : "none",
+                      }}>
+                      {priIcon}
+                    </button>
+                    <button onClick={() => setShowMoreFilters(true)}
+                      title="Více filtrů"
+                      style={{
+                        flex: 1, height: "44px",
+                        background: hasMore ? `${theme.accent}15` : theme.inputBg,
+                        color: hasMore ? theme.accent : theme.textMid,
+                        fontSize: "22px", fontWeight: 800,
+                        border: `1.5px solid ${hasMore ? theme.accent : theme.inputBorder}`,
+                        borderRadius: "10px", cursor: "pointer", fontFamily: FONT,
+                      }}>
+                      ⋯
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Popovery — širší, s nadpisem */}
+            {filterPopover && (() => {
+              const popoverWrap = {
+                position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0,
+                background: theme.bg,
+                border: `1px solid ${theme.cardBorder}`,
+                borderRadius: "12px",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                padding: "12px",
+                zIndex: 50,
+                animation: "slideUp 0.15s",
+                maxHeight: "60vh", overflowY: "auto",
               };
-              const isImp = priorityFilter === "important";
-              const isUrg = priorityFilter === "urgent";
-              const color = isUrg ? "#ef4444" : isImp ? "#f59e0b" : theme.textMid;
-              return (
-                <button type="button" onClick={cyclePriority}
-                  title={`Priorita: ${isUrg ? "Urgent" : isImp ? "Důležité" : "Vše"}`}
-                  style={{
-                    flex: 1, height: "44px",
-                    background: (isImp || isUrg) ? `${color}15` : theme.inputBg,
-                    color: color, fontSize: "22px", fontWeight: 800,
-                    border: `1.5px solid ${(isImp || isUrg) ? color : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    cursor: "pointer", fontFamily: FONT,
-                    boxShadow: (isImp || isUrg) ? `0 1px 4px ${color}25` : "none",
-                  }}>
-                  {isUrg ? "‼" : "!"}
-                </button>
-              );
-            })()}
+              const popHeader = {
+                fontSize: "11px", fontWeight: 800, color: theme.textMid,
+                textTransform: "uppercase", letterSpacing: "0.4px",
+                marginBottom: "10px",
+                paddingBottom: "8px",
+                borderBottom: `1px solid ${theme.cardBorder}`,
+              };
+              const optStyle = (isSel, color = theme.accent) => ({
+                ...buttonStyle(),
+                width: "100%",
+                padding: "10px 12px", fontSize: "13px", fontWeight: 600,
+                background: isSel ? `${color}20` : "transparent",
+                color: isSel ? color : theme.text,
+                border: "none", textAlign: "left", borderRadius: "8px",
+                display: "flex", alignItems: "center", gap: "10px",
+                marginBottom: "2px",
+              });
 
-            {/* 7) Více filtrů */}
-            {(() => {
-              const hasMore = tagFilter !== "all" ||
-                createdWhenFilter !== "all" || createdByFilter !== "all";
-              return (
-                <button onClick={() => setShowMoreFilters(true)}
-                  title="Více filtrů"
-                  style={{
-                    flex: 1, height: "44px",
-                    background: hasMore ? `${theme.accent}15` : theme.inputBg,
-                    color: hasMore ? theme.accent : theme.textMid,
-                    fontSize: "22px", fontWeight: 800,
-                    border: `1.5px solid ${hasMore ? theme.accent : theme.inputBorder}`,
-                    borderRadius: "10px",
-                    cursor: "pointer", fontFamily: FONT,
-                  }}>
-                  ⋯
-                </button>
-              );
+              if (filterPopover === "status") {
+                const opts = [
+                  { value: "today",       icon: "🎯", label: "Dnes" },
+                  { value: "active",      icon: "📋", label: "Aktivní" },
+                  { value: "in_progress", icon: "🔥", label: "Rozpracované" },
+                  { value: "planned",     icon: "⏰", label: "Plánované" },
+                  { value: "done",        icon: "✓",  label: "Splněné" },
+                  { value: "trash",       icon: "🗑", label: "Koš" },
+                  { value: "all",         icon: "🌐", label: "Vše" },
+                ];
+                return (
+                  <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
+                    <div style={popHeader}>📋 Status úkolu</div>
+                    {opts.map(o => {
+                      const isSel = viewStatus === o.value;
+                      const cnt = stats[o.value === "active" ? "active" : o.value] || 0;
+                      return (
+                        <button key={o.value} type="button"
+                          onClick={() => { setViewStatus(o.value); setFilterPopover(null); }}
+                          style={optStyle(isSel)}>
+                          <span style={{ width: "20px", fontSize: "16px" }}>{o.icon}</span>
+                          <span style={{ flex: 1 }}>{o.label}</span>
+                          <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{cnt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
+              if (filterPopover === "scope") {
+                return (
+                  <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
+                    <div style={popHeader}>👤 Pro koho je úkol</div>
+                    <button type="button" onClick={() => { setFilter("my"); setFilterPopover(null); }}
+                      style={optStyle(filter === "my")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>👤</span>
+                      <span style={{ flex: 1 }}>Moje</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.my}</span>
+                    </button>
+                    <button type="button" onClick={() => { setFilter("for_me"); setFilterPopover(null); }}
+                      style={optStyle(filter === "for_me")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>📥</span>
+                      <span style={{ flex: 1 }}>Pro mě (od ostatních)</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.forMe || 0}</span>
+                    </button>
+                    {users.filter(u => u.name !== currentUser.name).map(u => (
+                      <button key={u.name} type="button"
+                        onClick={() => { setFilter(`person:${u.name}`); setFilterPopover(null); }}
+                        style={optStyle(filter === `person:${u.name}`)}>
+                        <span style={{ width: "20px", fontSize: "16px" }}>👤</span>
+                        <span style={{ flex: 1 }}>{u.name}</span>
+                      </button>
+                    ))}
+                    <button type="button" onClick={() => { setFilter("assigned"); setFilterPopover(null); }}
+                      style={optStyle(filter === "assigned")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>📤</span>
+                      <span style={{ flex: 1 }}>Zadané (od mě)</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.assigned}</span>
+                    </button>
+                    <button type="button" onClick={() => { setFilter("shared"); setFilterPopover(null); }}
+                      style={optStyle(filter === "shared")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>👥</span>
+                      <span style={{ flex: 1 }}>Společné</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.shared}</span>
+                    </button>
+                    <button type="button" onClick={() => { setFilter("unread"); setFilterPopover(null); }}
+                      style={optStyle(filter === "unread")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>🔴</span>
+                      <span style={{ flex: 1 }}>Nové</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{unreadCounts[currentUser.name] || 0}</span>
+                    </button>
+                    <button type="button" onClick={() => { setFilter("all"); setFilterPopover(null); }}
+                      style={optStyle(filter === "all")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>📋</span>
+                      <span style={{ flex: 1 }}>Vše</span>
+                    </button>
+                  </div>
+                );
+              }
+
+              if (filterPopover === "sort") {
+                const opts = [
+                  { value: "created",  label: "Nejnovější" },
+                  { value: "smart",    label: "Chytré řazení" },
+                  { value: "priority", label: "Podle priority" },
+                  { value: "date",     label: "Podle termínu" },
+                ];
+                return (
+                  <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
+                    <div style={popHeader}>↕ Řazení</div>
+                    {opts.map(o => (
+                      <button key={o.value} type="button"
+                        onClick={() => { setSortMode(o.value); setFilterPopover(null); }}
+                        style={optStyle(sortMode === o.value)}>
+                        <span style={{ width: "20px", fontSize: "16px" }}>↕</span>
+                        <span style={{ flex: 1 }}>{o.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              }
+
+              if (filterPopover === "date") {
+                const opts = [
+                  { value: "all",       icon: "📅", label: "Všechna data" },
+                  { value: "today",     icon: "🎯", label: "Dnes" },
+                  { value: "week",      icon: "📅", label: "Tento týden" },
+                  { value: "next_week", icon: "📅", label: "Příští týden" },
+                  { value: "month",     icon: "📅", label: "Tento měsíc" },
+                ];
+                const isRange = dueDateFilter && dueDateFilter.startsWith("range:");
+                const [rangeFrom, rangeTo] = isRange ? dueDateFilter.slice(6).split(",") : ["", ""];
+                return (
+                  <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
+                    <div style={popHeader}>📅 Termín splnění</div>
+                    {opts.map(o => (
+                      <button key={o.value} type="button"
+                        onClick={() => { setDueDateFilter(o.value); setFilterPopover(null); }}
+                        style={optStyle(dueDateFilter === o.value)}>
+                        <span style={{ width: "20px", fontSize: "16px" }}>{o.icon}</span>
+                        <span style={{ flex: 1 }}>{o.label}</span>
+                      </button>
+                    ))}
+                    {/* Vlastní rozsah */}
+                    <div style={{
+                      marginTop: "8px", paddingTop: "8px",
+                      borderTop: `1px solid ${theme.cardBorder}`,
+                    }}>
+                      <div style={{
+                        fontSize: "10px", fontWeight: 700, color: theme.textMid,
+                        textTransform: "uppercase", marginBottom: "5px",
+                      }}>📆 Vlastní rozsah</div>
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                        <input type="date" value={rangeFrom}
+                          onChange={(e) => {
+                            const f = e.target.value;
+                            if (f) setDueDateFilter(`range:${f},${rangeTo || f}`);
+                          }}
+                          style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
+                        <span style={{ fontSize: "11px" }}>→</span>
+                        <input type="date" value={rangeTo}
+                          onChange={(e) => {
+                            const t = e.target.value;
+                            if (t) setDueDateFilter(`range:${rangeFrom || t},${t}`);
+                          }}
+                          style={{ ...inputStyle(theme), padding: "5px 8px", fontSize: "11px", flex: 1 }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (filterPopover === "list") {
+                return (
+                  <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
+                    <div style={popHeader}>📁 Seznam</div>
+                    <button type="button" onClick={() => { setCategoryFilter("all"); setFilterPopover(null); }}
+                      style={optStyle(categoryFilter === "all")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>📋</span>
+                      <span style={{ flex: 1 }}>Všechny</span>
+                    </button>
+                    {/* Předdefinované kategorie */}
+                    {CATEGORIES.map(cat => (
+                      <button key={cat.id} type="button"
+                        onClick={() => { setCategoryFilter(cat.id); setFilterPopover(null); }}
+                        style={optStyle(categoryFilter === cat.id)}>
+                        <span style={{ width: "20px", fontSize: "16px" }}>{cat.icon}</span>
+                        <span style={{ flex: 1 }}>{cat.label}</span>
+                      </button>
+                    ))}
+                    {/* Vlastní seznamy */}
+                    {visibleListsForFilter.length > 0 && (
+                      <div style={{
+                        margin: "8px 0 4px",
+                        paddingTop: "6px",
+                        borderTop: `1px solid ${theme.cardBorder}`,
+                        fontSize: "9px", fontWeight: 800, color: theme.textMid,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>Vlastní seznamy</div>
+                    )}
+                    {visibleListsForFilter.map(list => (
+                      <button key={list.id} type="button"
+                        onClick={() => { setCategoryFilter(`list:${list.id}`); setFilterPopover(null); }}
+                        style={optStyle(categoryFilter === `list:${list.id}`, list.color)}>
+                        <span style={{ width: "20px", fontSize: "16px" }}>{list.emoji || "📁"}</span>
+                        <span style={{ flex: 1 }}>{list.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              }
+              return null;
             })()}
           </div>
 
