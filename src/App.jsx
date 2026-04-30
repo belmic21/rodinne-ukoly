@@ -785,18 +785,26 @@ async function apiLoadTasks(localEdits = {}) {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (error) throw error;
     const serverTasks = (data || []).map(dbToTask);
-    // Inteligentní merge: pokud jsme nedávno (< 30s) editovali úkol lokálně,
-    // použij cache verzi. Speciálně řeší race condition: smažeš → refresh → server
-    // ještě nemá update → vrátí "active" → ale my chceme "deleted" z cache.
+    // Inteligentní merge: pokud jsme nedávno (< 2 min) editovali úkol lokálně,
+    // použij cache verzi. Speciálně řeší race condition při smazání:
+    // smažeš → refresh dřív než server dokončí UPDATE → server vrátí staré "active" → vyhraje cache.
     const cached = cacheGet(CACHE_TASKS) || [];
     const cachedById = Object.fromEntries(cached.map(t => [t.id, t]));
     const now = Date.now();
     const merged = serverTasks.map(serverTask => {
       const editedAt = localEdits[serverTask.id];
-      if (editedAt && now - editedAt < 30000) {
-        // Lokální edit byl v posledních 30s → použij cache verzi
+      if (editedAt && now - editedAt < 120000) {
         const cachedTask = cachedById[serverTask.id];
-        if (cachedTask) return cachedTask;
+        if (cachedTask) {
+          // Pokud cache má pokročilejší status (deleted/done), vyhraje cache.
+          // Bez tohoto: smažeš úkol → refresh → server stále aktivní → cache by se přepsala.
+          const cacheIsAdvanced = (cachedTask.status === "deleted" || cachedTask.status === "done");
+          const serverIsBehind = serverTask.status === "active" || serverTask.status === "in_progress";
+          if (cacheIsAdvanced && serverIsBehind) {
+            return cachedTask;
+          }
+          return cachedTask;
+        }
       }
       return serverTask;
     });
@@ -8854,7 +8862,7 @@ export default function App() {
         const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
         const now = Date.now();
         Object.entries(stored).forEach(([id, ts]) => {
-          if (now - ts < 60000) localEdits[id] = ts;
+          if (now - ts < 120000) localEdits[id] = ts;
         });
       } catch (e) { /* ignore */ }
       try {
@@ -8912,17 +8920,24 @@ export default function App() {
     try {
       const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
       stored[taskId] = now;
-      // Vyčistit staré (>60s — dřív bylo 30s, prodlouženo pro pomalejší síť)
+      // Vyčistit staré (>2 min — bezpečná rezerva pro pomalé sítě)
       const cleaned = {};
       Object.entries(stored).forEach(([id, ts]) => {
-        if (now - ts < 60000) cleaned[id] = ts;
+        if (now - ts < 120000) cleaned[id] = ts;
       });
       localStorage.setItem("ft_local_edits", JSON.stringify(cleaned));
     } catch (e) { /* ignore */ }
     setTasks(prev => {
       const next = updater(prev);
       const updated = next.find(t => t.id === taskId);
-      if (updated) apiUpdateTask(updated);
+      if (updated) {
+        // AWAIT — počkáme na potvrzení serveru. Pokud refresh proběhne dřív, server už ví.
+        // Bez await byl race condition: smažeš → refresh → server stále staré → úkol zpět.
+        apiUpdateTask(updated).then(() => {
+          // Po DB write si zaznamenej znovu (cache je už aktuální)
+          localEditsRef.current[taskId] = Date.now();
+        });
+      }
       setUndoState({ previousTasks: prev, message, taskId });
       clearTimeout(undoTimerRef.current);
       undoTimerRef.current = setTimeout(() => setUndoState(null), UNDO_MS);
