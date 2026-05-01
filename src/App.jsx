@@ -780,36 +780,18 @@ async function apiLoadUsers() {
   }
 }
 
-async function apiLoadTasks(localEdits = {}) {
+async function apiLoadTasks() {
+  // Server je vždy zdroj pravdy. Cache se používá JEN když jsme offline (catch).
+  // Předtím tu byla složitá merge logika, která způsobovala "úkoly se vrací po smazání"
+  // — pokud jsi smazal úkol a refresh nebo focus event proběhl rychleji než dorazil
+  // realtime DELETE event, lokální cache měla "deleted" status a server "active",
+  // takže merge úkol vrátil zpět. Teď: server = pravda, vždy.
   try {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (error) throw error;
     const serverTasks = (data || []).map(dbToTask);
-    // Inteligentní merge: pokud jsme nedávno (< 2 min) editovali úkol lokálně,
-    // použij cache verzi. Speciálně řeší race condition při smazání:
-    // smažeš → refresh dřív než server dokončí UPDATE → server vrátí staré "active" → vyhraje cache.
-    const cached = cacheGet(CACHE_TASKS) || [];
-    const cachedById = Object.fromEntries(cached.map(t => [t.id, t]));
-    const now = Date.now();
-    const merged = serverTasks.map(serverTask => {
-      const editedAt = localEdits[serverTask.id];
-      if (editedAt && now - editedAt < 120000) {
-        const cachedTask = cachedById[serverTask.id];
-        if (cachedTask) {
-          // Pokud cache má pokročilejší status (deleted/done), vyhraje cache.
-          // Bez tohoto: smažeš úkol → refresh → server stále aktivní → cache by se přepsala.
-          const cacheIsAdvanced = (cachedTask.status === "deleted" || cachedTask.status === "done");
-          const serverIsBehind = serverTask.status === "active" || serverTask.status === "in_progress";
-          if (cacheIsAdvanced && serverIsBehind) {
-            return cachedTask;
-          }
-          return cachedTask;
-        }
-      }
-      return serverTask;
-    });
-    cacheSet(CACHE_TASKS, merged);
-    return merged;
+    cacheSet(CACHE_TASKS, serverTasks);
+    return serverTasks;
   } catch (e) {
     console.warn("apiLoadTasks offline, using cache");
     return cacheGet(CACHE_TASKS) || [];
@@ -8675,18 +8657,8 @@ export default function App() {
         setPendingCount(0);
       }
 
-      // Načti localEdits (recently edited tasks) z localStorage pro správný merge se serverem
-      let localEdits = {};
-      try {
-        const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
-        const now = Date.now();
-        Object.entries(stored).forEach(([id, ts]) => {
-          if (now - ts < 30000) localEdits[id] = ts;
-        });
-      } catch (e) { /* ignore */ }
-
       const [loadedUsers, loadedTasks, loadedComments] = await Promise.all([
-        apiLoadUsers(), apiLoadTasks(localEdits), apiLoadComments()
+        apiLoadUsers(), apiLoadTasks(), apiLoadComments()
       ]);
       setUsers(loadedUsers);
       setComments(loadedComments);
@@ -8798,7 +8770,7 @@ export default function App() {
   useEffect(() => {
     if (loading) return;
 
-    const tasksChannel = supabase.channel("tasks-realtime-v11")
+    const tasksChannel = supabase.channel("tasks-realtime-v12")
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, (payload) => {
         if (payload.eventType === "INSERT") {
           setTasks(prev => prev.find(t => t.id === payload.new.id) ? prev : [dbToTask(payload.new), ...prev]);
@@ -8811,7 +8783,9 @@ export default function App() {
         } else if (payload.eventType === "DELETE") {
           setTasks(prev => prev.filter(t => t.id !== payload.old.id));
         }
-      }).subscribe();
+      }).subscribe((status) => {
+        console.log("[realtime tasks]", status);
+      });
 
     const usersChannel = supabase.channel("users-realtime-v11")
       .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
@@ -8852,22 +8826,23 @@ export default function App() {
     };
   }, [loading]);
 
-  // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout)
+  // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout).
+  // Server je vždy zdroj pravdy; lokální cache se používá jen v offline režimu.
   useEffect(() => {
     if (loading) return;
+    let lastRefreshAt = 0;
+    let inFlight = false;
     const onFocus = async () => {
-      // Načti localEdits z localStorage pro merge (echo prevention při refresh)
-      let localEdits = {};
-      try {
-        const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
-        const now = Date.now();
-        Object.entries(stored).forEach(([id, ts]) => {
-          if (now - ts < 120000) localEdits[id] = ts;
-        });
-      } catch (e) { /* ignore */ }
+      // Debounce: pokud jsme refreshovali v posledních 2s, skip.
+      // Brání tomu, aby se focus + visibilitychange + click vyvolaly multiple načtení.
+      const now = Date.now();
+      if (now - lastRefreshAt < 2000) return;
+      if (inFlight) return;
+      lastRefreshAt = now;
+      inFlight = true;
       try {
         const [freshTasks, freshComments] = await Promise.all([
-          apiLoadTasks(localEdits),
+          apiLoadTasks(),
           apiLoadComments(),
         ]);
         setTasks(freshTasks);
@@ -8877,14 +8852,18 @@ export default function App() {
         if (data) setCustomLists(data);
       } catch (e) {
         console.warn("Focus refresh failed:", e);
+      } finally {
+        inFlight = false;
       }
     };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", () => {
+    const onVisibility = () => {
       if (document.visibilityState === "visible") onFocus();
-    });
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [loading]);
 
@@ -8914,35 +8893,45 @@ export default function App() {
   }, [undoState]);
 
   const withUndo = useCallback((message, taskId, updater) => {
-    // Echo prevention + persist do localStorage pro refresh-resilience
+    // Echo prevention pro Realtime listener — když naše vlastní změna
+    // přijde zpět přes websocket, nepřepíšeme jí lokální stav.
+    // 1500ms okno pokrývá round-trip + Supabase Realtime broadcast latency.
     const now = Date.now();
     localEditsRef.current[taskId] = now;
     try {
       const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
       stored[taskId] = now;
-      // Vyčistit staré (>2 min — bezpečná rezerva pro pomalé sítě)
+      // Vyčistit staré (>30s — krátké okno, server = zdroj pravdy)
       const cleaned = {};
       Object.entries(stored).forEach(([id, ts]) => {
-        if (now - ts < 120000) cleaned[id] = ts;
+        if (now - ts < 30000) cleaned[id] = ts;
       });
       localStorage.setItem("ft_local_edits", JSON.stringify(cleaned));
     } catch (e) { /* ignore */ }
+
+    // Optimistický UI update
+    let updatedTask = null;
     setTasks(prev => {
       const next = updater(prev);
-      const updated = next.find(t => t.id === taskId);
-      if (updated) {
-        // AWAIT — počkáme na potvrzení serveru. Pokud refresh proběhne dřív, server už ví.
-        // Bez await byl race condition: smažeš → refresh → server stále staré → úkol zpět.
-        apiUpdateTask(updated).then(() => {
-          // Po DB write si zaznamenej znovu (cache je už aktuální)
-          localEditsRef.current[taskId] = Date.now();
-        });
-      }
+      updatedTask = next.find(t => t.id === taskId);
       setUndoState({ previousTasks: prev, message, taskId });
       clearTimeout(undoTimerRef.current);
       undoTimerRef.current = setTimeout(() => setUndoState(null), UNDO_MS);
       return next;
     });
+
+    // Asynchronní zápis na server (fire-and-forget — apiUpdateTask má offline queue fallback)
+    if (updatedTask) {
+      apiUpdateTask(updatedTask).then(() => {
+        // Obnov echo prevention timestamp po dokončení — chrání před pozdním echem
+        localEditsRef.current[taskId] = Date.now();
+        try {
+          const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
+          stored[taskId] = Date.now();
+          localStorage.setItem("ft_local_edits", JSON.stringify(stored));
+        } catch (e) { /* ignore */ }
+      });
+    }
   }, []);
 
   const addTask = useCallback(async (task) => {
