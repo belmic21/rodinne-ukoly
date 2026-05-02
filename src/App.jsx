@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Component } from "react";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 
 /* ═══════════════════════════════════════════════════════
@@ -926,9 +926,14 @@ async function apiCreateUser(user) {
 
 async function apiDeleteUser(name) {
   try {
-    await supabase.from("users").delete().eq("name", name);
+    const { error } = await supabase.from("users").delete().eq("name", name);
+    if (error) throw error;
   } catch (e) {
-    console.warn("apiDeleteUser failed offline");
+    if (isNetworkError(e)) {
+      console.warn("apiDeleteUser failed offline");
+    } else {
+      logServerError("apiDeleteUser", e, { name });
+    }
   }
 }
 
@@ -938,7 +943,11 @@ async function apiUpdateUserPin(name, newPin) {
     if (error) throw error;
     return true;
   } catch (e) {
-    console.error("apiUpdateUserPin failed:", e);
+    if (isNetworkError(e)) {
+      console.warn("apiUpdateUserPin failed offline");
+    } else {
+      logServerError("apiUpdateUserPin", e, { name });
+    }
     return false;
   }
 }
@@ -1040,11 +1049,16 @@ async function apiUpdateComment(comment) {
 
 async function apiDeleteComment(commentId) {
   try {
-    await supabase.from("task_comments").delete().eq("id", commentId);
+    const { error } = await supabase.from("task_comments").delete().eq("id", commentId);
+    if (error) throw error;
     const cached = cacheGet(CACHE_COMMENTS) || [];
     cacheSet(CACHE_COMMENTS, cached.filter(c => c.id !== commentId));
   } catch (e) {
-    console.warn("apiDeleteComment failed");
+    if (isNetworkError(e)) {
+      console.warn("apiDeleteComment failed offline");
+    } else {
+      logServerError("apiDeleteComment", e, { commentId });
+    }
   }
 }
 
@@ -8608,7 +8622,7 @@ function Snackbar({ message, onUndo, visible, theme }) {
    MAIN APP
    ═══════════════════════════════════════════════════════ */
 
-export default function App() {
+function App() {
   const [tasks, setTasks] = useState([]);
   const [customLists, setCustomLists] = useState([]);
   // Echo prevention — sleduje časy posledních lokálních editů taskID
@@ -8912,16 +8926,25 @@ export default function App() {
 
     const tasksChannel = supabase.channel("tasks-realtime-v12")
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setTasks(prev => prev.find(t => t.id === payload.new.id) ? prev : [dbToTask(payload.new), ...prev]);
-        } else if (payload.eventType === "UPDATE") {
-          // Echo prevention — pokud jsme task editovali v posledních 1500ms,
-          // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
-          const lastEdit = localEditsRef.current[payload.new.id] || 0;
-          if (Date.now() - lastEdit < 1500) return;
-          setTasks(prev => prev.map(t => t.id === payload.new.id ? dbToTask(payload.new) : t));
-        } else if (payload.eventType === "DELETE") {
-          setTasks(prev => prev.filter(t => t.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            const newTask = dbToTask(payload.new);
+            setTasks(prev => prev.find(t => t.id === newTask.id) ? prev : [newTask, ...prev]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            // Echo prevention — pokud jsme task editovali v posledních 1500ms,
+            // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
+            const lastEdit = localEditsRef.current[payload.new.id] || 0;
+            if (Date.now() - lastEdit < 1500) return;
+            const updatedTask = dbToTask(payload.new);
+            setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setTasks(prev => prev.filter(t => t.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime tasks] handler error:", e, payload);
         }
       }).subscribe((status) => {
         console.log("[realtime tasks]", status);
@@ -8930,7 +8953,7 @@ export default function App() {
 
     const usersChannel = supabase.channel("users-realtime-v11")
       .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
-        apiLoadUsers().then(setUsers);
+        apiLoadUsers().then(setUsers).catch(e => console.warn("[realtime users] reload failed:", e));
       }).subscribe((status) => {
         console.log("[realtime users]", status);
       });
@@ -8938,15 +8961,24 @@ export default function App() {
 
     const commentsChannel = supabase.channel("comments-realtime-v12")
       .on("postgres_changes", { event: "*", schema: "public", table: "task_comments" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setComments(prev => prev.find(c => c.id === payload.new.id) ? prev : [...prev, dbToComment(payload.new)]);
-        } else if (payload.eventType === "UPDATE") {
-          // Echo prevention — pokud jsme tento komentář editovali v posledních 1500ms, ignoruj
-          const lastEdit = localCommentEditsRef.current[payload.new.id] || 0;
-          if (Date.now() - lastEdit < 1500) return;
-          setComments(prev => prev.map(c => c.id === payload.new.id ? dbToComment(payload.new) : c));
-        } else if (payload.eventType === "DELETE") {
-          setComments(prev => prev.filter(c => c.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            const newComment = dbToComment(payload.new);
+            setComments(prev => prev.find(c => c.id === newComment.id) ? prev : [...prev, newComment]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            // Echo prevention — pokud jsme tento komentář editovali v posledních 1500ms, ignoruj
+            const lastEdit = localCommentEditsRef.current[payload.new.id] || 0;
+            if (Date.now() - lastEdit < 1500) return;
+            const updatedComment = dbToComment(payload.new);
+            setComments(prev => prev.map(c => c.id === updatedComment.id ? updatedComment : c));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setComments(prev => prev.filter(c => c.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime comments] handler error:", e, payload);
         }
       }).subscribe((status) => {
         console.log("[realtime comments]", status);
@@ -8956,12 +8988,19 @@ export default function App() {
     // Custom lists realtime
     const listsChannel = supabase.channel("custom-lists-realtime-v1")
       .on("postgres_changes", { event: "*", schema: "public", table: "custom_lists" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setCustomLists(prev => prev.find(l => l.id === payload.new.id) ? prev : [...prev, payload.new]);
-        } else if (payload.eventType === "UPDATE") {
-          setCustomLists(prev => prev.map(l => l.id === payload.new.id ? payload.new : l));
-        } else if (payload.eventType === "DELETE") {
-          setCustomLists(prev => prev.filter(l => l.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            setCustomLists(prev => prev.find(l => l.id === payload.new.id) ? prev : [...prev, payload.new]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            setCustomLists(prev => prev.map(l => l.id === payload.new.id ? payload.new : l));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setCustomLists(prev => prev.filter(l => l.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime lists] handler error:", e, payload);
         }
       }).subscribe((status) => {
         console.log("[realtime lists]", status);
@@ -9286,20 +9325,32 @@ export default function App() {
     }));
   }, [tasks, withUndo]);
 
-  // Permanently remove tasks in trash older than 30 days
+  // Permanently remove tasks in trash older than 30 days.
+  // Používáme ref pro aktuální tasks, aby se interval vytvořil jen jednou
+  // (původní `[tasks]` dep způsobil, že interval se restartoval při každé změně,
+  // takže 1h timer fakticky nikdy nedoběhl a cleanup neprobíhal).
+  const tasksRef = useRef(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   useEffect(() => {
     const cleanup = setInterval(async () => {
       const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const toDelete = tasks.filter(t =>
+      const toDelete = tasksRef.current.filter(t =>
         t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() < cutoff
       );
       for (const task of toDelete) {
-        await supabase.from("tasks").delete().eq("id", task.id);
-        setTasks(prev => prev.filter(t => t.id !== task.id));
+        try {
+          const { error } = await supabase.from("tasks").delete().eq("id", task.id);
+          if (error) throw error;
+          setTasks(prev => prev.filter(t => t.id !== task.id));
+        } catch (e) {
+          if (!isNetworkError(e)) {
+            logServerError("permanentDelete (30d cleanup)", e, { id: task.id });
+          }
+        }
       }
     }, 3600000); // Check every hour
     return () => clearInterval(cleanup);
-  }, [tasks]);
+  }, []);
 
   // Tick každých 30s — pro fade animaci recently added úkolů (5 min retention)
   useEffect(() => {
@@ -9333,8 +9384,24 @@ export default function App() {
   }, []);
 
   const permanentlyDeleteTask = useCallback(async (taskId) => {
-    setTasks(prev => prev.filter(t => t.id !== taskId));
-    await supabase.from("tasks").delete().eq("id", taskId);
+    // Optimistický update — drž zálohu pro případ rollback při server chybě
+    let backup = null;
+    setTasks(prev => {
+      backup = prev.find(t => t.id === taskId) || null;
+      return prev.filter(t => t.id !== taskId);
+    });
+    try {
+      const { error } = await supabase.from("tasks").delete().eq("id", taskId);
+      if (error) throw error;
+    } catch (e) {
+      if (isNetworkError(e)) {
+        console.warn("permanentlyDeleteTask offline — aplikováno lokálně, server se posune při příštím flush");
+      } else {
+        logServerError("permanentlyDeleteTask", e, { taskId });
+        // Server odmítl — vrať úkol zpět do UI
+        if (backup) setTasks(prev => prev.find(t => t.id === taskId) ? prev : [backup, ...prev]);
+      }
+    }
   }, []);
 
   const restoreTask = useCallback((taskId) => {
@@ -11217,5 +11284,163 @@ export default function App() {
         theme={theme}
       />
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   ERROR BOUNDARY — last line of defense
+   Když kdekoli v render tree vyletí výjimka, místo bílé stránky
+   ukáže recovery screen s tlačítkem Reload + diagnostické info.
+   ═══════════════════════════════════════════════════════ */
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("[ErrorBoundary] caught:", error);
+    console.error("[ErrorBoundary] component stack:", errorInfo?.componentStack);
+    this.setState({ errorInfo });
+    // Zaznamenej do localStorage pro pozdější diagnostiku (max 5 posledních)
+    try {
+      const log = JSON.parse(localStorage.getItem("ft_render_errors") || "[]");
+      log.unshift({
+        ts: new Date().toISOString(),
+        message: error?.message || String(error),
+        stack: error?.stack || null,
+        componentStack: errorInfo?.componentStack || null,
+      });
+      localStorage.setItem("ft_render_errors", JSON.stringify(log.slice(0, 5)));
+    } catch (e) { /* ignore */ }
+  }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  handleClearAndReload = () => {
+    // Nuclear option — vyčistí cache (ne PIN/přihlášení) a reload.
+    // Užitečné, pokud cache je v rozbitém stavu.
+    try {
+      localStorage.removeItem("ft_cache_tasks");
+      localStorage.removeItem("ft_cache_users");
+      localStorage.removeItem("ft_cache_comments");
+      localStorage.removeItem("ft_offline_queue");
+    } catch (e) { /* ignore */ }
+    window.location.reload();
+  };
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    const errorMsg = this.state.error?.message || String(this.state.error);
+    const stack = this.state.error?.stack || "";
+    const componentStack = this.state.errorInfo?.componentStack || "";
+
+    return (
+      <div style={{
+        minHeight: "100vh",
+        background: "#fef2f2",
+        color: "#1f2937",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        padding: "24px",
+        boxSizing: "border-box",
+      }}>
+        <div style={{
+          maxWidth: 640,
+          margin: "0 auto",
+          background: "white",
+          borderRadius: 12,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+          padding: 24,
+        }}>
+          <div style={{ fontSize: 48, textAlign: "center", marginBottom: 8 }}>⚠️</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, textAlign: "center", margin: "0 0 8px" }}>
+            Něco se rozbilo
+          </h1>
+          <p style={{ textAlign: "center", color: "#6b7280", margin: "0 0 20px", fontSize: 14 }}>
+            Aplikace narazila na neočekávanou chybu. Zkus jedno z těchto řešení:
+          </p>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+            <button
+              onClick={this.handleReload}
+              style={{
+                padding: "12px 16px",
+                background: "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 16,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              🔄 Načíst znovu
+            </button>
+            <button
+              onClick={this.handleClearAndReload}
+              style={{
+                padding: "12px 16px",
+                background: "#f3f4f6",
+                color: "#1f2937",
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              🧹 Vyčistit cache a načíst znovu
+            </button>
+          </div>
+
+          <details style={{ fontSize: 12, color: "#6b7280" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
+              Technické detaily (pošli Michalovi)
+            </summary>
+            <div style={{
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+              padding: 12,
+              marginTop: 8,
+              fontFamily: "ui-monospace, monospace",
+              fontSize: 11,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 300,
+              overflow: "auto",
+            }}>
+              <div style={{ fontWeight: 700, color: "#dc2626" }}>{errorMsg}</div>
+              {stack && <div style={{ marginTop: 8, opacity: 0.75 }}>{stack}</div>}
+              {componentStack && (
+                <div style={{ marginTop: 8, opacity: 0.6 }}>
+                  <div style={{ fontWeight: 600 }}>Component stack:</div>
+                  {componentStack}
+                </div>
+              )}
+            </div>
+          </details>
+
+          <p style={{ fontSize: 11, color: "#9ca3af", textAlign: "center", marginTop: 16 }}>
+            © 2026 Michal Bělohlav
+          </p>
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }
