@@ -8380,7 +8380,7 @@ function NotificationPanel({ currentUser, onClose, theme }) {
   );
 }
 
-function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme }) {
+function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks = [], comments = [], currentUser }) {
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
   // Per-user state pro reset PIN dialog
@@ -8389,6 +8389,10 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme }) {
   const [newPinInput, setNewPinInput] = useState("");
   const [resetMessage, setResetMessage] = useState(null); // { name, pin } po úspěšném resetu
   const [savingFor, setSavingFor] = useState(null);
+  // Delete user dialog state
+  const [deletingUser, setDeletingUser] = useState(null); // string: jméno uživatele co se právě maže
+  const [deleteAction, setDeleteAction] = useState("transfer_me"); // transfer_me | transfer_other | delete
+  const [deleteTransferTo, setDeleteTransferTo] = useState("");
 
   const generateRandomPin = () => {
     return String(Math.floor(1000 + Math.random() * 9000));
@@ -8505,9 +8509,9 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme }) {
                   }}>🔑 Reset</button>
                   {!u.admin && (
                     <button onClick={() => {
-                      if (confirm(`Opravdu chceš odebrat uživatele "${u.name}"? Jeho úkoly zůstanou.`)) {
-                        onRemove(u.name);
-                      }
+                      setDeletingUser(u.name);
+                      setDeleteAction("transfer_me");
+                      setDeleteTransferTo("");
                     }} style={{
                       background: "none", border: "none", color: theme.red,
                       fontSize: "11px", cursor: "pointer", fontFamily: FONT, fontWeight: 600,
@@ -8593,6 +8597,154 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme }) {
           background: theme.accent, color: "#fff", fontSize: "14px",
         }}>+</button>
       </div>
+
+      {/* Delete user confirmation dialog */}
+      {deletingUser && (() => {
+        const user = users.find(u => u.name === deletingUser);
+        if (!user) return null;
+        // Spočítat dopad
+        const tasksCreated = tasks.filter(t => t.createdBy === deletingUser).length;
+        const tasksAssigned = tasks.filter(t => t.assignedTo?.includes(deletingUser)).length;
+        const userComments = comments.filter(c => c.author === deletingUser).length;
+        const otherUsers = users.filter(u => u.name !== deletingUser);
+        const close = () => { setDeletingUser(null); setDeleteAction("transfer_me"); setDeleteTransferTo(""); };
+        const confirm = () => {
+          let transferTo = null;
+          if (deleteAction === "transfer_me") transferTo = currentUser?.name;
+          else if (deleteAction === "transfer_other") transferTo = deleteTransferTo;
+          // deleteAction === "delete" → transferTo zůstává null
+          onRemove(deletingUser, { action: deleteAction, transferTo });
+          close();
+        };
+        return (
+          <div onClick={close} style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 200, padding: 16,
+          }}>
+            <div onClick={e => e.stopPropagation()} style={{
+              background: theme.cardBg, borderRadius: 12,
+              border: `1px solid ${theme.cardBorder}`,
+              maxWidth: 480, width: "100%", maxHeight: "90vh", overflowY: "auto",
+              boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
+            }}>
+              <div style={{
+                padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+                fontSize: 15, fontWeight: 700, color: theme.text,
+              }}>
+                Smazat uživatele „{deletingUser}"
+              </div>
+
+              <div style={{ padding: 16, color: theme.text, fontSize: 13 }}>
+                {(tasksCreated + tasksAssigned + userComments) > 0 ? (
+                  <>
+                    <div style={{ marginBottom: 12, color: theme.textMid }}>
+                      Tento uživatel má v systému:
+                    </div>
+                    <ul style={{ margin: "0 0 16px", paddingLeft: 22, lineHeight: 1.6 }}>
+                      {tasksCreated > 0 && <li><strong>{tasksCreated}</strong> úkolů, které vytvořil</li>}
+                      {tasksAssigned > 0 && <li><strong>{tasksAssigned}</strong> úkolů, které mu byly přiřazeny</li>}
+                      {userComments > 0 && <li><strong>{userComments}</strong> komentářů</li>}
+                    </ul>
+                    <div style={{ marginBottom: 10, fontWeight: 600 }}>
+                      Co s nimi chceš udělat?
+                    </div>
+                    <label style={{
+                      display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px",
+                      borderRadius: 8, cursor: "pointer",
+                      background: deleteAction === "transfer_me" ? `${theme.accent}15` : "transparent",
+                      border: `1px solid ${deleteAction === "transfer_me" ? theme.accent : theme.cardBorder}`,
+                      marginBottom: 6,
+                    }}>
+                      <input type="radio" name="del-action" checked={deleteAction === "transfer_me"}
+                        onChange={() => setDeleteAction("transfer_me")} style={{ marginTop: 3 }} />
+                      <div>
+                        <div style={{ fontWeight: 600 }}>Převést na mě ({currentUser?.name})</div>
+                        <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
+                          Úkoly + komentáře se přepíšou tak, že tě budou označovat jako autora/vlastníka.
+                        </div>
+                      </div>
+                    </label>
+
+                    {otherUsers.length > 1 && (
+                      <label style={{
+                        display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px",
+                        borderRadius: 8, cursor: "pointer",
+                        background: deleteAction === "transfer_other" ? `${theme.accent}15` : "transparent",
+                        border: `1px solid ${deleteAction === "transfer_other" ? theme.accent : theme.cardBorder}`,
+                        marginBottom: 6,
+                      }}>
+                        <input type="radio" name="del-action" checked={deleteAction === "transfer_other"}
+                          onChange={() => setDeleteAction("transfer_other")} style={{ marginTop: 3 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600 }}>Převést na jiného uživatele</div>
+                          {deleteAction === "transfer_other" && (
+                            <select value={deleteTransferTo}
+                              onChange={e => setDeleteTransferTo(e.target.value)}
+                              style={{
+                                marginTop: 6, padding: "6px 10px", fontSize: 13,
+                                border: `1px solid ${theme.inputBorder}`, borderRadius: 6,
+                                background: theme.inputBg, color: theme.text, width: "100%",
+                              }}>
+                              <option value="">— vyber uživatele —</option>
+                              {otherUsers.filter(u => u.name !== deletingUser).map(u =>
+                                <option key={u.name} value={u.name}>{u.name}</option>
+                              )}
+                            </select>
+                          )}
+                        </div>
+                      </label>
+                    )}
+
+                    <label style={{
+                      display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px",
+                      borderRadius: 8, cursor: "pointer",
+                      background: deleteAction === "delete" ? `${theme.red}15` : "transparent",
+                      border: `1px solid ${deleteAction === "delete" ? theme.red : theme.cardBorder}`,
+                    }}>
+                      <input type="radio" name="del-action" checked={deleteAction === "delete"}
+                        onChange={() => setDeleteAction("delete")} style={{ marginTop: 3 }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: theme.red }}>Smazat všechny úkoly a komentáře</div>
+                        <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
+                          ⚠️ Nevratné! Všechno smažeme z databáze, ne jen do koše.
+                        </div>
+                      </div>
+                    </label>
+                  </>
+                ) : (
+                  <div style={{ color: theme.textMid }}>
+                    Tento uživatel nemá žádné úkoly ani komentáře. Po odebrání zmizí beze stopy.
+                  </div>
+                )}
+              </div>
+
+              <div style={{
+                padding: 12, borderTop: `1px solid ${theme.cardBorder}`,
+                display: "flex", gap: 8, justifyContent: "flex-end",
+              }}>
+                <button onClick={close} style={{
+                  ...buttonStyle(), padding: "8px 14px", fontSize: 13,
+                  background: "transparent", color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                }}>Zrušit</button>
+                <button
+                  onClick={confirm}
+                  disabled={deleteAction === "transfer_other" && !deleteTransferTo}
+                  style={{
+                    ...buttonStyle(), padding: "8px 14px", fontSize: 13, fontWeight: 700,
+                    background: deleteAction === "delete" ? theme.red : theme.accent,
+                    color: "#fff",
+                    opacity: (deleteAction === "transfer_other" && !deleteTransferTo) ? 0.5 : 1,
+                    cursor: (deleteAction === "transfer_other" && !deleteTransferTo) ? "not-allowed" : "pointer",
+                  }}>
+                  {deleteAction === "delete" ? "Smazat vše" : "Převést a odebrat"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -10918,8 +11070,93 @@ function App() {
         {showAdmin && currentUser.admin && (
           <AdminPanel
             users={users}
+            tasks={tasks}
+            comments={comments}
+            currentUser={currentUser}
             onAdd={async u => apiCreateUser(u)}
-            onRemove={async n => apiDeleteUser(n)}
+            onRemove={async (name, options) => {
+              // options = { action: "transfer_me" | "transfer_other" | "delete", transferTo: string|null }
+              const { action, transferTo } = options || { action: "transfer_me", transferTo: currentUser.name };
+
+              if (action === "delete") {
+                // Smazat všechny úkoly tohoto uživatele (kde je autor) a všechny komentáře
+                const tasksToDelete = tasks.filter(t => t.createdBy === name).map(t => t.id);
+                const commentsToDelete = comments.filter(c => c.author === name).map(c => c.id);
+                // Sequential delete (bezpečně)
+                for (const id of tasksToDelete) {
+                  try {
+                    const { error } = await supabase.from("tasks").delete().eq("id", id);
+                    if (error) throw error;
+                  } catch (e) {
+                    if (!isNetworkError(e)) logServerError("deleteUser:task", e, { id });
+                  }
+                }
+                for (const id of commentsToDelete) {
+                  try {
+                    const { error } = await supabase.from("task_comments").delete().eq("id", id);
+                    if (error) throw error;
+                  } catch (e) {
+                    if (!isNetworkError(e)) logServerError("deleteUser:comment", e, { id });
+                  }
+                }
+                // Také odebrat ze všech assigned_to polí (kde uživatel byl spolupracovník)
+                const tasksWithAssign = tasks.filter(t => t.assignedTo?.includes(name) && t.createdBy !== name);
+                for (const t of tasksWithAssign) {
+                  const newAssigned = t.assignedTo.filter(n => n !== name);
+                  await apiUpdateTask({ ...t, assignedTo: newAssigned });
+                }
+                // Refresh local stav
+                setTasks(prev => prev.filter(t => !tasksToDelete.includes(t.id)).map(t => {
+                  if (t.assignedTo?.includes(name)) {
+                    return { ...t, assignedTo: t.assignedTo.filter(n => n !== name) };
+                  }
+                  return t;
+                }));
+                setComments(prev => prev.filter(c => !commentsToDelete.includes(c.id)));
+              } else {
+                // Transfer mode — přesměrovat všechno na transferTo
+                if (!transferTo) return;
+                // 1) Úkoly kde byl autorem → změnit created_by
+                const tasksAsAuthor = tasks.filter(t => t.createdBy === name);
+                for (const t of tasksAsAuthor) {
+                  const updated = { ...t, createdBy: transferTo };
+                  // assignedTo: pokud obsahoval mazaného, nahradit transferTo
+                  if (t.assignedTo?.includes(name)) {
+                    const newAssigned = [...new Set(t.assignedTo.map(n => n === name ? transferTo : n))];
+                    updated.assignedTo = newAssigned;
+                  }
+                  await apiUpdateTask(updated);
+                }
+                // 2) Úkoly kde byl jen v assigned_to → odebrat ho a přidat transferTo (pokud tam ještě není)
+                const tasksAssignedOnly = tasks.filter(t => t.createdBy !== name && t.assignedTo?.includes(name));
+                for (const t of tasksAssignedOnly) {
+                  const newAssigned = [...new Set(t.assignedTo.map(n => n === name ? transferTo : n))];
+                  await apiUpdateTask({ ...t, assignedTo: newAssigned });
+                }
+                // 3) Komentáře → změnit author
+                const userComments = comments.filter(c => c.author === name);
+                for (const c of userComments) {
+                  await apiUpdateComment({ ...c, author: transferTo });
+                }
+                // Refresh local stav
+                setTasks(prev => prev.map(t => {
+                  let updated = t;
+                  if (t.createdBy === name) updated = { ...updated, createdBy: transferTo };
+                  if (t.assignedTo?.includes(name)) {
+                    const newAssigned = [...new Set(t.assignedTo.map(n => n === name ? transferTo : n))];
+                    updated = { ...updated, assignedTo: newAssigned };
+                  }
+                  return updated;
+                }));
+                setComments(prev => prev.map(c =>
+                  c.author === name ? { ...c, author: transferTo } : c
+                ));
+              }
+
+              // Po dokončení převodu/smazání: smazat samotného uživatele
+              await apiDeleteUser(name);
+              setUsers(prev => prev.filter(u => u.name !== name));
+            }}
             onResetPin={async (name, newPin) => {
               const ok = await apiUpdateUserPin(name, newPin);
               if (ok) {
