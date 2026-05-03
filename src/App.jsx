@@ -4601,7 +4601,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   ];
 
   return (
-    <div ref={containerRef} style={{ marginBottom: "14px" }}>
+    <div ref={containerRef} style={{ marginBottom: "4px" }}>
       {/* Always visible quick input. V complex módu se pole stane "hint" - uživatel zadá název dole.  */}
       <div style={{
         ...cardStyle(theme), padding: "6px 8px",
@@ -10867,7 +10867,7 @@ function App() {
       )}
 
       {/* ── Content ── */}
-      <div style={{ maxWidth: "560px", margin: "0 auto", padding: "14px 12px 140px" }}>
+      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "4px 12px 140px" }}>
 
         {showAdmin && currentUser.admin && (
           <AdminPanel
@@ -12066,11 +12066,11 @@ function App() {
         <div style={{
           marginTop: "20px", padding: "14px 8px",
           textAlign: "center",
-          fontSize: "11px", color: theme.textSub,
+          fontSize: "13px", color: theme.textSub,
           fontFamily: FONT,
-          opacity: 0.85,
+          opacity: 0.95,
           userSelect: "none",
-          fontWeight: 500,
+          fontWeight: 600,
         }}>
           © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
         </div>
