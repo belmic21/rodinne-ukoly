@@ -9081,21 +9081,21 @@ function App() {
   const stickyWrapperRef = useRef(null);
   // Header ref + dynamicky měřená výška — sticky wrapper potřebuje vědět,
   // jak vysoký je header, aby se mohl přilepit přesně pod ním (top: headerHeight).
-  // Statická hodnota nestačila — skutečná výška kolísá podle obsahu (offline badge atd).
-  // useLayoutEffect zajistí synchronní měření před paintem (žádný flash s špatnou pozicí).
+  // useLayoutEffect zajistí synchronní měření před paintem.
+  // Závislost `currentUser` — header existuje v DOM až po loginu, jinak `headerRef.current` je null.
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(0);
   useLayoutEffect(() => {
     if (!headerRef.current) return;
     const measure = () => {
       const h = headerRef.current?.offsetHeight || 0;
-      setHeaderHeight(h);
+      if (h > 0) setHeaderHeight(h);
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(headerRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [currentUser]);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
