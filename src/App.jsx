@@ -7,6 +7,35 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
 
 const UNDO_MS = 5000;
 
+// Verze aplikace — odvozená z build timestampu (Vite define) nebo z env.
+// Pokud není nastaveno v vite.config.js (define: { __BUILD_TIME__: ... }),
+// fallback ukáže "dev". Zobrazuje se ve formátu "26-05-02 19:48".
+function getAppVersion() {
+  try {
+    // eslint-disable-next-line no-undef
+    if (typeof __BUILD_TIME__ !== "undefined" && __BUILD_TIME__) {
+      const d = new Date(__BUILD_TIME__);
+      if (!isNaN(d.getTime())) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${String(d.getFullYear()).slice(2)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  // Fallback: pokus o env var
+  try {
+    const envBuild = import.meta.env?.VITE_BUILD_TIME;
+    if (envBuild) {
+      const d = new Date(envBuild);
+      if (!isNaN(d.getTime())) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${String(d.getFullYear()).slice(2)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return "dev";
+}
+const APP_VERSION = getAppVersion();
+
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
   { id: "important", label: "Důležité",    sym: "!",  weight: 1 },
@@ -331,14 +360,117 @@ function getPredictions(tasks, currentUserName) {
   return { topVerbs, topPhrases };
 }
 
-function searchMatch(task, query) {
+// Smart search syntax:
+//   priority:urgent | high | important | low      (a synonyma: !, !!)
+//   due:today | tomorrow | week | month | overdue | none
+//   assigned:<jméno>                              (kontrola assignTo + assignedTo, case-insensitive)
+//   status:active | done | deleted | parked
+//   list:<id|název>                               (custom list — porovnává s task.category)
+//   category:<id|název>                           (alias k list:)
+//   Plain text                                    (full-text v title/note/checklist)
+//   Můžeš kombinovat: "!high due:today rozbitý"   (AND mezi tokeny, plain text se hledá ve zbytku)
+function parseSearchQuery(query) {
+  if (!query || !query.trim()) return { tokens: [], plainText: "" };
+  const tokens = [];
+  const plainParts = [];
+  // Split na "slova" — operátor:hodnota nebo plain text. Hodnoty s mezerou nepodporujeme (zatím).
+  const parts = query.trim().split(/\s+/);
+  for (const part of parts) {
+    const m = part.match(/^([a-zA-Z]+):(.+)$/);
+    if (m) {
+      tokens.push({ key: m[1].toLowerCase(), value: m[2].toLowerCase() });
+    } else if (part.startsWith("!")) {
+      // Zkratka: !urgent => priority:urgent, !!:urgent
+      const v = part.replace(/^!+/, "");
+      tokens.push({ key: "priority", value: v ? v.toLowerCase() : "urgent" });
+    } else if (part.startsWith("@")) {
+      tokens.push({ key: "assigned", value: part.slice(1).toLowerCase() });
+    } else if (part.startsWith("#")) {
+      tokens.push({ key: "list", value: part.slice(1).toLowerCase() });
+    } else {
+      plainParts.push(part);
+    }
+  }
+  return { tokens, plainText: plainParts.join(" ").toLowerCase() };
+}
+
+function matchesPriorityToken(taskPriority, value) {
+  const p = (taskPriority || "").toLowerCase();
+  // Synonyma
+  if (value === "urgent" || value === "high" || value === "akutní" || value === "akutni") return p === "urgent";
+  if (value === "important" || value === "med" || value === "důležité" || value === "dulezite") return p === "important";
+  if (value === "low" || value === "nedůležité" || value === "nedulezite") return p === "low";
+  return p === value;
+}
+
+function matchesDueToken(task, value, todayStr) {
+  const due = task.dueDate;
+  if (value === "none" || value === "žádný" || value === "zadny") return !due;
+  if (!due) return false;
+  const today = new Date(todayStr);
+  const dueDate = new Date(due);
+  const diffDays = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+  if (value === "today" || value === "dnes") return diffDays === 0;
+  if (value === "tomorrow" || value === "zítra" || value === "zitra") return diffDays === 1;
+  if (value === "week" || value === "týden" || value === "tyden") return diffDays >= 0 && diffDays <= 7;
+  if (value === "month" || value === "měsíc" || value === "mesic") return diffDays >= 0 && diffDays <= 31;
+  if (value === "overdue" || value === "po" || value === "prošlé" || value === "prosle") {
+    return diffDays < 0 && task.status === "active";
+  }
+  return false;
+}
+
+function searchMatch(task, query, customLists = []) {
   if (!query) return true;
-  const lower = query.toLowerCase();
-  return (
-    task.title?.toLowerCase().includes(lower) ||
-    task.note?.toLowerCase().includes(lower) ||
-    task.checklist?.some(c => c.text?.toLowerCase().includes(lower))
-  );
+  const { tokens, plainText } = parseSearchQuery(query);
+
+  // todayStr pro due: token (lokální půlnoc)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString();
+
+  // Token AND check
+  for (const { key, value } of tokens) {
+    if (key === "priority" || key === "p" || key === "pri") {
+      if (!matchesPriorityToken(task.priority, value)) return false;
+    } else if (key === "due" || key === "d") {
+      if (!matchesDueToken(task, value, todayStr)) return false;
+    } else if (key === "assigned" || key === "for" || key === "to") {
+      const v = value;
+      const assignTo = (task.assignTo || "").toLowerCase();
+      const assignedTo = Array.isArray(task.assignedTo) ? task.assignedTo : [];
+      const matches = assignTo.includes(v)
+        || assignedTo.some(name => (name || "").toLowerCase().includes(v));
+      if (!matches) return false;
+    } else if (key === "status" || key === "s") {
+      const taskStatus = (task.status || "").toLowerCase();
+      if (value === "parked") {
+        if (!task.parkedReason) return false;
+      } else if (taskStatus !== value) {
+        return false;
+      }
+    } else if (key === "list" || key === "category" || key === "cat" || key === "l") {
+      const cat = (task.category || "").toLowerCase();
+      // Pokus o match dle ID nebo dle názvu custom listu
+      const matchById = cat === value;
+      const matchByName = customLists.some(l =>
+        l.id?.toLowerCase() === cat && (l.name || "").toLowerCase().includes(value)
+      );
+      if (!matchById && !matchByName) return false;
+    }
+    // Neznámé tokeny ignoruj (mohou být plain text s ":" — fallback níže)
+  }
+
+  // Plain text full-text
+  if (plainText) {
+    const matches =
+      task.title?.toLowerCase().includes(plainText) ||
+      task.note?.toLowerCase().includes(plainText) ||
+      task.checklist?.some(c => c.text?.toLowerCase().includes(plainText));
+    if (!matches) return false;
+  }
+
+  return true;
 }
 
 function smartSort(a, b) {
@@ -3199,6 +3331,110 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
 }
 
 /* ═══════════════════════════════════════════════════════
+   BULK SELECTABLE CARD WRAPPER
+   Obaluje TaskCard. V bulk mode zachytává kliky pro toggle,
+   v normálním režimu propouští interakci na TaskCard.
+   Long-press (650ms) na kartě aktivuje bulk mode.
+   ═══════════════════════════════════════════════════════ */
+
+function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPress, theme, children }) {
+  const longPressTimerRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
+
+  const handlePointerDown = (e) => {
+    // Pravé tlačítko myši a touch s víc prsty ignoruj
+    if (e.button === 2) return;
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      // Haptic feedback (jen na zařízeních co to podporují)
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (_) { /* ignore */ }
+      onLongPress(taskId);
+    }, 650);
+  };
+
+  const handlePointerUp = () => {
+    clearTimeout(longPressTimerRef.current);
+  };
+
+  const handlePointerCancel = () => {
+    clearTimeout(longPressTimerRef.current);
+  };
+
+  // V bulk mode: klik = toggle. Long-press uvnitř kartu nepropustíme dolů.
+  const handleClick = (e) => {
+    if (longPressTriggeredRef.current) {
+      // Tento klik byl důsledek long-press → polkni ho, nepouštěj na kartu
+      e.stopPropagation();
+      e.preventDefault();
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (bulkMode) {
+      e.stopPropagation();
+      e.preventDefault();
+      onToggle(taskId);
+    }
+  };
+
+  // Klávesnice / Ctrl+klik na desktopu jako alternativa long-pressu
+  const handleMouseDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && !bulkMode) {
+      e.stopPropagation();
+      e.preventDefault();
+      onLongPress(taskId);
+    }
+  };
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerCancel}
+      onClickCapture={handleClick}
+      onMouseDownCapture={handleMouseDown}
+      style={{
+        position: "relative",
+        // V bulk mode zvýrazni vybrané karty
+        outline: bulkMode && isSelected ? `2px solid #3b82f6` : "none",
+        outlineOffset: bulkMode && isSelected ? -2 : 0,
+        borderRadius: bulkMode && isSelected ? 12 : 0,
+        transition: "outline-color 0.15s",
+        // V bulk mode zakázat text-selection (long-press by jinak vybral text)
+        userSelect: bulkMode ? "none" : "auto",
+        WebkitUserSelect: bulkMode ? "none" : "auto",
+      }}
+    >
+      {bulkMode && (
+        <div style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          zIndex: 5,
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          background: isSelected ? "#3b82f6" : theme.cardBg,
+          border: `2px solid ${isSelected ? "#3b82f6" : theme.cardBorder}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "white",
+          fontSize: 14,
+          fontWeight: 700,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+          pointerEvents: "none",
+        }}>
+          {isSelected ? "✓" : ""}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
@@ -3916,12 +4152,40 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 ✓ {formatTimeTrace(task.completedAt)}{task.completedByUser ? ` — ${task.completedByUser}` : ""}
               </span>
             )}
-            {/* Time trace for deleted */}
-            {isDeleted(task) && task.deletedAt && (
-              <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600 }}>
-                🗑 {formatTimeTrace(task.deletedAt)}
-              </span>
-            )}
+            {/* Time trace for deleted + countdown to permanent deletion */}
+            {isDeleted(task) && task.deletedAt && (() => {
+              const ageDays = (Date.now() - new Date(task.deletedAt).getTime()) / (1000 * 60 * 60 * 24);
+              const daysLeft = Math.max(0, Math.ceil(30 - ageDays));
+              const isUrgent = daysLeft <= 7;
+              return (
+                <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  🗑 {formatTimeTrace(task.deletedAt)}
+                  {daysLeft > 0 ? (
+                    <span style={{
+                      fontSize: "10px",
+                      color: isUrgent ? theme.red : theme.textMid,
+                      background: isUrgent ? "rgba(239,68,68,0.1)" : theme.inputBg,
+                      padding: "1px 6px",
+                      borderRadius: 8,
+                      fontWeight: 600,
+                    }}>
+                      {isUrgent ? "⏰ " : ""}smaže se za {daysLeft}{daysLeft === 1 ? " den" : daysLeft < 5 ? " dny" : " dní"}
+                    </span>
+                  ) : (
+                    <span style={{
+                      fontSize: "10px",
+                      color: theme.red,
+                      background: "rgba(239,68,68,0.15)",
+                      padding: "1px 6px",
+                      borderRadius: 8,
+                      fontWeight: 700,
+                    }}>
+                      ⚠ smaže se brzy
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
             {/* Progress indicator — this card shows a completed checklist item */}
             {progressItem && (
               <span style={{
@@ -6454,13 +6718,23 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    SEARCH SHEET — full-screen vyhledávání
    ═══════════════════════════════════════════════════════ */
 
-function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate }) {
+function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, onClose, onNavigate }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
 
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 100);
   }, []);
+
+  // Detekce smart search syntax — pokud query obsahuje operátor (klíč:hodnota),
+  // zkratky (!high, @pavla, #nákup) nebo je delší kombinace tokenů,
+  // delegujeme na shared `searchMatch` funkci. Jinak použijeme původní fuzzy search
+  // (s diakritikou-insensitive normalizací).
+  const isSmartQuery = useMemo(() => {
+    const q = (query || "").trim();
+    if (!q) return false;
+    return /(\b[a-zA-Z]+:[\S]+)|(^!)|(\s!)|(^@)|(\s@)|(^#)|(\s#)/.test(q);
+  }, [query]);
 
   const results = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
@@ -6470,26 +6744,28 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
     const userNameLc = (currentUser.name || "").trim().toLowerCase();
     return tasks
       .filter(t => {
-        // Search hledá ve VŠECH úkolech — i v koši, splněné, plánované.
         // Privacy filter — search vždy ukazuje jen úkoly relevantní pro currentUser
         // (autor nebo přiřazen), bez ohledu na admin flag
         const createdByLc = (t.createdBy || "").trim().toLowerCase();
         const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
         const isMine = createdByLc === userNameLc || assignedToLc.includes(userNameLc);
         if (!isMine) return false;
-        // Match na title
+
+        // Smart query — operátorová syntaxe (priority:high, due:today, ...)
+        if (isSmartQuery) {
+          return searchMatch(t, query, customLists);
+        }
+
+        // Fallback: fuzzy plain text search s diakritikou
         if (norm(t.title).includes(qNorm)) return true;
-        // Match na poznámku
         if (t.note && norm(t.note).includes(qNorm)) return true;
-        // Match na checklist
         if ((t.checklist || []).some(item => norm(item.text).includes(qNorm))) return true;
-        // Match na komentáře (poprvé najdi komentář pro tenhle task)
         const taskComments = comments.filter(c => c.taskId === t.id);
         if (taskComments.some(c => c.content && norm(c.content).includes(qNorm))) return true;
         return false;
       })
       .slice(0, 30);
-  }, [tasks, comments, query, currentUser]);
+  }, [tasks, comments, query, currentUser, isSmartQuery, customLists]);
 
   return (
     <div onClick={onClose} style={{
@@ -6516,7 +6792,7 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat v úkolech, poznámkách, komentářích..."
+            placeholder="Hledat… nebo zkus !urgent, due:today, @pavla"
             style={{
               flex: 1, fontSize: "14px", padding: "8px 10px",
               background: theme.inputBg, color: theme.text,
@@ -6529,6 +6805,24 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
             cursor: "pointer", color: theme.textSub, padding: "0 4px",
           }}>×</button>
         </div>
+
+        {/* Smart search hint — zobrazí se jen pokud je input prázdný */}
+        {!query.trim() && (
+          <div style={{
+            padding: "10px 16px",
+            borderBottom: `1px solid ${theme.cardBorder}`,
+            fontSize: "11px",
+            color: theme.textMid,
+            lineHeight: 1.6,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.textSub }}>💡 Tipy pro hledání:</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent</code> nebo <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>priority:high</code> — priorita</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:today</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:overdue</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:week</code> — termín</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>@pavla</code> — komu je úkol přiřazen</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>status:done</code> — stav (active, done, deleted, parked)</div>
+            <div style={{ marginTop: 4, opacity: 0.7 }}>Můžeš kombinovat: <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent due:today</code></div>
+          </div>
+        )}
 
         {/* Results */}
         <div style={{ padding: "12px 14px" }}>
@@ -6998,7 +7292,7 @@ function LoginScreen({ users, onLogin, themeName }) {
         userSelect: "none",
         fontWeight: 500,
       }}>
-        © Michal Bělohlav · Rodinné úkoly
+        © Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
       </div>
     </div>
   );
@@ -8635,6 +8929,11 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
+  // PWA install prompt — drží `beforeinstallprompt` event do doby, než user klikne na banner.
+  // Po instalaci nebo dismiss se nastaví na null. Stav `installDismissed` v localStorage
+  // brání opětovnému zobrazení po dismiss.
+  const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [filter, setFilter] = useState("my");
   const [viewStatus, setViewStatus] = useState("active");
   const [sortMode, setSortMode] = useState("created");
@@ -8734,6 +9033,10 @@ function App() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   const [undoState, setUndoState] = useState(null);
+  // Bulk selection — když je `bulkMode` true, klikání na úkoly přidává/odebírá do `bulkSelection`.
+  // Aktivace: long-press na kartě úkolu (mobile) nebo Ctrl+klik (PC).
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelection, setBulkSelection] = useState(() => new Set());
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
@@ -8780,6 +9083,60 @@ function App() {
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, []);
+
+  // PWA install prompt — Chrome/Edge/Brave triggernou `beforeinstallprompt`,
+  // pokud uživatel ještě nemá appku nainstalovanou jako PWA. Zachytíme event,
+  // a později ho použijeme, když uživatel klikne na install banner.
+  useEffect(() => {
+    // Pokud user už dismissoval banner, nikdy ho znovu neukaž (až do clear cache)
+    let dismissed = false;
+    try { dismissed = localStorage.getItem("ft_install_dismissed") === "1"; } catch (e) { /* ignore */ }
+    if (dismissed) return;
+
+    // Pokud appka už běží jako PWA (standalone mode), banner nemá smysl
+    const isStandalone = window.matchMedia?.("(display-mode: standalone)").matches
+      || window.navigator.standalone === true; // iOS Safari
+    if (isStandalone) return;
+
+    const onBeforeInstall = (e) => {
+      e.preventDefault(); // zabrání default minibar v Chromu
+      setPwaInstallEvent(e);
+      // Banner ukaž až po malé prodlevě, aby uživatel nedostal okamžitě reklamu
+      setTimeout(() => setShowInstallBanner(true), 3000);
+    };
+    const onInstalled = () => {
+      setPwaInstallEvent(null);
+      setShowInstallBanner(false);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const handlePwaInstall = useCallback(async () => {
+    if (!pwaInstallEvent) return;
+    try {
+      pwaInstallEvent.prompt();
+      const { outcome } = await pwaInstallEvent.userChoice;
+      if (outcome === "accepted") {
+        setShowInstallBanner(false);
+        setPwaInstallEvent(null);
+      } else {
+        // User dismissed v native dialogu — schovej banner, ale neulož "navždy dismissed"
+        setShowInstallBanner(false);
+      }
+    } catch (e) {
+      console.warn("PWA install prompt failed:", e);
+    }
+  }, [pwaInstallEvent]);
+
+  const handlePwaDismiss = useCallback(() => {
+    setShowInstallBanner(false);
+    try { localStorage.setItem("ft_install_dismissed", "1"); } catch (e) { /* ignore */ }
   }, []);
 
   // Session restore
@@ -8850,23 +9207,28 @@ function App() {
 
           // Subscribe to push notifications
           if ("PushManager" in window && Notification.permission === "granted") {
+            const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+            if (!vapidKey || vapidKey.length < 20) {
+              // Bez VAPID klíče nemá smysl pokoušet se subscribe — selhalo by to s nejasnou chybou.
+              // (Push notifikace vyžadují backend setup, tohle je zatím nedokončená feature.)
+              console.info("ℹ️ Push notifications skipped (VITE_VAPID_PUBLIC_KEY not configured)");
+              return;
+            }
             try {
               const existingSub = await reg.pushManager.getSubscription();
               if (!existingSub) {
                 const subscription = await reg.pushManager.subscribe({
                   userVisibleOnly: true,
-                  applicationServerKey: urlBase64ToUint8Array(
-                    import.meta.env.VITE_VAPID_PUBLIC_KEY || ""
-                  ),
+                  applicationServerKey: urlBase64ToUint8Array(vapidKey),
                 });
                 console.log("✅ Push subscription created");
                 // Save subscription to Supabase (will be linked to user on login)
                 try {
                   localStorage.setItem("ft_push_sub", JSON.stringify(subscription.toJSON()));
-                } catch (e) {}
+                } catch (e) { /* ignore */ }
               }
             } catch (err) {
-              console.warn("Push subscription failed:", err);
+              console.warn("Push subscription failed:", err?.message || err);
             }
           }
         })
@@ -9015,6 +9377,67 @@ function App() {
       realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null };
     };
   }, [loading]);
+
+  // Diagnostic helper — vystavený na window jako `window.appDiagnostics()`.
+  // V konzoli ti vypíše souhrn stavu aplikace: počty úkolů, stav realtime kanálů,
+  // nedávné errory, pending offline akce. Užitečné při ladění "něco se chová divně".
+  useEffect(() => {
+    if (loading) return;
+    window.appDiagnostics = () => {
+      const channels = realtimeChannelsRef.current || {};
+      const channelStates = {
+        tasks: channels.tasks?.state || "n/a",
+        users: channels.users?.state || "n/a",
+        comments: channels.comments?.state || "n/a",
+        lists: channels.lists?.state || "n/a",
+      };
+      let serverErrors = [];
+      let renderErrors = [];
+      let offlineQueue = [];
+      let pushSub = null;
+      try { serverErrors = JSON.parse(localStorage.getItem("ft_server_errors") || "[]"); } catch (e) { /* ignore */ }
+      try { renderErrors = JSON.parse(localStorage.getItem("ft_render_errors") || "[]"); } catch (e) { /* ignore */ }
+      try { offlineQueue = JSON.parse(localStorage.getItem("ft_offline_queue") || "[]"); } catch (e) { /* ignore */ }
+      try { pushSub = !!localStorage.getItem("ft_push_sub"); } catch (e) { /* ignore */ }
+
+      const summary = {
+        version: APP_VERSION,
+        currentUser: currentUser?.name || "(není přihlášen)",
+        online: navigator.onLine,
+        counts: {
+          tasks: tasks.length,
+          tasksActive: tasks.filter(t => t.status === "active").length,
+          tasksDone: tasks.filter(t => t.status === "done").length,
+          tasksDeleted: tasks.filter(t => t.status === "deleted").length,
+          users: (users || []).length,
+          comments: comments.length,
+          customLists: customLists.length,
+        },
+        realtime: channelStates,
+        offlineQueueSize: offlineQueue.length,
+        recentServerErrors: serverErrors.slice(0, 3),
+        recentRenderErrors: renderErrors.slice(0, 3),
+        pushSubscriptionCached: pushSub,
+        rendered: new Date().toISOString(),
+      };
+      console.log("%c📊 APP DIAGNOSTICS", "background:#3b82f6;color:white;padding:2px 6px;border-radius:3px;font-weight:600;");
+      console.table(summary.counts);
+      console.log("Realtime channels:", channelStates);
+      if (serverErrors.length > 0) {
+        console.log(`%c⚠ ${serverErrors.length} server errors logged`, "color:#dc2626;font-weight:600;");
+        console.log(serverErrors.slice(0, 3));
+      }
+      if (renderErrors.length > 0) {
+        console.log(`%c⚠ ${renderErrors.length} render errors logged`, "color:#dc2626;font-weight:600;");
+        console.log(renderErrors.slice(0, 3));
+      }
+      console.log("Full state:", summary);
+      return summary;
+    };
+    return () => {
+      try { delete window.appDiagnostics; } catch (e) { /* ignore */ }
+    };
+  }, [loading, tasks, users, comments, customLists, currentUser]);
 
   // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout).
   // Server je vždy zdroj pravdy; lokální cache se používá jen v offline režimu.
@@ -9314,6 +9737,101 @@ function App() {
       }
     }, 50);
   }, [currentUser]);
+
+  // ── Bulk selection handlers ──
+
+  const toggleBulkSelection = useCallback((taskId) => {
+    setBulkSelection(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const enterBulkMode = useCallback((taskId) => {
+    setBulkMode(true);
+    setBulkSelection(new Set(taskId ? [taskId] : []));
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setBulkSelection(new Set());
+  }, []);
+
+  // Bulk akce — všechny optimistické, s undo pro každý úkol jednotlivě (zachován history).
+  const bulkComplete = useCallback(() => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0 || !currentUser || !users) return;
+    const now = new Date().toISOString();
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      if (task.status === "done" || task.status === "deleted") return task;
+      const newDoneBy = [...new Set([...(task.doneBy || []), currentUser.name])];
+      const allDone = users.every(u => newDoneBy.includes(u.name));
+      const updated = allDone
+        ? { ...task, doneBy: newDoneBy, status: "done", completedAt: now, completedByUser: currentUser.name }
+        : { ...task, doneBy: newDoneBy };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    // Sync do DB (paralelně)
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, currentUser, users, exitBulkMode]);
+
+  const bulkDelete = useCallback(() => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const now = new Date().toISOString();
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      if (task.status === "deleted") return task;
+      const updated = { ...task, status: "deleted", deletedAt: now };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    // Snackbar zpráva pro celou bulk akci (bez per-task undo)
+    setUndoState({ previousTasks: null, message: `Smazáno ${updates.length} úkolů`, taskId: null });
+    clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => setUndoState(null), UNDO_MS);
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
+
+  const bulkSetPriority = useCallback((priority) => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      const updated = { ...task, priority };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
+
+  const bulkAssign = useCallback((userName) => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      const updated = { ...task, assignTo: userName, assignedTo: [userName] };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
 
   const deleteTask = useCallback((taskId) => {
     const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
@@ -9660,7 +10178,7 @@ function App() {
     }
 
     // Search
-    if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
+    if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery, customLists));
 
     // Sort — pokud user nastaví sortMode, respektujeme to vždy
     // (i v Today view). Pokud nechá default "created", v Today view použijeme smart urgency.
@@ -9698,7 +10216,7 @@ function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, customLists]);
 
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
@@ -10204,6 +10722,16 @@ function App() {
               <span>{themeName === "dark" ? "☀️" : "🌙"}</span>
               <span>{themeName === "dark" ? "Světlý režim" : "Tmavý režim"}</span>
             </button>
+            <button onClick={() => { enterBulkMode(null); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>☑️</span><span>Hromadný výběr</span>
+            </button>
             <button onClick={() => { setShowNotifPanel(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -10243,7 +10771,7 @@ function App() {
               textAlign: "center", lineHeight: 1.4, fontWeight: 500,
             }}>
               © {new Date().getFullYear()} Michal Bělohlav<br/>
-              Rodinné úkoly
+              Rodinné úkoly · v{APP_VERSION}
             </div>
           </div>
         </>
@@ -10317,6 +10845,7 @@ function App() {
             tasks={tasks}
             comments={comments}
             currentUser={currentUser}
+            customLists={customLists}
             theme={theme}
             onClose={() => setShowSearchSheet(false)}
             onNavigate={(taskId) => {
@@ -10981,6 +11510,59 @@ function App() {
           })()}
         </div>
 
+        {/* Trash view info banner */}
+        {viewStatus === "trash" && filteredTasks.length > 0 && (
+          <div style={{
+            margin: "0 0 8px 0",
+            padding: "10px 12px",
+            background: theme.inputBg,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: 8,
+            fontSize: 12,
+            color: theme.textMid,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}>
+            <span>ℹ️ Úkoly v koši se automaticky smažou po 30 dnech.</span>
+            {currentUser?.admin && (
+              <button
+                onClick={() => {
+                  const trashed = tasks.filter(t => t.status === "deleted");
+                  if (trashed.length === 0) return;
+                  if (!window.confirm(`Vyprázdnit koš? Trvale smazat ${trashed.length} úkolů?`)) return;
+                  // Sekvenčně permanentně smazat všechny
+                  (async () => {
+                    for (const t of trashed) {
+                      try {
+                        const { error } = await supabase.from("tasks").delete().eq("id", t.id);
+                        if (error) throw error;
+                      } catch (e) {
+                        if (!isNetworkError(e)) logServerError("emptyTrash", e, { id: t.id });
+                      }
+                    }
+                    setTasks(prev => prev.filter(t => t.status !== "deleted"));
+                  })();
+                }}
+                style={{
+                  marginLeft: "auto",
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: "transparent",
+                  color: theme.red,
+                  border: `1px solid ${theme.red}`,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Vyprázdnit koš
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Task list */}
         {filteredTasks.length === 0 ? (
           <div style={{ textAlign: "center", color: theme.textDim, padding: "50px 20px" }}>
@@ -11227,33 +11809,42 @@ function App() {
                         </span>
                       </div>
                     )}
-                    <TaskCard
-                      task={task}
-                      currentUser={currentUser}
-                      users={users}
-                      onStatusChange={changeStatus}
-                      onMarkSeen={markSeen}
-                      onUpdate={updateTask}
-                      onDelete={deleteTask}
-                      onRestore={restoreTask}
-                      onPermanentDelete={permanentlyDeleteTask}
+                    <BulkSelectableCard
+                      taskId={task.id}
+                      bulkMode={bulkMode}
+                      isSelected={bulkSelection.has(task.id)}
+                      onToggle={toggleBulkSelection}
+                      onLongPress={enterBulkMode}
                       theme={theme}
-                      comments={comments.filter(c => c.taskId === task.id)}
-                      onAddComment={addComment}
-                      onToggleReaction={toggleReaction}
-                      onMarkCommentsSeen={markCommentsSeen}
-                      autoOpen={scrollToTaskId === task.id}
-                      isHighlighted={highlightedTaskId === task.id}
-                      progressItem={item.type === "progress" ? item.checklistItem : null}
-                      recentlyAdded={item.recentlyAdded === true}
-                      fadeProgress={item.fadeProgress || 0}
-                      isToday={item.isToday === true}
-                      customLists={customLists}
-                      onStartFocus={(taskId) => {
-                        setFocusInitialTask(taskId);
-                        setShowFocus(true);
-                      }}
-                    />
+                    >
+                      <TaskCard
+                        task={task}
+                        currentUser={currentUser}
+                        users={users}
+                        onStatusChange={changeStatus}
+                        onMarkSeen={markSeen}
+                        onUpdate={updateTask}
+                        onDelete={deleteTask}
+                        onRestore={restoreTask}
+                        onPermanentDelete={permanentlyDeleteTask}
+                        theme={theme}
+                        comments={comments.filter(c => c.taskId === task.id)}
+                        onAddComment={addComment}
+                        onToggleReaction={toggleReaction}
+                        onMarkCommentsSeen={markCommentsSeen}
+                        autoOpen={scrollToTaskId === task.id}
+                        isHighlighted={highlightedTaskId === task.id}
+                        progressItem={item.type === "progress" ? item.checklistItem : null}
+                        recentlyAdded={item.recentlyAdded === true}
+                        fadeProgress={item.fadeProgress || 0}
+                        isToday={item.isToday === true}
+                        customLists={customLists}
+                        onStartFocus={(taskId) => {
+                          setFocusInitialTask(taskId);
+                          setShowFocus(true);
+                        }}
+                      />
+                    </BulkSelectableCard>
                   </div>
                 );
               });
@@ -11273,7 +11864,7 @@ function App() {
           userSelect: "none",
           fontWeight: 500,
         }}>
-          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly
+          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
         </div>
       </div>
 
@@ -11283,6 +11874,194 @@ function App() {
         onUndo={performUndo}
         theme={theme}
       />
+
+      {/* Bulk action bar — viditelný když je zapnutý bulk mode a aspoň 1 úkol vybraný */}
+      {bulkMode && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background: theme.cardBg,
+          borderTop: `1px solid ${theme.cardBorder}`,
+          boxShadow: "0 -4px 16px rgba(0,0,0,0.15)",
+          padding: "10px 12px",
+          paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 9998,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}>
+          <button
+            onClick={exitBulkMode}
+            aria-label="Zrušit výběr"
+            style={{
+              padding: "8px 10px",
+              background: "transparent",
+              color: theme.textSub,
+              border: "none",
+              fontSize: 18,
+              cursor: "pointer",
+              borderRadius: 6,
+              minWidth: 36,
+            }}
+          >
+            ✕
+          </button>
+          <div style={{ fontSize: 13, color: theme.text, fontWeight: 600, minWidth: 80 }}>
+            {bulkSelection.size === 0 ? "Žádný výběr" : `Vybráno ${bulkSelection.size}`}
+          </div>
+          <div style={{ flex: 1 }} />
+          {bulkSelection.size > 0 && (
+            <>
+              <button
+                onClick={bulkComplete}
+                aria-label="Označit jako splněné"
+                title="Splnit"
+                style={{
+                  padding: "10px 12px",
+                  background: "transparent",
+                  color: "#10b981",
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 18,
+                  cursor: "pointer",
+                  minWidth: 44,
+                  minHeight: 44,
+                }}
+              >
+                ✓
+              </button>
+              <select
+                onChange={(e) => { if (e.target.value) bulkSetPriority(e.target.value); }}
+                defaultValue=""
+                aria-label="Změnit prioritu"
+                title="Priorita"
+                style={{
+                  padding: "10px 8px",
+                  background: theme.inputBg,
+                  color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  minHeight: 44,
+                }}
+              >
+                <option value="" disabled>Priorita</option>
+                <option value="urgent">‼ Akutní</option>
+                <option value="important">! Důležité</option>
+                <option value="low">— Nedůležité</option>
+              </select>
+              <select
+                onChange={(e) => { if (e.target.value) bulkAssign(e.target.value); }}
+                defaultValue=""
+                aria-label="Přiřadit"
+                title="Přiřadit"
+                style={{
+                  padding: "10px 8px",
+                  background: theme.inputBg,
+                  color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  minHeight: 44,
+                }}
+              >
+                <option value="" disabled>Přiřadit</option>
+                {(users || []).map(u => (
+                  <option key={u.name} value={u.name}>👤 {u.name}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Smazat ${bulkSelection.size} úkolů?`)) bulkDelete();
+                }}
+                aria-label="Smazat"
+                title="Smazat"
+                style={{
+                  padding: "10px 12px",
+                  background: "transparent",
+                  color: "#ef4444",
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 18,
+                  cursor: "pointer",
+                  minWidth: 44,
+                  minHeight: 44,
+                }}
+              >
+                🗑
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* PWA install banner — aktivní jen v Chrome/Edge/Brave + když user nemá appku nainstalovanou */}
+      {showInstallBanner && pwaInstallEvent && (
+        <div style={{
+          position: "fixed",
+          bottom: 16,
+          left: 16,
+          right: 16,
+          maxWidth: 480,
+          margin: "0 auto",
+          background: theme.cardBg,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 12,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+          padding: 14,
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+        }}>
+          <div style={{ fontSize: 32, flexShrink: 0 }}>📱</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: theme.text }}>
+              Nainstalovat na plochu
+            </div>
+            <div style={{ fontSize: 12, color: theme.textSub, marginTop: 2 }}>
+              Rychlejší přístup, vypadá jako nativní aplikace
+            </div>
+          </div>
+          <button
+            onClick={handlePwaInstall}
+            style={{
+              padding: "8px 14px",
+              background: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            Instalovat
+          </button>
+          <button
+            onClick={handlePwaDismiss}
+            aria-label="Zavřít"
+            style={{
+              padding: "6px 8px",
+              background: "transparent",
+              color: theme.textSub,
+              border: "none",
+              borderRadius: 6,
+              fontSize: 18,
+              cursor: "pointer",
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
