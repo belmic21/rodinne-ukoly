@@ -9041,44 +9041,7 @@ function App() {
     }
   }, [highlightedTaskId]);
 
-  // Auto-hide header při scroll dolů, ukázat při scroll nahoru
-  useEffect(() => {
-    let ticking = false;
-    let lastChange = 0;
-    const MIN_CHANGE_INTERVAL = 250; // ms — zabraňuje rapid toggle
-    const SCROLL_THRESHOLD = 25;     // px — větší threshold = klidnější přechody
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(() => {
-        const y = window.scrollY;
-        const last = lastScrollYRef.current;
-        const now = Date.now();
-        // Cooldown — neměň stav příliš často
-        if (now - lastChange < MIN_CHANGE_INTERVAL) {
-          ticking = false;
-          return;
-        }
-        if (Math.abs(y - last) > SCROLL_THRESHOLD) {
-          if (y > last && y > 100) {
-            setHeaderHidden(prev => {
-              if (prev !== true) lastChange = now;
-              return true;
-            });
-          } else if (y < last) {
-            setHeaderHidden(prev => {
-              if (prev !== false) lastChange = now;
-              return false;
-            });
-          }
-          lastScrollYRef.current = y;
-        }
-        ticking = false;
-      });
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  // Auto-hide header byl odstraněn — header je nyní vždy viditelný (kompaktní výška).
   const [undoState, setUndoState] = useState(null);
   // Bulk selection — když je `bulkMode` true, klikání na úkoly přidává/odebírá do `bulkSelection`.
   // Aktivace: long-press na kartě úkolu (mobile) nebo Ctrl+klik (PC).
@@ -9105,9 +9068,6 @@ function App() {
   const [editingList, setEditingList] = useState(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showFocus, setShowFocus] = useState(false);
-  // Auto-hide header při scroll dolů (mobile pattern)
-  const [headerHidden, setHeaderHidden] = useState(false);
-  const lastScrollYRef = useRef(0);
   // isTyping — když uživatel zrovna zadává úkol (klikl do inputu).
   // Pokud true, header + filtry jsou schované, aby se vešly chips nad klávesnici.
   const [isTypingMode, setIsTypingMode] = useState(false);
@@ -10706,21 +10666,13 @@ function App() {
     }}>
       <style>{GLOBAL_CSS}</style>
 
-      {/* ── Header ── */}
+      {/* ── Header — vždy viditelný, kompaktní výška (cca jako Focus tlačítko) ── */}
       <div style={{
         background: theme.headerBg, backdropFilter: "blur(20px)",
         borderBottom: `1px solid ${theme.cardBorder}`,
-        padding: "11px 14px",
+        padding: "5px 14px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
         position: "sticky", top: 0, zIndex: 30,
-        // Auto-hide: posun nahoru o vlastní výšku → schované
-        // Bez margin-tricku, jen čistý transform + sticky position
-        // (margin při scrollu vyvolával oscilaci/vibraci)
-        // Auto-hide pouze na scroll dolů — typing mode (kliknutí do input) nemá skrývat header.
-        // Typing už schová logo/avatar/notifikace by ne-přidalo hodnotu, jen vyvolává nepříjemný optický skok.
-        transform: headerHidden ? "translateY(-100%)" : "translateY(0)",
-        transition: "transform 0.3s ease-out",
-        willChange: "transform",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Focus mode trigger - vlevo */}
@@ -11149,13 +11101,13 @@ function App() {
         <div style={{
           // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
           // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
+          // Top: 36px = výška kompaktního headeru (5px padding × 2 + content ~26px).
           position: "sticky",
-          top: headerHidden ? "0px" : "56px",
+          top: "36px",
           zIndex: 25, // pod hlavním headerem (30), ale nad obsahem
           background: theme.bg,
           paddingTop: "2px",
           paddingBottom: "4px",
-          transition: "top 0.3s ease-out",
         }}>
           <QuickAddBar
             currentUser={currentUser}
