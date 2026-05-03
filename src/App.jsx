@@ -4637,7 +4637,21 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           }}
           // onBlur záměrně neukončuje typing mode — uživatel může klikat na ikony popoverů.
           // Zavře se jen vědomě (✕ tlačítko), nebo po vytvoření úkolu.
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (showFull) fullSubmit(); else quickSubmit(); } }}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              if (showFull) fullSubmit(); else quickSubmit();
+            } else if (e.key === "Escape") {
+              // Esc = stejná funkce jako křížek (zavřít typing mode)
+              e.preventDefault();
+              setText("");
+              setIsTypingPersist(false);
+              if (onTypingChange) onTypingChange(false);
+              setQuickAssignees([]); setQuickPriority(null); setQuickCategory(null);
+              setOpenSegment(null);
+              setShowFull(false);
+              inputRef.current?.blur();
+            }
+          }}
           disabled={showFull && type === "complex"}
           style={{
             background: "transparent", border: "none", color: theme.text,
@@ -4894,12 +4908,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <button type="button" onClick={onClick}
               title={title}
               style={{
-                width: "100%", height: "44px",
+                width: "100%", height: "35px",
                 background: active ? `${color}15` : theme.inputBg,
                 color: active ? color : theme.textMid,
                 border: `1.5px solid ${active ? color : theme.inputBorder}`,
                 borderRadius: "10px",
-                fontSize: "20px", fontWeight: 700,
+                fontSize: "16px", fontWeight: 700,
                 cursor: "pointer", fontFamily: FONT,
                 boxShadow: active ? `0 1px 4px ${color}25` : "none",
                 transition: "all 0.15s",
@@ -4911,13 +4925,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         return (
           <div style={{
-            marginTop: "8px",
+            marginTop: "4px",
             position: "relative",
           }}>
             <div style={{
               fontSize: "9px", fontWeight: 800, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.4px",
-              marginBottom: "5px", padding: "0 2px",
+              marginBottom: "3px", padding: "0 2px",
               display: "flex", alignItems: "center", gap: "5px",
             }}>
               <span>⚡</span>
@@ -10680,7 +10694,7 @@ function App() {
       <div style={{
         background: theme.headerBg, backdropFilter: "blur(20px)",
         borderBottom: `1px solid ${theme.cardBorder}`,
-        padding: "5px 14px",
+        padding: "2px 14px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
         position: "sticky", top: 0, zIndex: 30,
       }}>
@@ -10692,10 +10706,10 @@ function App() {
               background: theme.accentSoft,
               border: `1px solid ${theme.accentBorder}`,
               borderRadius: "6px",
-              padding: "5px 10px",
+              padding: "3px 10px",
               color: theme.accent,
               cursor: "pointer",
-              fontSize: "13px", fontWeight: 700,
+              fontSize: "12px", fontWeight: 700,
               display: "inline-flex", alignItems: "center", gap: "4px",
             }}>
             🎯 Fokus
@@ -10877,7 +10891,7 @@ function App() {
       )}
 
       {/* ── Content ── */}
-      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "4px 12px 140px" }}>
+      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px 140px" }}>
 
         {showAdmin && currentUser.admin && (
           <AdminPanel
@@ -11111,12 +11125,12 @@ function App() {
         <div ref={stickyWrapperRef} style={{
           // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
           // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
-          // Top: 36px = výška kompaktního headeru (5px padding × 2 + content ~26px).
+          // Top: ~28px = výška kompaktního headeru po zmenšení (2px padding × 2 + content ~24px).
           position: "sticky",
-          top: "36px",
+          top: "28px",
           zIndex: 25, // pod hlavním headerem (30), ale nad obsahem
           background: theme.bg,
-          paddingTop: "2px",
+          paddingTop: "0px",
           paddingBottom: "4px",
         }}>
           <QuickAddBar
@@ -11168,12 +11182,12 @@ function App() {
                 const IconBtn = ({ icon, color, isActive, onClick, title, popoverKey }) => (
                   <button type="button" onClick={onClick} title={title}
                     style={{
-                      flex: 1, height: "44px",
+                      flex: 1, height: "35px",
                       background: isActive ? `${color}15` : theme.inputBg,
                       color: isActive ? color : theme.textMid,
                       border: `1.5px solid ${isActive ? color : theme.inputBorder}`,
                       borderRadius: "10px",
-                      fontSize: "20px", fontWeight: 700,
+                      fontSize: "16px", fontWeight: 700,
                       cursor: "pointer", fontFamily: FONT,
                       boxShadow: isActive ? `0 1px 4px ${color}25` : "none",
                       transition: "all 0.15s",
@@ -11266,9 +11280,9 @@ function App() {
                       }}
                       title="Priorita"
                       style={{
-                        flex: 1, height: "44px",
+                        flex: 1, height: "35px",
                         background: priActive ? `${priColor}15` : theme.inputBg,
-                        color: priColor, fontSize: "22px", fontWeight: 800,
+                        color: priColor, fontSize: "18px", fontWeight: 800,
                         border: `1.5px solid ${priActive ? priColor : theme.inputBorder}`,
                         borderRadius: "10px",
                         cursor: "pointer", fontFamily: FONT,
@@ -11279,10 +11293,10 @@ function App() {
                     <button onClick={() => setShowMoreFilters(true)}
                       title="Více filtrů"
                       style={{
-                        flex: 1, height: "44px",
+                        flex: 1, height: "35px",
                         background: hasMore ? `${theme.accent}15` : theme.inputBg,
                         color: hasMore ? theme.accent : theme.textMid,
-                        fontSize: "22px", fontWeight: 800,
+                        fontSize: "18px", fontWeight: 800,
                         border: `1.5px solid ${hasMore ? theme.accent : theme.inputBorder}`,
                         borderRadius: "10px", cursor: "pointer", fontFamily: FONT,
                       }}>
