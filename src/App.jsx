@@ -4623,10 +4623,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             // Klik do inputu = typing mode (i když je prázdné, klávesnice se otevře)
             setIsTypingPersist(true);
             if (onTypingChange) onTypingChange(true);
-            // Scroll input do viditelné oblasti
+            // Scroll input do viditelné oblasti — JEN pokud je input zcela mimo viewport.
+            // Pokud user už vidí input (běžný klidový stav nahoře), žádný scroll = žádný optický skok.
             setTimeout(() => {
               if (inputRef.current) {
-                inputRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+                const rect = inputRef.current.getBoundingClientRect();
+                const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+                if (!isVisible) {
+                  inputRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
               }
             }, 300);
           }}
@@ -9055,6 +9060,11 @@ function App() {
   useEffect(() => {
     setRenderLimit(PAGE_SIZE);
   }, [viewStatus, filter, categoryFilter, priorityFilter, sortMode, searchQuery, dueDateFilter]);
+
+  // Sticky wrapper ref — drží referenci pro případné budoucí měření výšky.
+  // Aktuálně používán pasivně (žádný auto-scroll při změně výšky), protože layout flow
+  // už správně push obsah dolů, když se sticky wrapper rozroste.
+  const stickyWrapperRef = useRef(null);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
@@ -11098,7 +11108,7 @@ function App() {
           theme={theme}
         />
 
-        <div style={{
+        <div ref={stickyWrapperRef} style={{
           // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
           // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
           // Top: 36px = výška kompaktního headeru (5px padding × 2 + content ~26px).
