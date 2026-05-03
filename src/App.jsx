@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, Component } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Component } from "react";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 
 /* ═══════════════════════════════════════════════════════
@@ -9081,13 +9081,14 @@ function App() {
   const stickyWrapperRef = useRef(null);
   // Header ref + dynamicky měřená výška — sticky wrapper potřebuje vědět,
   // jak vysoký je header, aby se mohl přilepit přesně pod ním (top: headerHeight).
-  // Statická hodnota 28px nestačila — skutečná výška kolísá podle obsahu (offline badge atd).
+  // Statická hodnota nestačila — skutečná výška kolísá podle obsahu (offline badge atd).
+  // useLayoutEffect zajistí synchronní měření před paintem (žádný flash s špatnou pozicí).
   const headerRef = useRef(null);
-  const [headerHeight, setHeaderHeight] = useState(28);
-  useEffect(() => {
+  const [headerHeight, setHeaderHeight] = useState(0);
+  useLayoutEffect(() => {
     if (!headerRef.current) return;
     const measure = () => {
-      const h = headerRef.current?.offsetHeight || 28;
+      const h = headerRef.current?.offsetHeight || 0;
       setHeaderHeight(h);
     };
     measure();
