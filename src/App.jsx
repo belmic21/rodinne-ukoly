@@ -1245,13 +1245,15 @@ function reminderToDb(r) {
   };
 }
 
-async function apiLoadReminders() {
+async function apiLoadReminders(userName = null) {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("reminders")
       .select("*")
       .is("dismissed_at", null)
       .order("remind_at", { ascending: true });
+    if (userName) query = query.eq("created_by", userName);
+    const { data, error } = await query;
     if (error) throw error;
     const reminders = (data || []).map(reminderFromDb);
     cacheSet(CACHE_REMINDERS, reminders);
@@ -1259,7 +1261,7 @@ async function apiLoadReminders() {
   } catch (e) {
     if (isNetworkError(e)) {
       const cached = cacheGet(CACHE_REMINDERS) || [];
-      return cached;
+      return userName ? cached.filter(r => r.createdBy === userName) : cached;
     }
     logServerError("apiLoadReminders", e);
     return [];
@@ -10191,10 +10193,9 @@ function App() {
         console.warn("Custom lists tabulka možná neexistuje, spusť migration_custom_lists.sql:", e);
       }
 
-      // Reminders — soukromé pro aktuálního uživatele
+      // Reminders — soukromé pro aktuálního uživatele (filter v DB query)
       try {
-        const allReminders = await apiLoadReminders();
-        const myReminders = allReminders.filter(r => r.createdBy === currentUser?.name);
+        const myReminders = await apiLoadReminders(currentUser?.name);
         console.log("[reminders] Loaded", myReminders.length, "active reminders");
         setReminders(myReminders);
       } catch (e) {
@@ -10523,15 +10524,18 @@ function App() {
       ensureChannelHealthy(channels.users, "users");
       ensureChannelHealthy(channels.comments, "comments");
       ensureChannelHealthy(channels.lists, "lists");
+      ensureChannelHealthy(channels.reminders, "reminders");
 
       // 2) Force refresh ze serveru — chytne změny zmeškané během odpojení
       try {
-        const [freshTasks, freshComments] = await Promise.all([
+        const [freshTasks, freshComments, freshReminders] = await Promise.all([
           apiLoadTasks(),
           apiLoadComments(),
+          apiLoadReminders(currentUser?.name),
         ]);
         setTasks(freshTasks);
         setComments(freshComments);
+        setReminders(freshReminders);
         // custom_lists raw fetch
         const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
         if (data) setCustomLists(data);
@@ -11807,7 +11811,16 @@ function App() {
             📊
           </button>
           {/* Reminders ikona — připomínky */}
-          <button onClick={() => setShowReminderSheet(true)}
+          <button onClick={async () => {
+            setShowReminderSheet(true);
+            // Force refresh — pokud realtime něco zmeškal, načti aktuální stav
+            try {
+              const fresh = await apiLoadReminders(currentUser?.name);
+              setReminders(fresh);
+            } catch (e) {
+              console.warn("Reminders refresh failed:", e);
+            }
+          }}
             title="Připomínky"
             style={{
               background: "none", border: "none", cursor: "pointer",
