@@ -1333,6 +1333,55 @@ async function apiSnoozeReminder(id, newRemindAt) {
   }
 }
 
+// Načti vyřízené reminders posledních 24 hodin (pro historii)
+async function apiLoadDismissedReminders() {
+  try {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("reminders")
+      .select("*")
+      .not("dismissed_at", "is", null)
+      .gte("dismissed_at", dayAgo)
+      .order("dismissed_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(reminderFromDb);
+  } catch (e) {
+    if (isNetworkError(e)) {
+      return [];
+    }
+    logServerError("apiLoadDismissedReminders", e);
+    return [];
+  }
+}
+
+// Reaktivovat reminder — nastaví nové remind_at, vymaže dismissed_at
+async function apiReactivateReminder(id, newRemindAt) {
+  try {
+    const { error } = await supabase
+      .from("reminders")
+      .update({ remind_at: newRemindAt, dismissed_at: null, notified: false })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "reactivate_reminder", id, newRemindAt });
+    } else {
+      logServerError("apiReactivateReminder", e, { id, newRemindAt });
+    }
+  }
+}
+
+// Hard delete — pro auto-cleanup vyřízených starších 24h
+async function apiDeleteReminder(id) {
+  try {
+    const { error } = await supabase.from("reminders").delete().eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    // Tichá chyba — cleanup, není kritické
+    console.warn("apiDeleteReminder failed", e?.message);
+  }
+}
+
 
 
 /* ═══════════════════════════════════════════════════════
@@ -1340,9 +1389,16 @@ async function apiSnoozeReminder(id, newRemindAt) {
    2 kliky: tlačítko ⏰ → napsat text + vybrat čas → automaticky uložit.
    ═══════════════════════════════════════════════════════ */
 
-function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
-  const [text, setText] = useState("");
-  const [selectedOffset, setSelectedOffset] = useState(30); // minuty
+function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) {
+  const [text, setText] = useState(prefill?.text || "");
+  // Režim: "offset" (za X minut/hodin) | "absolute" (v konkrétní čas)
+  const [mode, setMode] = useState("offset");
+  // Offset režim
+  const [offsetPreset, setOffsetPreset] = useState(30); // minuty (nebo "custom")
+  const [customOffsetValue, setCustomOffsetValue] = useState("");
+  const [customOffsetUnit, setCustomOffsetUnit] = useState("min"); // "min" | "h" | "d"
+  // Absolute režim
+  const [absolutePreset, setAbsolutePreset] = useState("tomorrow_8"); // string klíč nebo "custom"
   const [customDate, setCustomDate] = useState("");
   const [customTime, setCustomTime] = useState("");
   const inputRef = useRef(null);
@@ -1352,37 +1408,100 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
     inputRef.current?.focus();
   }, []);
 
-  const quickOptions = [
+  // Předvolby pro "Za" režim
+  const offsetOptions = [
     { label: "10 min", min: 10 },
     { label: "30 min", min: 30 },
     { label: "1 h", min: 60 },
     { label: "3 h", min: 180 },
-    { label: "Zítra 8:00", custom: "tomorrow_8" },
-    { label: "Vlastní", custom: "custom" },
+    { label: "Vlastní", value: "custom" },
+  ];
+
+  // Předvolby pro "V" režim — vždy nejbližší výskyt
+  const computeNextDayAt = (hour, minute = 0, dayOfWeek = null) => {
+    const d = new Date();
+    if (dayOfWeek !== null) {
+      // dayOfWeek: 0=neděle, 1=pondělí ... 6=sobota
+      const currentDay = d.getDay();
+      let daysUntil = (dayOfWeek - currentDay + 7) % 7;
+      // Pokud je dnes ten den, ale čas už uplynul, posunout na příští týden
+      const targetToday = new Date(d);
+      targetToday.setHours(hour, minute, 0, 0);
+      if (daysUntil === 0 && targetToday.getTime() <= d.getTime()) daysUntil = 7;
+      d.setDate(d.getDate() + daysUntil);
+    } else {
+      // "Zítra"
+      d.setDate(d.getDate() + 1);
+    }
+    d.setHours(hour, minute, 0, 0);
+    return d;
+  };
+
+  const absoluteOptions = [
+    { label: "Zítra 8:00", value: "tomorrow_8", compute: () => computeNextDayAt(8) },
+    { label: "Zítra 18:00", value: "tomorrow_18", compute: () => computeNextDayAt(18) },
+    { label: "Pondělí 9:00", value: "monday_9", compute: () => computeNextDayAt(9, 0, 1) },
+    { label: "Vlastní", value: "custom" },
   ];
 
   const computeRemindAt = () => {
-    if (selectedOffset === "custom") {
+    if (mode === "offset") {
+      if (offsetPreset === "custom") {
+        const num = parseFloat(customOffsetValue);
+        if (!num || num <= 0) return null;
+        let minutes = num;
+        if (customOffsetUnit === "h") minutes = num * 60;
+        else if (customOffsetUnit === "d") minutes = num * 60 * 24;
+        return new Date(Date.now() + minutes * 60 * 1000).toISOString();
+      }
+      return new Date(Date.now() + offsetPreset * 60 * 1000).toISOString();
+    }
+    // absolute mode
+    if (absolutePreset === "custom") {
       if (!customDate || !customTime) return null;
       return new Date(`${customDate}T${customTime}`).toISOString();
     }
-    if (selectedOffset === "tomorrow_8") {
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      d.setHours(8, 0, 0, 0);
-      return d.toISOString();
+    const opt = absoluteOptions.find(o => o.value === absolutePreset);
+    if (!opt || !opt.compute) return null;
+    return opt.compute().toISOString();
+  };
+
+  const isValid = () => {
+    if (!text.trim()) return false;
+    if (mode === "offset" && offsetPreset === "custom") {
+      const num = parseFloat(customOffsetValue);
+      return !!num && num > 0;
     }
-    return new Date(Date.now() + selectedOffset * 60 * 1000).toISOString();
+    if (mode === "absolute" && absolutePreset === "custom") {
+      return !!customDate && !!customTime;
+    }
+    return true;
   };
 
   const submit = async () => {
-    const t = text.trim();
-    if (!t) return;
+    if (!isValid()) return;
     const remindAt = computeRemindAt();
     if (!remindAt) return;
-    onCreate({ text: t, remindAt, createdBy: currentUser.name });
+    onCreate({
+      text: text.trim(),
+      remindAt,
+      createdBy: currentUser.name,
+      reactivateId: prefill?.originalId || null,
+      reactivateWasDismissed: prefill?.wasDismissed || false,
+    });
     onClose();
   };
+
+  // Helper: render předvolby button
+  const PresetButton = ({ active, onClick, children }) => (
+    <button onClick={onClick} style={{
+      padding: "8px 12px", fontSize: 12, fontWeight: 600,
+      background: active ? theme.accent : theme.inputBg,
+      color: active ? "#fff" : theme.text,
+      border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
+      borderRadius: 8, cursor: "pointer", fontFamily: FONT,
+    }}>{children}</button>
+  );
 
   return (
     <div onClick={onClose} style={{
@@ -1401,7 +1520,7 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
-            🔔 Nová připomínka
+            {prefill ? "↻ Reaktivovat připomínku" : "🔔 Nová připomínka"}
           </div>
           <button onClick={onClose} style={{
             background: "none", border: "none", color: theme.textSub,
@@ -1428,30 +1547,107 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
             textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 6,
           }}>Kdy?</div>
 
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-            {quickOptions.map(opt => {
-              const value = opt.custom || opt.min;
-              const active = selectedOffset === value;
-              return (
-                <button key={opt.label} onClick={() => setSelectedOffset(value)} style={{
-                  padding: "8px 12px", fontSize: 12, fontWeight: 600,
-                  background: active ? theme.accent : theme.inputBg,
-                  color: active ? "#fff" : theme.text,
-                  border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
-                  borderRadius: 8, cursor: "pointer", fontFamily: FONT,
-                }}>{opt.label}</button>
-              );
-            })}
+          {/* Mode přepínač: Za / V */}
+          <div style={{
+            display: "flex", gap: 0, marginBottom: 10,
+            border: `1px solid ${theme.inputBorder}`, borderRadius: 8, overflow: "hidden",
+          }}>
+            <button onClick={() => setMode("offset")} style={{
+              flex: 1, padding: "8px 10px", fontSize: 12, fontWeight: 700,
+              background: mode === "offset" ? theme.accent : "transparent",
+              color: mode === "offset" ? "#fff" : theme.text,
+              border: "none", cursor: "pointer", fontFamily: FONT,
+            }}>⏱ Za...</button>
+            <button onClick={() => setMode("absolute")} style={{
+              flex: 1, padding: "8px 10px", fontSize: 12, fontWeight: 700,
+              background: mode === "absolute" ? theme.accent : "transparent",
+              color: mode === "absolute" ? "#fff" : theme.text,
+              border: "none", cursor: "pointer", fontFamily: FONT,
+            }}>📅 V...</button>
           </div>
 
-          {selectedOffset === "custom" && (
-            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-              <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
-                style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
-              <input type="time" value={customTime} onChange={e => setCustomTime(e.target.value)}
-                style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
-            </div>
+          {/* Offset režim */}
+          {mode === "offset" && (
+            <>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {offsetOptions.map(opt => {
+                  const value = opt.value || opt.min;
+                  const active = offsetPreset === value;
+                  return (
+                    <PresetButton key={opt.label} active={active} onClick={() => setOffsetPreset(value)}>
+                      {opt.label}
+                    </PresetButton>
+                  );
+                })}
+              </div>
+
+              {offsetPreset === "custom" && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="90"
+                    value={customOffsetValue}
+                    onChange={e => setCustomOffsetValue(e.target.value)}
+                    style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }}
+                  />
+                  <select
+                    value={customOffsetUnit}
+                    onChange={e => setCustomOffsetUnit(e.target.value)}
+                    style={{
+                      padding: "8px 10px", fontSize: 13,
+                      border: `1px solid ${theme.inputBorder}`, borderRadius: 6,
+                      background: theme.inputBg, color: theme.text,
+                      fontFamily: FONT,
+                    }}>
+                    <option value="min">min</option>
+                    <option value="h">hodin</option>
+                    <option value="d">dní</option>
+                  </select>
+                </div>
+              )}
+            </>
           )}
+
+          {/* Absolute režim */}
+          {mode === "absolute" && (
+            <>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {absoluteOptions.map(opt => (
+                  <PresetButton key={opt.value} active={absolutePreset === opt.value}
+                    onClick={() => setAbsolutePreset(opt.value)}>
+                    {opt.label}
+                  </PresetButton>
+                ))}
+              </div>
+
+              {absolutePreset === "custom" && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                  <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
+                    style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
+                  <input type="time" value={customTime} onChange={e => setCustomTime(e.target.value)}
+                    style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Náhled výsledného času */}
+          {(() => {
+            const ra = computeRemindAt();
+            if (!ra) return null;
+            const d = new Date(ra);
+            return (
+              <div style={{
+                fontSize: 11, color: theme.textSub, marginTop: 6, padding: "0 2px",
+              }}>
+                ↳ Připomenu ti to: <strong style={{ color: theme.accent }}>{d.toLocaleString("cs-CZ", {
+                  weekday: "short", day: "numeric", month: "numeric",
+                  hour: "2-digit", minute: "2-digit",
+                })}</strong>
+              </div>
+            );
+          })()}
         </div>
 
         <div style={{
@@ -1465,12 +1661,12 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
           }}>Zrušit</button>
           <button
             onClick={submit}
-            disabled={!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))}
+            disabled={!isValid()}
             style={{
               ...buttonStyle(), padding: "8px 14px", fontSize: 13, fontWeight: 700,
               background: theme.accent, color: "#fff",
-              opacity: (!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))) ? 0.5 : 1,
-              cursor: (!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))) ? "not-allowed" : "pointer",
+              opacity: isValid() ? 1 : 0.5,
+              cursor: isValid() ? "pointer" : "not-allowed",
             }}>✓ Připomenout</button>
         </div>
       </div>
@@ -1535,15 +1731,53 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
    Spustí se z 🔔 dropdown nebo z bell icon.
    ═══════════════════════════════════════════════════════ */
 
-function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate }) {
+function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate, onReactivate }) {
   useEscapeKey(onClose);
+  const [dismissedHistory, setDismissedHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  // Načti historii (vyřízené reminders posledních 24h) + cleanup starých
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const dismissed = await apiLoadDismissedReminders();
+      if (cancelled) return;
+      // Filter jen moje
+      const mine = dismissed.filter(r => r.createdBy === currentUser?.name);
+      setDismissedHistory(mine);
+      setHistoryLoading(false);
+
+      // Auto-cleanup: vyřízené starší 24h → smazat z DB (ale apiLoadDismissedReminders už filtruje >24h, tak ne potřeba)
+      // Propadlé starší 7 dní → smazat (bezpečnost)
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const veryOldExpired = reminders.filter(r =>
+        r.createdBy === currentUser?.name &&
+        !r.dismissedAt &&
+        new Date(r.remindAt).getTime() < sevenDaysAgo
+      );
+      for (const r of veryOldExpired) {
+        await apiDeleteReminder(r.id);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.name, reminders]);
+
   const myReminders = reminders.filter(r => r.createdBy === currentUser?.name && !r.dismissedAt);
-  const sorted = [...myReminders].sort((a, b) => new Date(a.remindAt) - new Date(b.remindAt));
+  const now = Date.now();
+  // Rozdělit na aktivní (čas v budoucnu) a propadlé (čas uběhl)
+  const active = myReminders
+    .filter(r => new Date(r.remindAt).getTime() >= now)
+    .sort((a, b) => new Date(a.remindAt) - new Date(b.remindAt));
+  const expired = myReminders
+    .filter(r => new Date(r.remindAt).getTime() < now)
+    .sort((a, b) => new Date(b.remindAt) - new Date(a.remindAt)); // nejnovější propadlé první
+  const history = dismissedHistory
+    .sort((a, b) => new Date(b.dismissedAt) - new Date(a.dismissedAt));
 
   const formatTime = (iso) => {
     const d = new Date(iso);
-    const now = new Date();
-    const diffMs = d.getTime() - now.getTime();
+    const diffMs = d.getTime() - Date.now();
     const diffMin = Math.round(diffMs / 60000);
     if (diffMin < 0) {
       const mins = Math.abs(diffMin);
@@ -1559,6 +1793,63 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
     if (diffD < 7) return `za ${diffD} d`;
     return d.toLocaleDateString("cs-CZ");
   };
+  const formatAbsolute = (iso) =>
+    new Date(iso).toLocaleString("cs-CZ", {
+      day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+
+  // Render karta připomínky — kompaktní layout se shared stylingem
+  const ReminderRow = ({ r, variant, actions }) => {
+    // variant: "active" | "expired" | "history"
+    const borderColor =
+      variant === "expired" ? theme.red :
+      variant === "history" ? theme.cardBorder :
+      theme.inputBorder;
+    const opacity = variant === "history" ? 0.7 : 1;
+    const timeColor =
+      variant === "expired" ? theme.red :
+      variant === "history" ? theme.textSub :
+      theme.textMid;
+
+    return (
+      <div style={{
+        background: theme.inputBg, padding: "10px 12px",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 10, opacity,
+        display: "flex", alignItems: "center", gap: 8,
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word",
+            textDecoration: variant === "history" ? "line-through" : "none",
+          }}>
+            {r.text}
+          </div>
+          <div style={{ fontSize: 11, color: timeColor, marginTop: 3 }}>
+            {variant === "history"
+              ? `✓ vyřízeno ${formatTime(r.dismissedAt)}`
+              : `⏰ ${formatTime(r.remindAt)} · ${formatAbsolute(r.remindAt)}`
+            }
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {actions}
+        </div>
+      </div>
+    );
+  };
+
+  const sectionLabel = (icon, text, count, color) => (
+    <div style={{
+      fontSize: 10, fontWeight: 800, color: color || theme.textMid,
+      textTransform: "uppercase", letterSpacing: "0.4px",
+      marginTop: 12, marginBottom: 6, padding: "0 2px",
+      display: "flex", alignItems: "center", gap: 6,
+    }}>
+      <span>{icon}</span>
+      <span>{text} ({count})</span>
+    </div>
+  );
 
   return (
     <div onClick={onClose} style={{
@@ -1578,7 +1869,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
-            🔔 Připomínky ({sorted.length})
+            🔔 Připomínky
           </div>
           <button onClick={onClose} style={{
             background: "none", border: "none", color: theme.textSub,
@@ -1590,43 +1881,85 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
           <button onClick={onCreate} style={{
             ...buttonStyle(), width: "100%", padding: "10px 12px",
             background: theme.accent, color: "#fff", fontSize: 13, fontWeight: 700,
-            marginBottom: 10,
+            marginBottom: 4,
           }}>+ Nová připomínka</button>
 
-          {sorted.length === 0 ? (
-            <div style={{
-              textAlign: "center", padding: "40px 20px",
-              color: theme.textSub, fontSize: 13,
-            }}>Žádné aktivní připomínky.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {sorted.map(r => {
-                const isPast = new Date(r.remindAt).getTime() < Date.now();
-                return (
-                  <div key={r.id} style={{
-                    background: theme.inputBg, padding: "10px 12px",
-                    border: `1px solid ${isPast ? theme.red : theme.inputBorder}`,
-                    borderRadius: 10,
-                    display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
-                        {r.text}
-                      </div>
-                      <div style={{ fontSize: 11, color: isPast ? theme.red : theme.textMid, marginTop: 3 }}>
-                        ⏰ {formatTime(r.remindAt)} · {new Date(r.remindAt).toLocaleString("cs-CZ", {
-                          day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit",
-                        })}
-                      </div>
-                    </div>
+          {/* Aktivní (budoucí) */}
+          {active.length > 0 && (
+            <>
+              {sectionLabel("🔔", "Aktivní", active.length, theme.accent)}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {active.map(r => (
+                  <ReminderRow key={r.id} r={r} variant="active" actions={
                     <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
                       ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                       background: theme.green, color: "#fff", fontWeight: 700,
                     }}>✓</button>
-                  </div>
-                );
-              })}
-            </div>
+                  } />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Propadlé — čas uběhl ale nevyřízené (notifikace prošvihl) */}
+          {expired.length > 0 && (
+            <>
+              {sectionLabel("⏰", "Propadlé", expired.length, theme.red)}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {expired.map(r => (
+                  <ReminderRow key={r.id} r={r} variant="expired" actions={
+                    <>
+                      <button onClick={() => onReactivate(r)} title="Reaktivovat (znovu nastavit čas)" style={{
+                        ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                        background: theme.accent, color: "#fff", fontWeight: 700,
+                      }}>↻</button>
+                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
+                        ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                        background: theme.green, color: "#fff", fontWeight: 700,
+                      }}>✓</button>
+                    </>
+                  } />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Historie — vyřízené posledních 24h, sbalitelné */}
+          {history.length > 0 && (
+            <>
+              <button onClick={() => setHistoryExpanded(e => !e)} style={{
+                width: "100%", marginTop: 12, padding: "8px 10px",
+                background: "transparent", border: `1px dashed ${theme.cardBorder}`,
+                borderRadius: 8, fontSize: 11, fontWeight: 700, color: theme.textMid,
+                textAlign: "left", cursor: "pointer", fontFamily: FONT,
+                textTransform: "uppercase", letterSpacing: "0.4px",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+              }}>
+                <span>✓ Historie · posledních 24 h ({history.length})</span>
+                <span style={{ fontSize: 10 }}>{historyExpanded ? "▲" : "▼"}</span>
+              </button>
+              {historyExpanded && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {history.map(r => (
+                    <ReminderRow key={r.id} r={r} variant="history" actions={
+                      <button onClick={() => onReactivate(r)} title="Reaktivovat" style={{
+                        ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                        background: theme.inputBg, color: theme.text,
+                        border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                      }}>↻</button>
+                    } />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Empty state — nic v žádné kategorii */}
+          {active.length === 0 && expired.length === 0 && history.length === 0 && !historyLoading && (
+            <div style={{
+              textAlign: "center", padding: "40px 20px",
+              color: theme.textSub, fontSize: 13,
+            }}>Žádné připomínky. Klikni na <strong>+ Nová připomínka</strong> a začni.</div>
           )}
         </div>
       </div>
@@ -9595,6 +9928,7 @@ function App() {
   const [activeReminder, setActiveReminder] = useState(null); // aktuálně vyvolaná notifikace (pro toast)
   const [showReminderSheet, setShowReminderSheet] = useState(false); // dropdown / sheet s přehledem
   const [showQuickReminder, setShowQuickReminder] = useState(false); // quick add modal
+  const [reminderPrefill, setReminderPrefill] = useState(null); // pre-fill pro reaktivaci: { text, originalId, wasDismissed }
   // Echo prevention — sleduje časy posledních lokálních editů taskID
   // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
   // aby nepřepisovaly náš čerstvý lokální stav.
@@ -10097,6 +10431,7 @@ function App() {
         users: channels.users?.state || "n/a",
         comments: channels.comments?.state || "n/a",
         lists: channels.lists?.state || "n/a",
+        reminders: channels.reminders?.state || "n/a",
       };
       let serverErrors = [];
       let renderErrors = [];
@@ -10119,6 +10454,7 @@ function App() {
           users: (users || []).length,
           comments: comments.length,
           customLists: customLists.length,
+          reminders: reminders.length,
         },
         realtime: channelStates,
         offlineQueueSize: offlineQueue.length,
@@ -11767,11 +12103,22 @@ function App() {
             onClose={() => setShowReminderSheet(false)}
             onCreate={() => {
               setShowReminderSheet(false);
+              setReminderPrefill(null);
               setShowQuickReminder(true);
             }}
             onDismiss={async (id) => {
               setReminders(prev => prev.filter(r => r.id !== id));
               await apiDismissReminder(id);
+            }}
+            onReactivate={(reminder) => {
+              // Otevři QuickReminderModal s předvyplněným textem
+              setShowReminderSheet(false);
+              setReminderPrefill({
+                text: reminder.text,
+                originalId: reminder.id,
+                wasDismissed: !!reminder.dismissedAt,
+              });
+              setShowQuickReminder(true);
             }}
           />
         )}
@@ -11781,10 +12128,50 @@ function App() {
           <QuickReminderModal
             theme={theme}
             currentUser={currentUser}
-            onClose={() => setShowQuickReminder(false)}
+            prefill={reminderPrefill}
+            onClose={() => {
+              setShowQuickReminder(false);
+              setReminderPrefill(null);
+            }}
             onCreate={async (data) => {
-              const created = await apiCreateReminder(data);
-              if (created) setReminders(prev => [...prev, created]);
+              const { reactivateId, reactivateWasDismissed, ...newData } = data;
+              if (reactivateId) {
+                // Reaktivace existující připomínky — update místo create
+                if (reactivateWasDismissed) {
+                  // Byla v historii — vrátit do aktivních
+                  await apiReactivateReminder(reactivateId, newData.remindAt);
+                  // Optimistický local update — přidat zpět do reminders s novým časem
+                  setReminders(prev => {
+                    if (prev.find(r => r.id === reactivateId)) {
+                      return prev.map(r =>
+                        r.id === reactivateId
+                          ? { ...r, remindAt: newData.remindAt, dismissedAt: null, notified: false }
+                          : r
+                      );
+                    }
+                    return [...prev, {
+                      id: reactivateId,
+                      text: newData.text,
+                      remindAt: newData.remindAt,
+                      createdBy: newData.createdBy,
+                      dismissedAt: null,
+                      notified: false,
+                    }];
+                  });
+                } else {
+                  // Byla propadlá (nedismissovaná) — jen snooze (nový čas)
+                  await apiSnoozeReminder(reactivateId, newData.remindAt);
+                  setReminders(prev => prev.map(r =>
+                    r.id === reactivateId
+                      ? { ...r, remindAt: newData.remindAt, notified: false }
+                      : r
+                  ));
+                }
+              } else {
+                // Nová připomínka
+                const created = await apiCreateReminder(newData);
+                if (created) setReminders(prev => [...prev, created]);
+              }
             }}
           />
         )}
