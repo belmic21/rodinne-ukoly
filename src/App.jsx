@@ -742,6 +742,10 @@ const GLOBAL_CSS = `
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+@keyframes slideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -804,6 +808,23 @@ body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
 `;
 
 /* ═══ Style helpers ═══ */
+
+// Hook: useEscapeKey — když uživatel stiskne Esc, spustí callback.
+// Používá se v modal/sheet komponentách jako alternativa k tlačítku ✕.
+function useEscapeKey(handler, enabled = true) {
+  useEffect(() => {
+    if (!enabled || !handler) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handler();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handler, enabled]);
+}
+
 const cardStyle = (th) => ({
   background: th.card,
   border: `1px solid ${th.cardBorder}`,
@@ -1195,8 +1216,423 @@ async function apiDeleteComment(commentId) {
 }
 
 /* ═══════════════════════════════════════════════════════
-   COPY TASK BUTTON — copies task title + note to clipboard
+   REMINDERS API — krátké tichá připomínky bez úkolového flow.
+   Vlastní tabulka `reminders` s lokálními browser notifikacemi.
+   Sloupce: id, text, remind_at, created_by, created_at, dismissed_at, notified
    ═══════════════════════════════════════════════════════ */
+
+const CACHE_REMINDERS = "ft_cache_reminders";
+
+function reminderFromDb(r) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    text: r.text,
+    remindAt: r.remind_at,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    dismissedAt: r.dismissed_at,
+    notified: !!r.notified,
+  };
+}
+function reminderToDb(r) {
+  return {
+    text: r.text,
+    remind_at: r.remindAt,
+    created_by: r.createdBy,
+    dismissed_at: r.dismissedAt || null,
+    notified: !!r.notified,
+  };
+}
+
+async function apiLoadReminders() {
+  try {
+    const { data, error } = await supabase
+      .from("reminders")
+      .select("*")
+      .is("dismissed_at", null)
+      .order("remind_at", { ascending: true });
+    if (error) throw error;
+    const reminders = (data || []).map(reminderFromDb);
+    cacheSet(CACHE_REMINDERS, reminders);
+    return reminders;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      const cached = cacheGet(CACHE_REMINDERS) || [];
+      return cached;
+    }
+    logServerError("apiLoadReminders", e);
+    return [];
+  }
+}
+
+async function apiCreateReminder(reminder) {
+  try {
+    const { data, error } = await supabase
+      .from("reminders")
+      .insert(reminderToDb(reminder))
+      .select()
+      .single();
+    if (error) throw error;
+    return reminderFromDb(data);
+  } catch (e) {
+    if (isNetworkError(e)) {
+      console.warn("apiCreateReminder offline, queued");
+      addToOfflineQueue({ type: "create_reminder", reminder });
+      return { ...reminder, id: `temp-${Date.now()}` };
+    } else {
+      logServerError("apiCreateReminder", e, reminderToDb(reminder));
+      return null;
+    }
+  }
+}
+
+async function apiDismissReminder(id) {
+  try {
+    const { error } = await supabase
+      .from("reminders")
+      .update({ dismissed_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      console.warn("apiDismissReminder offline, queued");
+      addToOfflineQueue({ type: "dismiss_reminder", id });
+    } else {
+      logServerError("apiDismissReminder", e, { id });
+    }
+  }
+}
+
+async function apiMarkReminderNotified(id) {
+  try {
+    const { error } = await supabase
+      .from("reminders")
+      .update({ notified: true })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    // Tichá chyba — flag jen pro deduplikaci notifikací, není kritický
+    console.warn("apiMarkReminderNotified failed", e?.message);
+  }
+}
+
+async function apiSnoozeReminder(id, newRemindAt) {
+  try {
+    const { error } = await supabase
+      .from("reminders")
+      .update({ remind_at: newRemindAt, notified: false })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "snooze_reminder", id, newRemindAt });
+    } else {
+      logServerError("apiSnoozeReminder", e, { id, newRemindAt });
+    }
+  }
+}
+
+
+
+/* ═══════════════════════════════════════════════════════
+   QUICK REMINDER MODAL — krátký dialog pro vytvoření připomínky.
+   2 kliky: tlačítko ⏰ → napsat text + vybrat čas → automaticky uložit.
+   ═══════════════════════════════════════════════════════ */
+
+function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
+  const [text, setText] = useState("");
+  const [selectedOffset, setSelectedOffset] = useState(30); // minuty
+  const [customDate, setCustomDate] = useState("");
+  const [customTime, setCustomTime] = useState("");
+  const inputRef = useRef(null);
+  useEscapeKey(onClose);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const quickOptions = [
+    { label: "10 min", min: 10 },
+    { label: "30 min", min: 30 },
+    { label: "1 h", min: 60 },
+    { label: "3 h", min: 180 },
+    { label: "Zítra 8:00", custom: "tomorrow_8" },
+    { label: "Vlastní", custom: "custom" },
+  ];
+
+  const computeRemindAt = () => {
+    if (selectedOffset === "custom") {
+      if (!customDate || !customTime) return null;
+      return new Date(`${customDate}T${customTime}`).toISOString();
+    }
+    if (selectedOffset === "tomorrow_8") {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(8, 0, 0, 0);
+      return d.toISOString();
+    }
+    return new Date(Date.now() + selectedOffset * 60 * 1000).toISOString();
+  };
+
+  const submit = async () => {
+    const t = text.trim();
+    if (!t) return;
+    const remindAt = computeRemindAt();
+    if (!remindAt) return;
+    onCreate({ text: t, remindAt, createdBy: currentUser.name });
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 200, padding: 16,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.cardBg, borderRadius: 12,
+        border: `1px solid ${theme.cardBorder}`,
+        maxWidth: 440, width: "100%",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+      }}>
+        <div style={{
+          padding: "12px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
+            🔔 Nová připomínka
+          </div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        <div style={{ padding: 14 }}>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Co chceš připomenout?"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") submit(); }}
+            style={{
+              ...inputStyle(theme), width: "100%", padding: "10px 12px",
+              fontSize: 14, marginBottom: 14,
+            }}
+          />
+
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: theme.textMid,
+            textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 6,
+          }}>Kdy?</div>
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            {quickOptions.map(opt => {
+              const value = opt.custom || opt.min;
+              const active = selectedOffset === value;
+              return (
+                <button key={opt.label} onClick={() => setSelectedOffset(value)} style={{
+                  padding: "8px 12px", fontSize: 12, fontWeight: 600,
+                  background: active ? theme.accent : theme.inputBg,
+                  color: active ? "#fff" : theme.text,
+                  border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
+                  borderRadius: 8, cursor: "pointer", fontFamily: FONT,
+                }}>{opt.label}</button>
+              );
+            })}
+          </div>
+
+          {selectedOffset === "custom" && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
+                style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
+              <input type="time" value={customTime} onChange={e => setCustomTime(e.target.value)}
+                style={{ ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13 }} />
+            </div>
+          )}
+        </div>
+
+        <div style={{
+          padding: 12, borderTop: `1px solid ${theme.cardBorder}`,
+          display: "flex", justifyContent: "flex-end", gap: 8,
+        }}>
+          <button onClick={onClose} style={{
+            ...buttonStyle(), padding: "8px 14px", fontSize: 13,
+            background: "transparent", color: theme.text,
+            border: `1px solid ${theme.cardBorder}`,
+          }}>Zrušit</button>
+          <button
+            onClick={submit}
+            disabled={!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))}
+            style={{
+              ...buttonStyle(), padding: "8px 14px", fontSize: 13, fontWeight: 700,
+              background: theme.accent, color: "#fff",
+              opacity: (!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))) ? 0.5 : 1,
+              cursor: (!text.trim() || (selectedOffset === "custom" && (!customDate || !customTime))) ? "not-allowed" : "pointer",
+            }}>✓ Připomenout</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   REMINDER TOAST — bubble nahoře když reminder dosáhne svého času.
+   Tlačítka: ✕ (dismiss = vyřízeno) / Odložit (snooze 10 min)
+   ═══════════════════════════════════════════════════════ */
+
+function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
+  if (!reminder) return null;
+  return (
+    <div style={{
+      position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)",
+      background: theme.cardBg, border: `2px solid ${theme.accent}`,
+      borderRadius: 12, padding: "12px 14px",
+      boxShadow: "0 10px 28px rgba(0,0,0,0.3)",
+      zIndex: 300, minWidth: 280, maxWidth: 480,
+      animation: "slideDown 0.25s",
+    }}>
+      <div style={{
+        display: "flex", alignItems: "flex-start", gap: 10,
+      }}>
+        <div style={{ fontSize: 22, lineHeight: 1 }}>🔔</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.accent, marginBottom: 3,
+            textTransform: "uppercase", letterSpacing: "0.4px" }}>Připomínka</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
+            {reminder.text}
+          </div>
+        </div>
+        <button onClick={onDismiss} style={{
+          background: "none", border: "none", color: theme.textSub,
+          fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+        }}>×</button>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
+        <button onClick={() => onSnooze(10)} style={{
+          ...buttonStyle(), padding: "6px 12px", fontSize: 12,
+          background: theme.inputBg, color: theme.text,
+          border: `1px solid ${theme.inputBorder}`,
+        }}>⏱ Za 10 min</button>
+        <button onClick={() => onSnooze(60)} style={{
+          ...buttonStyle(), padding: "6px 12px", fontSize: 12,
+          background: theme.inputBg, color: theme.text,
+          border: `1px solid ${theme.inputBorder}`,
+        }}>⏱ Za hodinu</button>
+        <button onClick={onDismiss} style={{
+          ...buttonStyle(), padding: "6px 12px", fontSize: 12, fontWeight: 700,
+          background: theme.green, color: "#fff",
+        }}>✓ Hotovo</button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   REMINDERS SHEET — přehled aktivních připomínek (modal).
+   Spustí se z 🔔 dropdown nebo z bell icon.
+   ═══════════════════════════════════════════════════════ */
+
+function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate }) {
+  useEscapeKey(onClose);
+  const myReminders = reminders.filter(r => r.createdBy === currentUser?.name && !r.dismissedAt);
+  const sorted = [...myReminders].sort((a, b) => new Date(a.remindAt) - new Date(b.remindAt));
+
+  const formatTime = (iso) => {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = d.getTime() - now.getTime();
+    const diffMin = Math.round(diffMs / 60000);
+    if (diffMin < 0) {
+      const mins = Math.abs(diffMin);
+      if (mins < 60) return `před ${mins} min`;
+      const h = Math.round(mins / 60);
+      if (h < 24) return `před ${h} h`;
+      return `před ${Math.round(h / 24)} dny`;
+    }
+    if (diffMin < 60) return `za ${diffMin} min`;
+    const diffH = Math.round(diffMin / 60);
+    if (diffH < 24) return `za ${diffH} h`;
+    const diffD = Math.round(diffH / 24);
+    if (diffD < 7) return `za ${diffD} d`;
+    return d.toLocaleDateString("cs-CZ");
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+      zIndex: 150,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.cardBg,
+        width: "100%", maxWidth: 560, maxHeight: "80vh",
+        borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        display: "flex", flexDirection: "column",
+        boxShadow: "0 -8px 24px rgba(0,0,0,0.3)",
+      }}>
+        <div style={{
+          padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
+            🔔 Připomínky ({sorted.length})
+          </div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+          <button onClick={onCreate} style={{
+            ...buttonStyle(), width: "100%", padding: "10px 12px",
+            background: theme.accent, color: "#fff", fontSize: 13, fontWeight: 700,
+            marginBottom: 10,
+          }}>+ Nová připomínka</button>
+
+          {sorted.length === 0 ? (
+            <div style={{
+              textAlign: "center", padding: "40px 20px",
+              color: theme.textSub, fontSize: 13,
+            }}>Žádné aktivní připomínky.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {sorted.map(r => {
+                const isPast = new Date(r.remindAt).getTime() < Date.now();
+                return (
+                  <div key={r.id} style={{
+                    background: theme.inputBg, padding: "10px 12px",
+                    border: `1px solid ${isPast ? theme.red : theme.inputBorder}`,
+                    borderRadius: 10,
+                    display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
+                        {r.text}
+                      </div>
+                      <div style={{ fontSize: 11, color: isPast ? theme.red : theme.textMid, marginTop: 3 }}>
+                        ⏰ {formatTime(r.remindAt)} · {new Date(r.remindAt).toLocaleString("cs-CZ", {
+                          day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit",
+                        })}
+                      </div>
+                    </div>
+                    <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
+                      ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                      background: theme.green, color: "#fff", fontWeight: 700,
+                    }}>✓</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function CopyTaskButton({ task, theme }) {
   const [copied, setCopied] = useState(false);
@@ -6217,6 +6653,7 @@ function MoreFiltersSheet({
    ═══════════════════════════════════════════════════════ */
 
 function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
+  useEscapeKey(onClose);
   // Aktuální zobrazený měsíc
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
@@ -6509,6 +6946,7 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
    ═══════════════════════════════════════════════════════ */
 
 function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
+  useEscapeKey(onClose);
   if (!currentUser) return null;
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -6785,6 +7223,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    ═══════════════════════════════════════════════════════ */
 
 function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, onClose, onNavigate }) {
+  useEscapeKey(onClose);
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
 
@@ -7384,6 +7823,7 @@ const PARK_TEMPLATES = [
 ];
 
 function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpdate, onStatusChange, onAddComment, onToggleReaction, initialTaskId }) {
+  useEscapeKey(onClose);
   // Load settings from localStorage
   const [timerEnabled, setTimerEnabled] = useState(() => {
     const saved = localStorage.getItem("ft_focus_timer_enabled");
@@ -8068,6 +8508,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
 }
 
 function NotificationPanel({ currentUser, onClose, theme }) {
+  useEscapeKey(onClose);
   const [permission, setPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
@@ -8393,6 +8834,19 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
   const [deletingUser, setDeletingUser] = useState(null); // string: jméno uživatele co se právě maže
   const [deleteAction, setDeleteAction] = useState("transfer_me"); // transfer_me | transfer_other | delete
   const [deleteTransferTo, setDeleteTransferTo] = useState("");
+  // Esc — zavře primárně delete dialog, jinak edit pin, jinak celý panel
+  useEscapeKey(() => {
+    if (deletingUser) {
+      setDeletingUser(null);
+      setDeleteAction("transfer_me");
+      setDeleteTransferTo("");
+    } else if (editingPinFor) {
+      setEditingPinFor(null);
+      setNewPinInput("");
+    } else {
+      onClose();
+    }
+  });
 
   const generateRandomPin = () => {
     return String(Math.floor(1000 + Math.random() * 9000));
@@ -8618,7 +9072,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
         };
         return (
           <div onClick={close} style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
             display: "flex", alignItems: "center", justifyContent: "center",
             zIndex: 200, padding: 16,
           }}>
@@ -9137,6 +9591,10 @@ function Snackbar({ message, onUndo, visible, theme }) {
 function App() {
   const [tasks, setTasks] = useState([]);
   const [customLists, setCustomLists] = useState([]);
+  const [reminders, setReminders] = useState([]); // aktivní (ne-dismissed) připomínky
+  const [activeReminder, setActiveReminder] = useState(null); // aktuálně vyvolaná notifikace (pro toast)
+  const [showReminderSheet, setShowReminderSheet] = useState(false); // dropdown / sheet s přehledem
+  const [showQuickReminder, setShowQuickReminder] = useState(false); // quick add modal
   // Echo prevention — sleduje časy posledních lokálních editů taskID
   // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
   // aby nepřepisovaly náš čerstvý lokální stav.
@@ -9399,6 +9857,16 @@ function App() {
         console.warn("Custom lists tabulka možná neexistuje, spusť migration_custom_lists.sql:", e);
       }
 
+      // Reminders — soukromé pro aktuálního uživatele
+      try {
+        const allReminders = await apiLoadReminders();
+        const myReminders = allReminders.filter(r => r.createdBy === currentUser?.name);
+        console.log("[reminders] Loaded", myReminders.length, "active reminders");
+        setReminders(myReminders);
+      } catch (e) {
+        console.warn("Reminders tabulka možná neexistuje, spusť SQL migrace:", e);
+      }
+
       setLoading(false);
     })();
 
@@ -9489,7 +9957,7 @@ function App() {
   }, [tasks, currentUser]);
 
   // Realtime subscriptions
-  const realtimeChannelsRef = useRef({ tasks: null, users: null, comments: null, lists: null });
+  const realtimeChannelsRef = useRef({ tasks: null, users: null, comments: null, lists: null, reminders: null });
 
   useEffect(() => {
     if (loading) return;
@@ -9577,12 +10045,43 @@ function App() {
       });
     realtimeChannelsRef.current.lists = listsChannel;
 
+    // Reminders realtime — synchronizace mezi zařízeními (soukromé pro currentUser)
+    const remindersChannel = supabase.channel("reminders-realtime-v1")
+      .on("postgres_changes", { event: "*", schema: "public", table: "reminders" }, (payload) => {
+        try {
+          const isMine = (payload.new?.created_by || payload.old?.created_by) === currentUser?.name;
+          if (!isMine) return; // soukromé připomínky — ignorovat cizí
+          if (payload.eventType === "INSERT") {
+            const r = reminderFromDb(payload.new);
+            if (r && !r.dismissedAt) {
+              setReminders(prev => prev.find(x => x.id === r.id) ? prev : [...prev, r]);
+            }
+          } else if (payload.eventType === "UPDATE") {
+            const r = reminderFromDb(payload.new);
+            if (!r) return;
+            if (r.dismissedAt) {
+              setReminders(prev => prev.filter(x => x.id !== r.id));
+            } else {
+              setReminders(prev => prev.map(x => x.id === r.id ? r : x));
+            }
+          } else if (payload.eventType === "DELETE") {
+            setReminders(prev => prev.filter(x => x.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime reminders] handler error:", e, payload);
+        }
+      }).subscribe((status) => {
+        console.log("[realtime reminders]", status);
+      });
+    realtimeChannelsRef.current.reminders = remindersChannel;
+
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(commentsChannel);
       supabase.removeChannel(listsChannel);
-      realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null };
+      supabase.removeChannel(remindersChannel);
+      realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null, reminders: null };
     };
   }, [loading]);
 
@@ -10108,6 +10607,51 @@ function App() {
     }, 30000); // 30s
     return () => clearInterval(tick);
   }, []);
+
+  // Reminder ticker — každých 15 sekund zkontroluje, zda nějaký reminder dosáhl času.
+  // Pokud ano, vyvolá lokální notifikaci a označí ho jako "notified" v DB (deduplikace mezi zařízeními).
+  // Toast bubble v UI se zobrazí přes activeReminder state.
+  useEffect(() => {
+    if (loading || !currentUser) return;
+    const checkReminders = async () => {
+      const now = Date.now();
+      const due = reminders.filter(r =>
+        !r.notified &&
+        !r.dismissedAt &&
+        r.createdBy === currentUser.name &&
+        new Date(r.remindAt).getTime() <= now
+      );
+      for (const r of due) {
+        // Mark notified locally (optimistic) — zabrání opakované notifikaci na tomto zařízení
+        setReminders(prev => prev.map(x => x.id === r.id ? { ...x, notified: true } : x));
+        // Mark notified na serveru — zabrání notifikaci na druhém zařízení
+        apiMarkReminderNotified(r.id);
+        // Browser notification (pokud má povolení)
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          try {
+            const n = new Notification("🔔 Připomínka", {
+              body: r.text,
+              icon: "/icon-192.png",
+              tag: `reminder-${r.id}`,
+              requireInteraction: false,
+            });
+            n.onclick = () => {
+              window.focus();
+              setActiveReminder(r);
+              n.close();
+            };
+          } catch (e) {
+            console.warn("Notification show failed:", e?.message);
+          }
+        }
+        // In-app toast (vždy, i když Notification API není dostupné)
+        setActiveReminder(r);
+      }
+    };
+    checkReminders(); // hned po mountu
+    const tick = setInterval(checkReminders, 15000);
+    return () => clearInterval(tick);
+  }, [reminders, loading, currentUser]);
 
   const permanentlyDeleteTask = useCallback(async (taskId) => {
     // Optimistický update — drž zálohu pro případ rollback při server chybě
@@ -10926,6 +11470,32 @@ function App() {
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             📊
           </button>
+          {/* Reminders ikona — připomínky */}
+          <button onClick={() => setShowReminderSheet(true)}
+            title="Připomínky"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px", position: "relative",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            ⏰
+            {(() => {
+              const myActive = reminders.filter(r => r.createdBy === currentUser.name && !r.dismissedAt);
+              if (myActive.length === 0) return null;
+              return (
+                <span style={{
+                  position: "absolute", top: 2, right: 2,
+                  background: theme.accent, color: "#fff",
+                  borderRadius: "50%", minWidth: 14, height: 14,
+                  fontSize: 9, fontWeight: 700,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 3px",
+                }}>{myActive.length}</span>
+              );
+            })()}
+          </button>
           {/* Notifications - jen badge když existují */}
           <button onClick={() => setUpdatesPanelOpen(true)}
             title="Zprávy"
@@ -11185,6 +11755,37 @@ function App() {
             users={users}
             theme={theme}
             onClose={() => setShowStatsSheet(false)}
+          />
+        )}
+
+        {/* Reminders — sheet s přehledem aktivních připomínek */}
+        {showReminderSheet && (
+          <RemindersSheet
+            reminders={reminders}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowReminderSheet(false)}
+            onCreate={() => {
+              setShowReminderSheet(false);
+              setShowQuickReminder(true);
+            }}
+            onDismiss={async (id) => {
+              setReminders(prev => prev.filter(r => r.id !== id));
+              await apiDismissReminder(id);
+            }}
+          />
+        )}
+
+        {/* Quick reminder modal — vytvořit novou připomínku */}
+        {showQuickReminder && (
+          <QuickReminderModal
+            theme={theme}
+            currentUser={currentUser}
+            onClose={() => setShowQuickReminder(false)}
+            onCreate={async (data) => {
+              const created = await apiCreateReminder(data);
+              if (created) setReminders(prev => [...prev, created]);
+            }}
           />
         )}
 
@@ -12365,6 +12966,29 @@ function App() {
         </div>
       </div>
       </div>
+
+      {/* Reminder toast — bubble nahoře když reminder dosáhne svého času */}
+      {activeReminder && (
+        <ReminderToast
+          reminder={activeReminder}
+          theme={theme}
+          onDismiss={async () => {
+            const id = activeReminder.id;
+            setReminders(prev => prev.filter(r => r.id !== id));
+            setActiveReminder(null);
+            await apiDismissReminder(id);
+          }}
+          onSnooze={async (minutes) => {
+            const id = activeReminder.id;
+            const newTime = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+            setReminders(prev => prev.map(r =>
+              r.id === id ? { ...r, remindAt: newTime, notified: false } : r
+            ));
+            setActiveReminder(null);
+            await apiSnoozeReminder(id, newTime);
+          }}
+        />
+      )}
 
       <Snackbar
         message={undoState?.message}
