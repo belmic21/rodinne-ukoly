@@ -4683,7 +4683,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             ×
           </button>
         )}
-        <button onClick={() => setShowFull(!showFull)} title={showFull ? "Skrýt podrobnosti" : "Podrobnosti"} style={{
+        <button onClick={() => {
+          const next = !showFull;
+          setShowFull(next);
+          // Když user klikne na ⚙ poprvé (bez kliknutí do input pole), aktivuj i typing mode —
+          // jinak se nezobrazí TypingFilterRow s parametry úkolu.
+          if (next && !isTypingPersist) {
+            setIsTypingPersist(true);
+            if (onTypingChange) onTypingChange(true);
+          }
+        }} title={showFull ? "Skrýt podrobnosti" : "Podrobnosti"} style={{
           ...buttonStyle(), width: "32px", height: "32px",
           background: showFull ? theme.accent : theme.inputBg,
           color: showFull ? "#fff" : theme.textSub,
@@ -4702,7 +4711,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         const trimmed = text.trim();
         // Predikce zobrazujeme JEN když uživatel něco píše (krátký text, 1 slovo)
         // Když nic nepíše = nic doplňovat → schované, šetří místo
-        const showPredictions = !showFull && trimmed.length > 0 && trimmed.length <= 15 && !trimmed.includes(" ");
+        // Predikce zobrazujeme když uživatel něco píše (krátký text, 1 slovo).
+        // Funguje i v showFull modu (podrobnosti) — uživatel může napsat název a vidí návrhy.
+        const showPredictions = trimmed.length > 0 && trimmed.length <= 15 && !trimmed.includes(" ");
         if (!showPredictions) return null;
         const predictions = getPredictions(allTasks || [], currentUser.name);
 
@@ -11136,9 +11147,15 @@ function App() {
         />
 
         <div style={{
-          // Není sticky — při scrollu se odsunuje, takže detail úkolu není překryt
+          // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
+          // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
+          position: "sticky",
+          top: headerHidden ? "0px" : "56px",
+          zIndex: 25, // pod hlavním headerem (30), ale nad obsahem
+          background: theme.bg,
           paddingTop: "2px",
           paddingBottom: "4px",
+          transition: "top 0.3s ease-out",
         }}>
           <QuickAddBar
             currentUser={currentUser}
@@ -11174,19 +11191,12 @@ function App() {
               l.is_shared || l.created_by_user === currentUser.name);
             return (
           <>
-          {/* Kompaktní ikonový filter row — popovery s nadpisem.
-              Sticky: zůstává viditelný i když uživatel scrolluje detailem úkolu.
-              `top` posune dolů o výšku hlavního headeru, který je nahoře sticky.
-              Když je header schovaný (auto-hide na scrollu dolů), filter se vyšplhá na top. */}
+          {/* Kompaktní ikonový filter row.
+              Sticky pozicování řeší celý wrapper okolo (sticky top: 56px nebo 0px). */}
           <div style={{
-            position: "sticky",
-            top: headerHidden ? "0px" : "56px",
-            zIndex: 25,
-            background: theme.bg,
+            position: "relative",
             paddingTop: "4px",
             paddingBottom: "4px",
-            marginBottom: "4px",
-            transition: "top 0.3s ease-out",
           }} data-filter-icon-row>
             <div style={{
               display: "flex", alignItems: "stretch", gap: "4px",
