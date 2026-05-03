@@ -1391,7 +1391,7 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose }) {
       zIndex: 200, padding: 16,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: theme.cardBg, borderRadius: 12,
+        background: theme.card, borderRadius: 12,
         border: `1px solid ${theme.cardBorder}`,
         maxWidth: 440, width: "100%",
         boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
@@ -1488,7 +1488,7 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
   return (
     <div style={{
       position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)",
-      background: theme.cardBg, border: `2px solid ${theme.accent}`,
+      background: theme.card, border: `2px solid ${theme.accent}`,
       borderRadius: 12, padding: "12px 14px",
       boxShadow: "0 10px 28px rgba(0,0,0,0.3)",
       zIndex: 300, minWidth: 280, maxWidth: 480,
@@ -1567,7 +1567,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
       zIndex: 150,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: theme.cardBg,
+        background: theme.card,
         width: "100%", maxWidth: 560, maxHeight: "80vh",
         borderTopLeftRadius: 16, borderTopRightRadius: 16,
         display: "flex", flexDirection: "column",
@@ -3851,7 +3851,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
           width: 24,
           height: 24,
           borderRadius: "50%",
-          background: isSelected ? "#3b82f6" : theme.cardBg,
+          background: isSelected ? "#3b82f6" : theme.card,
           border: `2px solid ${isSelected ? "#3b82f6" : theme.cardBorder}`,
           display: "flex",
           alignItems: "center",
@@ -9077,7 +9077,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
             zIndex: 200, padding: 16,
           }}>
             <div onClick={e => e.stopPropagation()} style={{
-              background: theme.cardBg, borderRadius: 12,
+              background: theme.card, borderRadius: 12,
               border: `1px solid ${theme.cardBorder}`,
               maxWidth: 480, width: "100%", maxHeight: "90vh", overflowY: "auto",
               boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
@@ -13004,7 +13004,7 @@ function App() {
           bottom: 0,
           left: 0,
           right: 0,
-          background: theme.cardBg,
+          background: theme.card,
           borderTop: `1px solid ${theme.cardBorder}`,
           boxShadow: "0 -4px 16px rgba(0,0,0,0.15)",
           padding: "10px 12px",
@@ -13130,7 +13130,7 @@ function App() {
           right: 16,
           maxWidth: 480,
           margin: "0 auto",
-          background: theme.cardBg,
+          background: theme.card,
           border: `1px solid ${theme.cardBorder}`,
           borderRadius: 12,
           boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
