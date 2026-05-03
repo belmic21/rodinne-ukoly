@@ -61,3 +61,14 @@ export default defineConfig(({ mode }) => {
     ]
   }
 })
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  define: {
+    // Build time injektovaný do bundlu — App.jsx ho používá pro APP_VERSION.
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
+})
+
