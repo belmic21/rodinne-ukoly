@@ -6,8 +6,13 @@ import { resolve } from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  
+
   return {
+    define: {
+      // Build time injektovaný do bundlu — App.jsx ho používá pro APP_VERSION.
+      // Zobrazí se ve formátu "v.26-05-02 18:22" v copyright textech.
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       react(),
       VitePWA({
@@ -61,14 +66,3 @@ export default defineConfig(({ mode }) => {
     ]
   }
 })
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-  define: {
-    // Build time injektovaný do bundlu — App.jsx ho používá pro APP_VERSION.
-    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
-  },
-})
-
