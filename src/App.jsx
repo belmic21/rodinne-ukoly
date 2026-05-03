@@ -9079,6 +9079,22 @@ function App() {
   // Aktuálně používán pasivně (žádný auto-scroll při změně výšky), protože layout flow
   // už správně push obsah dolů, když se sticky wrapper rozroste.
   const stickyWrapperRef = useRef(null);
+  // Header ref + dynamicky měřená výška — sticky wrapper potřebuje vědět,
+  // jak vysoký je header, aby se mohl přilepit přesně pod ním (top: headerHeight).
+  // Statická hodnota 28px nestačila — skutečná výška kolísá podle obsahu (offline badge atd).
+  const headerRef = useRef(null);
+  const [headerHeight, setHeaderHeight] = useState(28);
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const measure = () => {
+      const h = headerRef.current?.offsetHeight || 28;
+      setHeaderHeight(h);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(headerRef.current);
+    return () => ro.disconnect();
+  }, []);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
@@ -10691,7 +10707,7 @@ function App() {
       <style>{GLOBAL_CSS}</style>
 
       {/* ── Header — vždy viditelný, kompaktní výška (cca jako Focus tlačítko) ── */}
-      <div style={{
+      <div ref={headerRef} style={{
         background: theme.headerBg, backdropFilter: "blur(20px)",
         borderBottom: `1px solid ${theme.cardBorder}`,
         padding: "2px 14px",
@@ -11125,9 +11141,9 @@ function App() {
         <div ref={stickyWrapperRef} style={{
           // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
           // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
-          // Top: ~28px = výška kompaktního headeru po zmenšení (2px padding × 2 + content ~24px).
+          // Top: dynamicky podle skutečné výšky headeru (měřené přes ref).
           position: "sticky",
-          top: "28px",
+          top: `${headerHeight}px`,
           zIndex: 25, // pod hlavním headerem (30), ale nad obsahem
           background: theme.bg,
           paddingTop: "0px",
