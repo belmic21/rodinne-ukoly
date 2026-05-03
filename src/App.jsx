@@ -10702,8 +10702,12 @@ function App() {
 
   return (
     <div style={{
-      minHeight: "100vh", background: theme.bg, fontFamily: FONT,
+      // Layout: flex column = top část (header+input+filter) FIXED, bottom část scrollable.
+      // Tím dosáhneme, že se scrolují jen úkoly, zbytek zůstává nehnutý.
+      height: "100vh", background: theme.bg, fontFamily: FONT,
       color: theme.text, WebkitFontSmoothing: "antialiased",
+      display: "flex", flexDirection: "column",
+      overflow: "hidden",
     }}>
       <style>{GLOBAL_CSS}</style>
 
@@ -10713,7 +10717,8 @@ function App() {
         borderBottom: `1px solid ${theme.cardBorder}`,
         padding: "2px 14px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        position: "sticky", top: 0, zIndex: 30,
+        flexShrink: 0,
+        zIndex: 30,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Focus mode trigger - vlevo */}
@@ -10907,8 +10912,8 @@ function App() {
         </>
       )}
 
-      {/* ── Content ── */}
-      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px 140px" }}>
+      {/* ── Top container (non-scrollable) — header + input + filter ── */}
+      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px", width: "100%", flexShrink: 0 }}>
 
         {showAdmin && currentUser.admin && (
           <AdminPanel
@@ -11140,12 +11145,7 @@ function App() {
         />
 
         <div ref={stickyWrapperRef} style={{
-          // Sticky container — input + filter řádek dohromady zůstávají vidět při scrollu.
-          // Žádný optický skok při focusu, uživatel vždy vidí kam píše.
-          // Top: dynamicky podle skutečné výšky headeru (měřené přes ref).
-          position: "sticky",
-          top: `${headerHeight}px`,
-          zIndex: 25, // pod hlavním headerem (30), ale nad obsahem
+          // Input + filter řádek — v Top containeru, tedy nikdy se nescrolluje.
           background: theme.bg,
           paddingTop: "0px",
           paddingBottom: "4px",
@@ -11679,6 +11679,17 @@ function App() {
           })()}
         </div>
 
+      </div>
+
+      {/* ── Scrollable container — obsahuje pouze úkoly, scrolluje se uvnitř ── */}
+      <div style={{
+        flex: 1,
+        overflowY: "auto",
+        overflowX: "hidden",
+        WebkitOverflowScrolling: "touch",
+      }}>
+      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px 140px", width: "100%" }}>
+
         {/* Trash view info banner */}
         {viewStatus === "trash" && filteredTasks.length > 0 && (
           <div style={{
@@ -12115,6 +12126,7 @@ function App() {
         }}>
           © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
         </div>
+      </div>
       </div>
 
       <Snackbar
