@@ -4659,14 +4659,18 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             ✓
           </button>
         )}
-        {/* Cancel typing mode — pouze v typing mode bez textu */}
-        {!text.trim() && isTypingPersist && (
+        {/* Cancel typing mode — vždy v typing mode (s textem i bez).
+            Bez ohledu na to, jestli uživatel napsal pár písmen nebo ne, musí mít možnost
+            zrušit a vrátit se do filter modu jednoznačným ✕ tlačítkem. */}
+        {isTypingPersist && (
           <button
             onClick={() => {
+              setText("");
               setIsTypingPersist(false);
               if (onTypingChange) onTypingChange(false);
               setQuickAssignees([]); setQuickPriority(null); setQuickCategory(null);
               setOpenSegment(null);
+              setShowFull(false);
             }}
             title="Zavřít — vrátit zpět k filtrům"
             style={{
@@ -4679,7 +4683,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             ×
           </button>
         )}
-        <button onClick={() => setShowFull(!showFull)} title="Podrobnosti" style={{
+        <button onClick={() => setShowFull(!showFull)} title={showFull ? "Skrýt podrobnosti" : "Podrobnosti"} style={{
           ...buttonStyle(), width: "32px", height: "32px",
           background: showFull ? theme.accent : theme.inputBg,
           color: showFull ? "#fff" : theme.textSub,
@@ -4687,7 +4691,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           display: "flex", alignItems: "center", justifyContent: "center",
           fontSize: "14px", flexShrink: 0,
         }}>
-          {showFull ? "×" : "⚙"}
+          {/* Vždy ozubené kolečko — modrá výplň indikuje aktivní stav.
+              Předtím se měnilo na "×", ale to bylo matoucí: vedle už je šedé × pro cancel typing modu. */}
+          ⚙
         </button>
       </div>
 
@@ -4798,8 +4804,10 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
       {/* ═══ TypingFilterRow — ikony pro nastavení parametrů úkolu (typing mode) ═══ */}
       {(() => {
-        // Persistent typing mode — ikony zůstávají dokud uživatel explicitně nezavře
-        if (!isTypingPersist || showFull) return null;
+        // Parametry úkolu (Datum/Osoba/Seznam/Priorita) zůstávají viditelné v celém typing modu —
+        // i když je otevřený full panel s podrobnostmi. Důvod: tyto rychlé parametry jsou
+        // nezávislé na podrobnostech (typ úkolu, opakování...) a uživatel je má pohodlně po ruce.
+        if (!isTypingPersist) return null;
 
         // Helper na popover pozicování
         const popoverWrap = {
@@ -10697,7 +10705,9 @@ function App() {
         // Auto-hide: posun nahoru o vlastní výšku → schované
         // Bez margin-tricku, jen čistý transform + sticky position
         // (margin při scrollu vyvolával oscilaci/vibraci)
-        transform: (headerHidden || isTypingMode) ? "translateY(-100%)" : "translateY(0)",
+        // Auto-hide pouze na scroll dolů — typing mode (kliknutí do input) nemá skrývat header.
+        // Typing už schová logo/avatar/notifikace by ne-přidalo hodnotu, jen vyvolává nepříjemný optický skok.
+        transform: headerHidden ? "translateY(-100%)" : "translateY(0)",
         transition: "transform 0.3s ease-out",
         willChange: "transform",
       }}>
