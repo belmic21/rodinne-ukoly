@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Component } from "react";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 
 /* ═══════════════════════════════════════════════════════
@@ -6,6 +6,35 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
    ═══════════════════════════════════════════════════════ */
 
 const UNDO_MS = 5000;
+
+// Verze aplikace — odvozená z build timestampu (Vite define) nebo z env.
+// Pokud není nastaveno v vite.config.js (define: { __BUILD_TIME__: ... }),
+// fallback ukáže "dev". Zobrazuje se ve formátu "26-05-02 19:48".
+function getAppVersion() {
+  try {
+    // eslint-disable-next-line no-undef
+    if (typeof __BUILD_TIME__ !== "undefined" && __BUILD_TIME__) {
+      const d = new Date(__BUILD_TIME__);
+      if (!isNaN(d.getTime())) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${String(d.getFullYear()).slice(2)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  // Fallback: pokus o env var
+  try {
+    const envBuild = import.meta.env?.VITE_BUILD_TIME;
+    if (envBuild) {
+      const d = new Date(envBuild);
+      if (!isNaN(d.getTime())) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${String(d.getFullYear()).slice(2)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return "dev";
+}
+const APP_VERSION = getAppVersion();
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -331,14 +360,117 @@ function getPredictions(tasks, currentUserName) {
   return { topVerbs, topPhrases };
 }
 
-function searchMatch(task, query) {
+// Smart search syntax:
+//   priority:urgent | high | important | low      (a synonyma: !, !!)
+//   due:today | tomorrow | week | month | overdue | none
+//   assigned:<jméno>                              (kontrola assignTo + assignedTo, case-insensitive)
+//   status:active | done | deleted | parked
+//   list:<id|název>                               (custom list — porovnává s task.category)
+//   category:<id|název>                           (alias k list:)
+//   Plain text                                    (full-text v title/note/checklist)
+//   Můžeš kombinovat: "!high due:today rozbitý"   (AND mezi tokeny, plain text se hledá ve zbytku)
+function parseSearchQuery(query) {
+  if (!query || !query.trim()) return { tokens: [], plainText: "" };
+  const tokens = [];
+  const plainParts = [];
+  // Split na "slova" — operátor:hodnota nebo plain text. Hodnoty s mezerou nepodporujeme (zatím).
+  const parts = query.trim().split(/\s+/);
+  for (const part of parts) {
+    const m = part.match(/^([a-zA-Z]+):(.+)$/);
+    if (m) {
+      tokens.push({ key: m[1].toLowerCase(), value: m[2].toLowerCase() });
+    } else if (part.startsWith("!")) {
+      // Zkratka: !urgent => priority:urgent, !!:urgent
+      const v = part.replace(/^!+/, "");
+      tokens.push({ key: "priority", value: v ? v.toLowerCase() : "urgent" });
+    } else if (part.startsWith("@")) {
+      tokens.push({ key: "assigned", value: part.slice(1).toLowerCase() });
+    } else if (part.startsWith("#")) {
+      tokens.push({ key: "list", value: part.slice(1).toLowerCase() });
+    } else {
+      plainParts.push(part);
+    }
+  }
+  return { tokens, plainText: plainParts.join(" ").toLowerCase() };
+}
+
+function matchesPriorityToken(taskPriority, value) {
+  const p = (taskPriority || "").toLowerCase();
+  // Synonyma
+  if (value === "urgent" || value === "high" || value === "akutní" || value === "akutni") return p === "urgent";
+  if (value === "important" || value === "med" || value === "důležité" || value === "dulezite") return p === "important";
+  if (value === "low" || value === "nedůležité" || value === "nedulezite") return p === "low";
+  return p === value;
+}
+
+function matchesDueToken(task, value, todayStr) {
+  const due = task.dueDate;
+  if (value === "none" || value === "žádný" || value === "zadny") return !due;
+  if (!due) return false;
+  const today = new Date(todayStr);
+  const dueDate = new Date(due);
+  const diffDays = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+  if (value === "today" || value === "dnes") return diffDays === 0;
+  if (value === "tomorrow" || value === "zítra" || value === "zitra") return diffDays === 1;
+  if (value === "week" || value === "týden" || value === "tyden") return diffDays >= 0 && diffDays <= 7;
+  if (value === "month" || value === "měsíc" || value === "mesic") return diffDays >= 0 && diffDays <= 31;
+  if (value === "overdue" || value === "po" || value === "prošlé" || value === "prosle") {
+    return diffDays < 0 && task.status === "active";
+  }
+  return false;
+}
+
+function searchMatch(task, query, customLists = []) {
   if (!query) return true;
-  const lower = query.toLowerCase();
-  return (
-    task.title?.toLowerCase().includes(lower) ||
-    task.note?.toLowerCase().includes(lower) ||
-    task.checklist?.some(c => c.text?.toLowerCase().includes(lower))
-  );
+  const { tokens, plainText } = parseSearchQuery(query);
+
+  // todayStr pro due: token (lokální půlnoc)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString();
+
+  // Token AND check
+  for (const { key, value } of tokens) {
+    if (key === "priority" || key === "p" || key === "pri") {
+      if (!matchesPriorityToken(task.priority, value)) return false;
+    } else if (key === "due" || key === "d") {
+      if (!matchesDueToken(task, value, todayStr)) return false;
+    } else if (key === "assigned" || key === "for" || key === "to") {
+      const v = value;
+      const assignTo = (task.assignTo || "").toLowerCase();
+      const assignedTo = Array.isArray(task.assignedTo) ? task.assignedTo : [];
+      const matches = assignTo.includes(v)
+        || assignedTo.some(name => (name || "").toLowerCase().includes(v));
+      if (!matches) return false;
+    } else if (key === "status" || key === "s") {
+      const taskStatus = (task.status || "").toLowerCase();
+      if (value === "parked") {
+        if (!task.parkedReason) return false;
+      } else if (taskStatus !== value) {
+        return false;
+      }
+    } else if (key === "list" || key === "category" || key === "cat" || key === "l") {
+      const cat = (task.category || "").toLowerCase();
+      // Pokus o match dle ID nebo dle názvu custom listu
+      const matchById = cat === value;
+      const matchByName = customLists.some(l =>
+        l.id?.toLowerCase() === cat && (l.name || "").toLowerCase().includes(value)
+      );
+      if (!matchById && !matchByName) return false;
+    }
+    // Neznámé tokeny ignoruj (mohou být plain text s ":" — fallback níže)
+  }
+
+  // Plain text full-text
+  if (plainText) {
+    const matches =
+      task.title?.toLowerCase().includes(plainText) ||
+      task.note?.toLowerCase().includes(plainText) ||
+      task.checklist?.some(c => c.text?.toLowerCase().includes(plainText));
+    if (!matches) return false;
+  }
+
+  return true;
 }
 
 function smartSort(a, b) {
@@ -737,30 +869,142 @@ async function flushOfflineQueue() {
   if (queue.length === 0) return 0;
 
   let flushed = 0;
+  let dropped = 0;
   const remaining = [];
 
   for (const action of queue) {
     try {
+      let result;
       if (action.type === "create_task") {
-        await supabase.from("tasks").insert(taskToDb(action.task));
+        result = await supabase.from("tasks").insert(taskToDb(action.task));
       } else if (action.type === "update_task") {
-        await supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
+        result = await supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
       } else if (action.type === "create_user") {
-        await supabase.from("users").insert({ name: action.user.name, pin: action.user.pin, is_admin: action.user.admin });
+        result = await supabase.from("users").insert({ name: action.user.name, pin: action.user.pin, is_admin: action.user.admin });
       } else if (action.type === "create_comment") {
-        await supabase.from("task_comments").insert(commentToDb(action.comment));
+        result = await supabase.from("task_comments").insert(commentToDb(action.comment));
       } else if (action.type === "update_comment") {
-        await supabase.from("task_comments").update(commentToDb(action.comment)).eq("id", action.comment.id);
+        result = await supabase.from("task_comments").update(commentToDb(action.comment)).eq("id", action.comment.id);
       }
+      // Supabase vrací error v result.error, ne throw
+      if (result?.error) throw result.error;
       flushed++;
     } catch (e) {
-      // Keep failed actions in queue for next attempt
-      remaining.push(action);
+      if (isNetworkError(e)) {
+        // Síťová chyba — zkusíme příště
+        remaining.push(action);
+      } else {
+        // Server chyba (4xx/5xx, schema mismatch) — opětovný retry by selhal stejně.
+        // Zahodit z queue + zalogovat, aby se nezaseklo navždy.
+        logServerError(`flushOfflineQueue:${action.type}`, e, action);
+        dropped++;
+      }
     }
+  }
+
+  if (dropped > 0) {
+    console.warn(`[flushOfflineQueue] dropped ${dropped} actions due to server errors`);
   }
 
   cacheSet(OFFLINE_QUEUE, remaining);
   return flushed;
+}
+
+/* ═══════════════════════════════════════════════════════
+   ERROR CLASSIFICATION
+   ═══════════════════════════════════════════════════════ */
+
+// Rozliš síťovou chybu (offline, fetch failed) od server chyby (4xx/5xx).
+// Síťová chyba → queue pro pozdější retry. Server chyba → log + alert pro vývojáře.
+function isNetworkError(e) {
+  if (!e) return false;
+  // Browser je prokazatelně offline
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  // Supabase v JS error má někdy `message: "Failed to fetch"` při síťové chybě
+  if (e.message && /failed to fetch|networkerror|load failed/i.test(e.message)) return true;
+  // PostgREST/Supabase chyby mají `code` (např. PGRST204) nebo `status` (4xx/5xx) — server chyba
+  if (e.code || e.status >= 400) return false;
+  // TypeError z fetch je obvykle síťová chyba
+  if (e.name === "TypeError") return true;
+  // Default: pokud nevíme, považujeme za síťovou chybu (bezpečnější — ztráta nezpůsobí permanent loss)
+  return true;
+}
+
+// Loguje server chybu prominentně, aby vývojář (Michal) hned viděl, že něco selhalo.
+// Ukládá poslední errory do localStorage pro pozdější diagnostiku.
+function logServerError(context, error, payload) {
+  console.error(`[SERVER ERROR] ${context}:`, error?.code || error?.status, error?.message || error);
+  if (error?.details) console.error("  details:", error.details);
+  if (error?.hint) console.error("  hint:", error.hint);
+  if (payload) console.error("  payload:", payload);
+  // Zaznamenej do localStorage pro pozdější checkup
+  try {
+    const log = JSON.parse(localStorage.getItem("ft_server_errors") || "[]");
+    log.unshift({
+      ts: new Date().toISOString(),
+      context,
+      code: error?.code || error?.status || "unknown",
+      message: error?.message || String(error),
+      hint: error?.hint || null,
+    });
+    // Drž jen posledních 20 errorů
+    localStorage.setItem("ft_server_errors", JSON.stringify(log.slice(0, 20)));
+  } catch (e) { /* ignore */ }
+}
+
+/* ═══════════════════════════════════════════════════════
+   SCHEMA HEALTH CHECK
+   ═══════════════════════════════════════════════════════ */
+
+// Při startu zkontroluj zda DB má všechny sloupce, které taskToDb posílá.
+// Pokud ne, vyhoď prominentní warning do konzole — předejde tichým bugům typu PGRST204
+// ("Could not find the 'X' column of 'tasks' in the schema cache").
+async function checkDbSchema() {
+  const expectedTaskColumns = [
+    "id", "title", "note", "type", "priority", "category", "status",
+    "due_date", "show_from", "rec_days", "recurrence_rule",
+    "active_months", "assign_to", "assigned_to", "done_by", "seen_by",
+    "checklist", "images", "created_by", "created_at",
+    "completed_at", "completed_by_user", "deleted_at",
+    "scratch_pad", "parked_reason", "parked_at", "parked_by", "time_spent_min",
+  ];
+
+  try {
+    // Vytáhneme 1 řádek a podíváme se, jaké sloupce vrátí.
+    // Pokud neexistují žádné úkoly, .select(*).limit(1) vrátí prázdné pole, ale schema check selže.
+    // Proto preferujeme HEAD request s vlastním selectem.
+    const { data, error } = await supabase.from("tasks").select("*").limit(1);
+    if (error) {
+      console.error("[schema check] cannot read tasks:", error);
+      return;
+    }
+    if (!data || data.length === 0) {
+      // Žádný úkol — nemůžeme zjistit sloupce. Skip silently.
+      return;
+    }
+    const actualColumns = Object.keys(data[0]);
+    const missing = expectedTaskColumns.filter(c => !actualColumns.includes(c));
+    const extra = actualColumns.filter(c => !expectedTaskColumns.includes(c));
+
+    if (missing.length > 0) {
+      // Stylový prominentní warning v konzoli
+      console.error(
+        "%c⚠️ DB SCHEMA MISMATCH ⚠️",
+        "background: #ef4444; color: white; font-size: 16px; padding: 4px 8px; border-radius: 4px;"
+      );
+      console.error(`Tabulka 'tasks' POSTRÁDÁ ${missing.length} sloupec/sloupců, které aplikace posílá:`);
+      missing.forEach(c => console.error(`  ❌ ${c}`));
+      console.error("Je třeba spustit ALTER TABLE migraci v Supabase. Bez toho UPDATE/INSERT operace selhávají s PGRST204.");
+    }
+    if (extra.length > 0) {
+      console.warn(`[schema check] DB má extra sloupce, které aplikace neposílá: ${extra.join(", ")}`);
+    }
+    if (missing.length === 0 && extra.length === 0) {
+      console.log("[schema check] ✅ tasks schema OK");
+    }
+  } catch (e) {
+    console.warn("[schema check] failed:", e);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -803,16 +1047,25 @@ async function apiCreateUser(user) {
     const { error } = await supabase.from("users").insert({ name: user.name, pin: user.pin, is_admin: user.admin });
     if (error) throw error;
   } catch (e) {
-    console.warn("apiCreateUser offline, queued");
-    addToOfflineQueue({ type: "create_user", user });
+    if (isNetworkError(e)) {
+      console.warn("apiCreateUser offline, queued");
+      addToOfflineQueue({ type: "create_user", user });
+    } else {
+      logServerError("apiCreateUser", e, user);
+    }
   }
 }
 
 async function apiDeleteUser(name) {
   try {
-    await supabase.from("users").delete().eq("name", name);
+    const { error } = await supabase.from("users").delete().eq("name", name);
+    if (error) throw error;
   } catch (e) {
-    console.warn("apiDeleteUser failed offline");
+    if (isNetworkError(e)) {
+      console.warn("apiDeleteUser failed offline");
+    } else {
+      logServerError("apiDeleteUser", e, { name });
+    }
   }
 }
 
@@ -822,7 +1075,11 @@ async function apiUpdateUserPin(name, newPin) {
     if (error) throw error;
     return true;
   } catch (e) {
-    console.error("apiUpdateUserPin failed:", e);
+    if (isNetworkError(e)) {
+      console.warn("apiUpdateUserPin failed offline");
+    } else {
+      logServerError("apiUpdateUserPin", e, { name });
+    }
     return false;
   }
 }
@@ -836,8 +1093,13 @@ async function apiCreateTask(task) {
     const { error } = await supabase.from("tasks").insert(taskToDb(task));
     if (error) throw error;
   } catch (e) {
-    console.warn("apiCreateTask offline, queued");
-    addToOfflineQueue({ type: "create_task", task });
+    if (isNetworkError(e)) {
+      console.warn("apiCreateTask offline, queued");
+      addToOfflineQueue({ type: "create_task", task });
+    } else {
+      // Server chyba (4xx/5xx) — queue by stejně selhal, jen logujeme.
+      logServerError("apiCreateTask", e, taskToDb(task));
+    }
   }
 }
 
@@ -850,8 +1112,13 @@ async function apiUpdateTask(task) {
     const { error } = await supabase.from("tasks").update(taskToDb(task)).eq("id", task.id);
     if (error) throw error;
   } catch (e) {
-    console.warn("apiUpdateTask offline, queued");
-    addToOfflineQueue({ type: "update_task", task });
+    if (isNetworkError(e)) {
+      console.warn("apiUpdateTask offline, queued");
+      addToOfflineQueue({ type: "update_task", task });
+    } else {
+      // Server chyba (4xx/5xx) — queue by stejně selhal, jen logujeme.
+      logServerError("apiUpdateTask", e, taskToDb(task));
+    }
   }
 }
 
@@ -887,8 +1154,12 @@ async function apiCreateComment(comment) {
     const { error } = await supabase.from("task_comments").insert(commentToDb(comment));
     if (error) throw error;
   } catch (e) {
-    console.warn("apiCreateComment offline, queued");
-    addToOfflineQueue({ type: "create_comment", comment });
+    if (isNetworkError(e)) {
+      console.warn("apiCreateComment offline, queued");
+      addToOfflineQueue({ type: "create_comment", comment });
+    } else {
+      logServerError("apiCreateComment", e, commentToDb(comment));
+    }
   }
 }
 
@@ -900,17 +1171,26 @@ async function apiUpdateComment(comment) {
       .update(commentToDb(comment)).eq("id", comment.id);
     if (error) throw error;
   } catch (e) {
-    addToOfflineQueue({ type: "update_comment", comment });
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "update_comment", comment });
+    } else {
+      logServerError("apiUpdateComment", e, commentToDb(comment));
+    }
   }
 }
 
 async function apiDeleteComment(commentId) {
   try {
-    await supabase.from("task_comments").delete().eq("id", commentId);
+    const { error } = await supabase.from("task_comments").delete().eq("id", commentId);
+    if (error) throw error;
     const cached = cacheGet(CACHE_COMMENTS) || [];
     cacheSet(CACHE_COMMENTS, cached.filter(c => c.id !== commentId));
   } catch (e) {
-    console.warn("apiDeleteComment failed");
+    if (isNetworkError(e)) {
+      console.warn("apiDeleteComment failed offline");
+    } else {
+      logServerError("apiDeleteComment", e, { commentId });
+    }
   }
 }
 
@@ -3051,6 +3331,110 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
 }
 
 /* ═══════════════════════════════════════════════════════
+   BULK SELECTABLE CARD WRAPPER
+   Obaluje TaskCard. V bulk mode zachytává kliky pro toggle,
+   v normálním režimu propouští interakci na TaskCard.
+   Long-press (650ms) na kartě aktivuje bulk mode.
+   ═══════════════════════════════════════════════════════ */
+
+function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPress, theme, children }) {
+  const longPressTimerRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
+
+  const handlePointerDown = (e) => {
+    // Pravé tlačítko myši a touch s víc prsty ignoruj
+    if (e.button === 2) return;
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      // Haptic feedback (jen na zařízeních co to podporují)
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (_) { /* ignore */ }
+      onLongPress(taskId);
+    }, 650);
+  };
+
+  const handlePointerUp = () => {
+    clearTimeout(longPressTimerRef.current);
+  };
+
+  const handlePointerCancel = () => {
+    clearTimeout(longPressTimerRef.current);
+  };
+
+  // V bulk mode: klik = toggle. Long-press uvnitř kartu nepropustíme dolů.
+  const handleClick = (e) => {
+    if (longPressTriggeredRef.current) {
+      // Tento klik byl důsledek long-press → polkni ho, nepouštěj na kartu
+      e.stopPropagation();
+      e.preventDefault();
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (bulkMode) {
+      e.stopPropagation();
+      e.preventDefault();
+      onToggle(taskId);
+    }
+  };
+
+  // Klávesnice / Ctrl+klik na desktopu jako alternativa long-pressu
+  const handleMouseDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && !bulkMode) {
+      e.stopPropagation();
+      e.preventDefault();
+      onLongPress(taskId);
+    }
+  };
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerCancel}
+      onClickCapture={handleClick}
+      onMouseDownCapture={handleMouseDown}
+      style={{
+        position: "relative",
+        // V bulk mode zvýrazni vybrané karty
+        outline: bulkMode && isSelected ? `2px solid #3b82f6` : "none",
+        outlineOffset: bulkMode && isSelected ? -2 : 0,
+        borderRadius: bulkMode && isSelected ? 12 : 0,
+        transition: "outline-color 0.15s",
+        // V bulk mode zakázat text-selection (long-press by jinak vybral text)
+        userSelect: bulkMode ? "none" : "auto",
+        WebkitUserSelect: bulkMode ? "none" : "auto",
+      }}
+    >
+      {bulkMode && (
+        <div style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          zIndex: 5,
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          background: isSelected ? "#3b82f6" : theme.cardBg,
+          border: `2px solid ${isSelected ? "#3b82f6" : theme.cardBorder}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "white",
+          fontSize: 14,
+          fontWeight: 700,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+          pointerEvents: "none",
+        }}>
+          {isSelected ? "✓" : ""}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
@@ -3317,9 +3701,20 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const completing = actionAnim === "complete"; // legacy alias
 
   // Assignment label
+  // "Všichni" zobrazíme JEN pokud je assignedTo skutečně rovno všem uživatelům.
+  // Pokud `assign_to === "both"` ale assignedTo má jen 2 ze 4 lidí, zobrazíme jména.
   let assignLabel = "";
-  if (task.assignTo === "both") assignLabel = "Všichni";
-  else if (task.createdBy !== task.assignedTo?.[0]) assignLabel = `→ ${task.assignedTo?.[0]}`;
+  const assignees = Array.isArray(task.assignedTo) ? task.assignedTo : [];
+  const totalUsers = (users || []).length;
+  const isReallyAll = totalUsers > 0 && assignees.length === totalUsers;
+  if (isReallyAll) {
+    assignLabel = "Všichni";
+  } else if (assignees.length > 1) {
+    // Více lidí, ale ne všichni — zobraz jména oddělené plusem
+    assignLabel = `→ ${assignees.join(" + ")}`;
+  } else if (assignees.length === 1 && task.createdBy !== assignees[0]) {
+    assignLabel = `→ ${assignees[0]}`;
+  }
 
   // Card background — WHITE by default, color only for special states
   let cardBackground = theme.card; // White/neutral default
@@ -3754,26 +4149,71 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 </span>
               );
             })()}
-            {task.dueDate && !taskIsDone && !isDeleted(task) && (
-              <span style={{
-                fontSize: "10px", fontWeight: 600,
-                color: overdue ? theme.red : soon ? theme.yellow : theme.textMid,
-              }}>
-                {overdue ? "⚠ " : ""}{formatDate(task.dueDate)}
-              </span>
-            )}
+            {task.dueDate && !taskIsDone && !isDeleted(task) && (() => {
+              const daysOverdue = overdue ? Math.abs(Math.floor(daysDiff(task.dueDate))) : 0;
+              return (
+                <span style={{
+                  fontSize: "10px", fontWeight: 600,
+                  color: overdue ? theme.red : soon ? theme.yellow : theme.textMid,
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                }}>
+                  {formatDate(task.dueDate)}
+                  {overdue && (
+                    <span style={{
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      color: "white",
+                      background: theme.red,
+                      padding: "1px 6px",
+                      borderRadius: 8,
+                      letterSpacing: "0.2px",
+                    }}>
+                      ⚠ {daysOverdue === 1 ? "1 den" : daysOverdue < 5 ? `${daysOverdue} dny` : `${daysOverdue} dní`} po termínu
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
             {/* Time trace for completed */}
             {taskIsDone && task.completedAt && (
               <span style={{ fontSize: "10px", color: theme.green, fontWeight: 600 }}>
                 ✓ {formatTimeTrace(task.completedAt)}{task.completedByUser ? ` — ${task.completedByUser}` : ""}
               </span>
             )}
-            {/* Time trace for deleted */}
-            {isDeleted(task) && task.deletedAt && (
-              <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600 }}>
-                🗑 {formatTimeTrace(task.deletedAt)}
-              </span>
-            )}
+            {/* Time trace for deleted + countdown to permanent deletion */}
+            {isDeleted(task) && task.deletedAt && (() => {
+              const ageDays = (Date.now() - new Date(task.deletedAt).getTime()) / (1000 * 60 * 60 * 24);
+              const daysLeft = Math.max(0, Math.ceil(30 - ageDays));
+              const isUrgent = daysLeft <= 7;
+              return (
+                <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  🗑 {formatTimeTrace(task.deletedAt)}
+                  {daysLeft > 0 ? (
+                    <span style={{
+                      fontSize: "10px",
+                      color: isUrgent ? theme.red : theme.textMid,
+                      background: isUrgent ? "rgba(239,68,68,0.1)" : theme.inputBg,
+                      padding: "1px 6px",
+                      borderRadius: 8,
+                      fontWeight: 600,
+                    }}>
+                      {isUrgent ? "⏰ " : ""}smaže se za {daysLeft}{daysLeft === 1 ? " den" : daysLeft < 5 ? " dny" : " dní"}
+                    </span>
+                  ) : (
+                    <span style={{
+                      fontSize: "10px",
+                      color: theme.red,
+                      background: "rgba(239,68,68,0.15)",
+                      padding: "1px 6px",
+                      borderRadius: 8,
+                      fontWeight: 700,
+                    }}>
+                      ⚠ smaže se brzy
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
             {/* Progress indicator — this card shows a completed checklist item */}
             {progressItem && (
               <span style={{
@@ -6306,13 +6746,23 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    SEARCH SHEET — full-screen vyhledávání
    ═══════════════════════════════════════════════════════ */
 
-function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate }) {
+function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, onClose, onNavigate }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
 
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 100);
   }, []);
+
+  // Detekce smart search syntax — pokud query obsahuje operátor (klíč:hodnota),
+  // zkratky (!high, @pavla, #nákup) nebo je delší kombinace tokenů,
+  // delegujeme na shared `searchMatch` funkci. Jinak použijeme původní fuzzy search
+  // (s diakritikou-insensitive normalizací).
+  const isSmartQuery = useMemo(() => {
+    const q = (query || "").trim();
+    if (!q) return false;
+    return /(\b[a-zA-Z]+:[\S]+)|(^!)|(\s!)|(^@)|(\s@)|(^#)|(\s#)/.test(q);
+  }, [query]);
 
   const results = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
@@ -6322,26 +6772,28 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
     const userNameLc = (currentUser.name || "").trim().toLowerCase();
     return tasks
       .filter(t => {
-        // Search hledá ve VŠECH úkolech — i v koši, splněné, plánované.
         // Privacy filter — search vždy ukazuje jen úkoly relevantní pro currentUser
         // (autor nebo přiřazen), bez ohledu na admin flag
         const createdByLc = (t.createdBy || "").trim().toLowerCase();
         const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
         const isMine = createdByLc === userNameLc || assignedToLc.includes(userNameLc);
         if (!isMine) return false;
-        // Match na title
+
+        // Smart query — operátorová syntaxe (priority:high, due:today, ...)
+        if (isSmartQuery) {
+          return searchMatch(t, query, customLists);
+        }
+
+        // Fallback: fuzzy plain text search s diakritikou
         if (norm(t.title).includes(qNorm)) return true;
-        // Match na poznámku
         if (t.note && norm(t.note).includes(qNorm)) return true;
-        // Match na checklist
         if ((t.checklist || []).some(item => norm(item.text).includes(qNorm))) return true;
-        // Match na komentáře (poprvé najdi komentář pro tenhle task)
         const taskComments = comments.filter(c => c.taskId === t.id);
         if (taskComments.some(c => c.content && norm(c.content).includes(qNorm))) return true;
         return false;
       })
       .slice(0, 30);
-  }, [tasks, comments, query, currentUser]);
+  }, [tasks, comments, query, currentUser, isSmartQuery, customLists]);
 
   return (
     <div onClick={onClose} style={{
@@ -6368,7 +6820,7 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat v úkolech, poznámkách, komentářích..."
+            placeholder="Hledat… nebo zkus !urgent, due:today, @pavla"
             style={{
               flex: 1, fontSize: "14px", padding: "8px 10px",
               background: theme.inputBg, color: theme.text,
@@ -6381,6 +6833,24 @@ function SearchSheet({ tasks, comments, currentUser, theme, onClose, onNavigate 
             cursor: "pointer", color: theme.textSub, padding: "0 4px",
           }}>×</button>
         </div>
+
+        {/* Smart search hint — zobrazí se jen pokud je input prázdný */}
+        {!query.trim() && (
+          <div style={{
+            padding: "10px 16px",
+            borderBottom: `1px solid ${theme.cardBorder}`,
+            fontSize: "11px",
+            color: theme.textMid,
+            lineHeight: 1.6,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.textSub }}>💡 Tipy pro hledání:</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent</code> nebo <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>priority:high</code> — priorita</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:today</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:overdue</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:week</code> — termín</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>@pavla</code> — komu je úkol přiřazen</div>
+            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>status:done</code> — stav (active, done, deleted, parked)</div>
+            <div style={{ marginTop: 4, opacity: 0.7 }}>Můžeš kombinovat: <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent due:today</code></div>
+          </div>
+        )}
 
         {/* Results */}
         <div style={{ padding: "12px 14px" }}>
@@ -6850,7 +7320,7 @@ function LoginScreen({ users, onLogin, themeName }) {
         userSelect: "none",
         fontWeight: 500,
       }}>
-        © Michal Bělohlav · Rodinné úkoly
+        © Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
       </div>
     </div>
   );
@@ -8474,7 +8944,7 @@ function Snackbar({ message, onUndo, visible, theme }) {
    MAIN APP
    ═══════════════════════════════════════════════════════ */
 
-export default function App() {
+function App() {
   const [tasks, setTasks] = useState([]);
   const [customLists, setCustomLists] = useState([]);
   // Echo prevention — sleduje časy posledních lokálních editů taskID
@@ -8487,6 +8957,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
+  // PWA install prompt — drží `beforeinstallprompt` event do doby, než user klikne na banner.
+  // Po instalaci nebo dismiss se nastaví na null. Stav `installDismissed` v localStorage
+  // brání opětovnému zobrazení po dismiss.
+  const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [filter, setFilter] = useState("my");
   const [viewStatus, setViewStatus] = useState("active");
   const [sortMode, setSortMode] = useState("created");
@@ -8586,6 +9061,18 @@ export default function App() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   const [undoState, setUndoState] = useState(null);
+  // Bulk selection — když je `bulkMode` true, klikání na úkoly přidává/odebírá do `bulkSelection`.
+  // Aktivace: long-press na kartě úkolu (mobile) nebo Ctrl+klik (PC).
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelection, setBulkSelection] = useState(() => new Set());
+  // Stránkování — defaultně zobrazit prvních 50 úkolů, tlačítko "Načíst další" odhalí dalších 50.
+  // Cíl: motivovat uživatele organizovat úkoly do kategorií / vlastních seznamů, místo aby měl 200 úkolů v jedné hromadě.
+  const PAGE_SIZE = 50;
+  const [renderLimit, setRenderLimit] = useState(PAGE_SIZE);
+  // Reset render limitu při každé změně filtru/view/řazení — uživatel chce vidět začátek seznamu
+  useEffect(() => {
+    setRenderLimit(PAGE_SIZE);
+  }, [viewStatus, filter, categoryFilter, priorityFilter, sortMode, searchQuery, dueDateFilter]);
   const [themeName, setThemeName] = useState(() => {
     try { return localStorage.getItem("ft_theme") || "dark"; } catch (e) { return "dark"; }
   });
@@ -8634,6 +9121,60 @@ export default function App() {
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, []);
 
+  // PWA install prompt — Chrome/Edge/Brave triggernou `beforeinstallprompt`,
+  // pokud uživatel ještě nemá appku nainstalovanou jako PWA. Zachytíme event,
+  // a později ho použijeme, když uživatel klikne na install banner.
+  useEffect(() => {
+    // Pokud user už dismissoval banner, nikdy ho znovu neukaž (až do clear cache)
+    let dismissed = false;
+    try { dismissed = localStorage.getItem("ft_install_dismissed") === "1"; } catch (e) { /* ignore */ }
+    if (dismissed) return;
+
+    // Pokud appka už běží jako PWA (standalone mode), banner nemá smysl
+    const isStandalone = window.matchMedia?.("(display-mode: standalone)").matches
+      || window.navigator.standalone === true; // iOS Safari
+    if (isStandalone) return;
+
+    const onBeforeInstall = (e) => {
+      e.preventDefault(); // zabrání default minibar v Chromu
+      setPwaInstallEvent(e);
+      // Banner ukaž až po malé prodlevě, aby uživatel nedostal okamžitě reklamu
+      setTimeout(() => setShowInstallBanner(true), 3000);
+    };
+    const onInstalled = () => {
+      setPwaInstallEvent(null);
+      setShowInstallBanner(false);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const handlePwaInstall = useCallback(async () => {
+    if (!pwaInstallEvent) return;
+    try {
+      pwaInstallEvent.prompt();
+      const { outcome } = await pwaInstallEvent.userChoice;
+      if (outcome === "accepted") {
+        setShowInstallBanner(false);
+        setPwaInstallEvent(null);
+      } else {
+        // User dismissed v native dialogu — schovej banner, ale neulož "navždy dismissed"
+        setShowInstallBanner(false);
+      }
+    } catch (e) {
+      console.warn("PWA install prompt failed:", e);
+    }
+  }, [pwaInstallEvent]);
+
+  const handlePwaDismiss = useCallback(() => {
+    setShowInstallBanner(false);
+    try { localStorage.setItem("ft_install_dismissed", "1"); } catch (e) { /* ignore */ }
+  }, []);
+
   // Session restore
   useEffect(() => {
     try { const saved = localStorage.getItem("ft_user"); if (saved) setCurrentUser(JSON.parse(saved)); } catch (e) {}
@@ -8651,6 +9192,10 @@ export default function App() {
   // Initial data load
   useEffect(() => {
     (async () => {
+      // Při startu ověř DB schéma — předejde tichým chybám typu PGRST204
+      // (chybějící sloupec → INSERT/UPDATE selhává → změny se neuloží)
+      checkDbSchema();
+
       // Flush any pending offline changes first
       if (navigator.onLine) {
         await flushOfflineQueue();
@@ -8698,23 +9243,28 @@ export default function App() {
 
           // Subscribe to push notifications
           if ("PushManager" in window && Notification.permission === "granted") {
+            const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+            if (!vapidKey || vapidKey.length < 20) {
+              // Bez VAPID klíče nemá smysl pokoušet se subscribe — selhalo by to s nejasnou chybou.
+              // (Push notifikace vyžadují backend setup, tohle je zatím nedokončená feature.)
+              console.info("ℹ️ Push notifications skipped (VITE_VAPID_PUBLIC_KEY not configured)");
+              return;
+            }
             try {
               const existingSub = await reg.pushManager.getSubscription();
               if (!existingSub) {
                 const subscription = await reg.pushManager.subscribe({
                   userVisibleOnly: true,
-                  applicationServerKey: urlBase64ToUint8Array(
-                    import.meta.env.VITE_VAPID_PUBLIC_KEY || ""
-                  ),
+                  applicationServerKey: urlBase64ToUint8Array(vapidKey),
                 });
                 console.log("✅ Push subscription created");
                 // Save subscription to Supabase (will be linked to user on login)
                 try {
                   localStorage.setItem("ft_push_sub", JSON.stringify(subscription.toJSON()));
-                } catch (e) {}
+                } catch (e) { /* ignore */ }
               }
             } catch (err) {
-              console.warn("Push subscription failed:", err);
+              console.warn("Push subscription failed:", err?.message || err);
             }
           }
         })
@@ -8767,71 +9317,190 @@ export default function App() {
   }, [tasks, currentUser]);
 
   // Realtime subscriptions
+  const realtimeChannelsRef = useRef({ tasks: null, users: null, comments: null, lists: null });
+
   useEffect(() => {
     if (loading) return;
 
     const tasksChannel = supabase.channel("tasks-realtime-v12")
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setTasks(prev => prev.find(t => t.id === payload.new.id) ? prev : [dbToTask(payload.new), ...prev]);
-        } else if (payload.eventType === "UPDATE") {
-          // Echo prevention — pokud jsme task editovali v posledních 1500ms,
-          // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
-          const lastEdit = localEditsRef.current[payload.new.id] || 0;
-          if (Date.now() - lastEdit < 1500) return;
-          setTasks(prev => prev.map(t => t.id === payload.new.id ? dbToTask(payload.new) : t));
-        } else if (payload.eventType === "DELETE") {
-          setTasks(prev => prev.filter(t => t.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            const newTask = dbToTask(payload.new);
+            setTasks(prev => prev.find(t => t.id === newTask.id) ? prev : [newTask, ...prev]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            // Echo prevention — pokud jsme task editovali v posledních 1500ms,
+            // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
+            const lastEdit = localEditsRef.current[payload.new.id] || 0;
+            if (Date.now() - lastEdit < 1500) return;
+            const updatedTask = dbToTask(payload.new);
+            setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setTasks(prev => prev.filter(t => t.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime tasks] handler error:", e, payload);
         }
       }).subscribe((status) => {
         console.log("[realtime tasks]", status);
       });
+    realtimeChannelsRef.current.tasks = tasksChannel;
 
     const usersChannel = supabase.channel("users-realtime-v11")
       .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
-        apiLoadUsers().then(setUsers);
-      }).subscribe();
+        apiLoadUsers().then(setUsers).catch(e => console.warn("[realtime users] reload failed:", e));
+      }).subscribe((status) => {
+        console.log("[realtime users]", status);
+      });
+    realtimeChannelsRef.current.users = usersChannel;
 
     const commentsChannel = supabase.channel("comments-realtime-v12")
       .on("postgres_changes", { event: "*", schema: "public", table: "task_comments" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setComments(prev => prev.find(c => c.id === payload.new.id) ? prev : [...prev, dbToComment(payload.new)]);
-        } else if (payload.eventType === "UPDATE") {
-          // Echo prevention — pokud jsme tento komentář editovali v posledních 1500ms, ignoruj
-          const lastEdit = localCommentEditsRef.current[payload.new.id] || 0;
-          if (Date.now() - lastEdit < 1500) return;
-          setComments(prev => prev.map(c => c.id === payload.new.id ? dbToComment(payload.new) : c));
-        } else if (payload.eventType === "DELETE") {
-          setComments(prev => prev.filter(c => c.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            const newComment = dbToComment(payload.new);
+            setComments(prev => prev.find(c => c.id === newComment.id) ? prev : [...prev, newComment]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            // Echo prevention — pokud jsme tento komentář editovali v posledních 1500ms, ignoruj
+            const lastEdit = localCommentEditsRef.current[payload.new.id] || 0;
+            if (Date.now() - lastEdit < 1500) return;
+            const updatedComment = dbToComment(payload.new);
+            setComments(prev => prev.map(c => c.id === updatedComment.id ? updatedComment : c));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setComments(prev => prev.filter(c => c.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime comments] handler error:", e, payload);
         }
-      }).subscribe();
+      }).subscribe((status) => {
+        console.log("[realtime comments]", status);
+      });
+    realtimeChannelsRef.current.comments = commentsChannel;
 
     // Custom lists realtime
     const listsChannel = supabase.channel("custom-lists-realtime-v1")
       .on("postgres_changes", { event: "*", schema: "public", table: "custom_lists" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setCustomLists(prev => prev.find(l => l.id === payload.new.id) ? prev : [...prev, payload.new]);
-        } else if (payload.eventType === "UPDATE") {
-          setCustomLists(prev => prev.map(l => l.id === payload.new.id ? payload.new : l));
-        } else if (payload.eventType === "DELETE") {
-          setCustomLists(prev => prev.filter(l => l.id !== payload.old.id));
+        try {
+          if (payload.eventType === "INSERT") {
+            if (!payload.new?.id) return;
+            setCustomLists(prev => prev.find(l => l.id === payload.new.id) ? prev : [...prev, payload.new]);
+          } else if (payload.eventType === "UPDATE") {
+            if (!payload.new?.id) return;
+            setCustomLists(prev => prev.map(l => l.id === payload.new.id ? payload.new : l));
+          } else if (payload.eventType === "DELETE") {
+            if (!payload.old?.id) return;
+            setCustomLists(prev => prev.filter(l => l.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime lists] handler error:", e, payload);
         }
-      }).subscribe();
+      }).subscribe((status) => {
+        console.log("[realtime lists]", status);
+      });
+    realtimeChannelsRef.current.lists = listsChannel;
 
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(commentsChannel);
       supabase.removeChannel(listsChannel);
+      realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null };
     };
   }, [loading]);
 
+  // Diagnostic helper — vystavený na window jako `window.appDiagnostics()`.
+  // V konzoli ti vypíše souhrn stavu aplikace: počty úkolů, stav realtime kanálů,
+  // nedávné errory, pending offline akce. Užitečné při ladění "něco se chová divně".
+  useEffect(() => {
+    if (loading) return;
+    window.appDiagnostics = () => {
+      const channels = realtimeChannelsRef.current || {};
+      const channelStates = {
+        tasks: channels.tasks?.state || "n/a",
+        users: channels.users?.state || "n/a",
+        comments: channels.comments?.state || "n/a",
+        lists: channels.lists?.state || "n/a",
+      };
+      let serverErrors = [];
+      let renderErrors = [];
+      let offlineQueue = [];
+      let pushSub = null;
+      try { serverErrors = JSON.parse(localStorage.getItem("ft_server_errors") || "[]"); } catch (e) { /* ignore */ }
+      try { renderErrors = JSON.parse(localStorage.getItem("ft_render_errors") || "[]"); } catch (e) { /* ignore */ }
+      try { offlineQueue = JSON.parse(localStorage.getItem("ft_offline_queue") || "[]"); } catch (e) { /* ignore */ }
+      try { pushSub = !!localStorage.getItem("ft_push_sub"); } catch (e) { /* ignore */ }
+
+      const summary = {
+        version: APP_VERSION,
+        currentUser: currentUser?.name || "(není přihlášen)",
+        online: navigator.onLine,
+        counts: {
+          tasks: tasks.length,
+          tasksActive: tasks.filter(t => t.status === "active").length,
+          tasksDone: tasks.filter(t => t.status === "done").length,
+          tasksDeleted: tasks.filter(t => t.status === "deleted").length,
+          users: (users || []).length,
+          comments: comments.length,
+          customLists: customLists.length,
+        },
+        realtime: channelStates,
+        offlineQueueSize: offlineQueue.length,
+        recentServerErrors: serverErrors.slice(0, 3),
+        recentRenderErrors: renderErrors.slice(0, 3),
+        pushSubscriptionCached: pushSub,
+        rendered: new Date().toISOString(),
+      };
+      console.log("%c📊 APP DIAGNOSTICS", "background:#3b82f6;color:white;padding:2px 6px;border-radius:3px;font-weight:600;");
+      console.table(summary.counts);
+      console.log("Realtime channels:", channelStates);
+      if (serverErrors.length > 0) {
+        console.log(`%c⚠ ${serverErrors.length} server errors logged`, "color:#dc2626;font-weight:600;");
+        console.log(serverErrors.slice(0, 3));
+      }
+      if (renderErrors.length > 0) {
+        console.log(`%c⚠ ${renderErrors.length} render errors logged`, "color:#dc2626;font-weight:600;");
+        console.log(renderErrors.slice(0, 3));
+      }
+      console.log("Full state:", summary);
+      return summary;
+    };
+    return () => {
+      try { delete window.appDiagnostics; } catch (e) { /* ignore */ }
+    };
+  }, [loading, tasks, users, comments, customLists, currentUser]);
+
   // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout).
   // Server je vždy zdroj pravdy; lokální cache se používá jen v offline režimu.
+  // Navíc: zkontroluj stav Realtime kanálů a pokud nejsou joined, donuť je k reconnectu.
   useEffect(() => {
     if (loading) return;
     let lastRefreshAt = 0;
     let inFlight = false;
+
+    // Pomocná: zkontroluj stav Realtime kanálu a pokud není OK, zkus reconnect.
+    // Supabase v2 channel.state je 'closed' | 'errored' | 'joined' | 'joining' | 'leaving'.
+    const ensureChannelHealthy = (channel, label) => {
+      if (!channel) return;
+      const state = channel.state;
+      if (state !== "joined" && state !== "joining") {
+        console.warn(`[realtime ${label}] state="${state}" — attempting reconnect`);
+        try {
+          // Subscribe znovu — pokud kanál spadl, nahodí se znovu
+          channel.subscribe((status) => {
+            console.log(`[realtime ${label}] reconnect →`, status);
+          });
+        } catch (e) {
+          console.warn(`[realtime ${label}] reconnect failed:`, e);
+        }
+      }
+    };
+
     const onFocus = async () => {
       // Debounce: pokud jsme refreshovali v posledních 2s, skip.
       // Brání tomu, aby se focus + visibilitychange + click vyvolaly multiple načtení.
@@ -8840,6 +9509,15 @@ export default function App() {
       if (inFlight) return;
       lastRefreshAt = now;
       inFlight = true;
+
+      // 1) Zkontroluj zdraví Realtime kanálů (mohly spadnout během sleep / slabé sítě)
+      const channels = realtimeChannelsRef.current;
+      ensureChannelHealthy(channels.tasks, "tasks");
+      ensureChannelHealthy(channels.users, "users");
+      ensureChannelHealthy(channels.comments, "comments");
+      ensureChannelHealthy(channels.lists, "lists");
+
+      // 2) Force refresh ze serveru — chytne změny zmeškané během odpojení
       try {
         const [freshTasks, freshComments] = await Promise.all([
           apiLoadTasks(),
@@ -8896,18 +9574,8 @@ export default function App() {
     // Echo prevention pro Realtime listener — když naše vlastní změna
     // přijde zpět přes websocket, nepřepíšeme jí lokální stav.
     // 1500ms okno pokrývá round-trip + Supabase Realtime broadcast latency.
-    const now = Date.now();
-    localEditsRef.current[taskId] = now;
-    try {
-      const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
-      stored[taskId] = now;
-      // Vyčistit staré (>30s — krátké okno, server = zdroj pravdy)
-      const cleaned = {};
-      Object.entries(stored).forEach(([id, ts]) => {
-        if (now - ts < 30000) cleaned[id] = ts;
-      });
-      localStorage.setItem("ft_local_edits", JSON.stringify(cleaned));
-    } catch (e) { /* ignore */ }
+    // (in-memory ref stačí — echo přijde okamžitě po vlastní akci, ne po reload)
+    localEditsRef.current[taskId] = Date.now();
 
     // Optimistický UI update
     let updatedTask = null;
@@ -8925,11 +9593,6 @@ export default function App() {
       apiUpdateTask(updatedTask).then(() => {
         // Obnov echo prevention timestamp po dokončení — chrání před pozdním echem
         localEditsRef.current[taskId] = Date.now();
-        try {
-          const stored = JSON.parse(localStorage.getItem("ft_local_edits") || "{}");
-          stored[taskId] = Date.now();
-          localStorage.setItem("ft_local_edits", JSON.stringify(stored));
-        } catch (e) { /* ignore */ }
       });
     }
   }, []);
@@ -9111,6 +9774,101 @@ export default function App() {
     }, 50);
   }, [currentUser]);
 
+  // ── Bulk selection handlers ──
+
+  const toggleBulkSelection = useCallback((taskId) => {
+    setBulkSelection(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const enterBulkMode = useCallback((taskId) => {
+    setBulkMode(true);
+    setBulkSelection(new Set(taskId ? [taskId] : []));
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setBulkSelection(new Set());
+  }, []);
+
+  // Bulk akce — všechny optimistické, s undo pro každý úkol jednotlivě (zachován history).
+  const bulkComplete = useCallback(() => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0 || !currentUser || !users) return;
+    const now = new Date().toISOString();
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      if (task.status === "done" || task.status === "deleted") return task;
+      const newDoneBy = [...new Set([...(task.doneBy || []), currentUser.name])];
+      const allDone = users.every(u => newDoneBy.includes(u.name));
+      const updated = allDone
+        ? { ...task, doneBy: newDoneBy, status: "done", completedAt: now, completedByUser: currentUser.name }
+        : { ...task, doneBy: newDoneBy };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    // Sync do DB (paralelně)
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, currentUser, users, exitBulkMode]);
+
+  const bulkDelete = useCallback(() => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const now = new Date().toISOString();
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      if (task.status === "deleted") return task;
+      const updated = { ...task, status: "deleted", deletedAt: now };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    // Snackbar zpráva pro celou bulk akci (bez per-task undo)
+    setUndoState({ previousTasks: null, message: `Smazáno ${updates.length} úkolů`, taskId: null });
+    clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => setUndoState(null), UNDO_MS);
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
+
+  const bulkSetPriority = useCallback((priority) => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      const updated = { ...task, priority };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
+
+  const bulkAssign = useCallback((userName) => {
+    const ids = Array.from(bulkSelection);
+    if (ids.length === 0) return;
+    const updates = [];
+    setTasks(prev => prev.map(task => {
+      if (!bulkSelection.has(task.id)) return task;
+      const updated = { ...task, assignTo: userName, assignedTo: [userName] };
+      localEditsRef.current[task.id] = Date.now();
+      updates.push(updated);
+      return updated;
+    }));
+    updates.forEach(t => apiUpdateTask(t));
+    exitBulkMode();
+  }, [bulkSelection, exitBulkMode]);
+
   const deleteTask = useCallback((taskId) => {
     const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
@@ -9121,20 +9879,32 @@ export default function App() {
     }));
   }, [tasks, withUndo]);
 
-  // Permanently remove tasks in trash older than 30 days
+  // Permanently remove tasks in trash older than 30 days.
+  // Používáme ref pro aktuální tasks, aby se interval vytvořil jen jednou
+  // (původní `[tasks]` dep způsobil, že interval se restartoval při každé změně,
+  // takže 1h timer fakticky nikdy nedoběhl a cleanup neprobíhal).
+  const tasksRef = useRef(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   useEffect(() => {
     const cleanup = setInterval(async () => {
       const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const toDelete = tasks.filter(t =>
+      const toDelete = tasksRef.current.filter(t =>
         t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() < cutoff
       );
       for (const task of toDelete) {
-        await supabase.from("tasks").delete().eq("id", task.id);
-        setTasks(prev => prev.filter(t => t.id !== task.id));
+        try {
+          const { error } = await supabase.from("tasks").delete().eq("id", task.id);
+          if (error) throw error;
+          setTasks(prev => prev.filter(t => t.id !== task.id));
+        } catch (e) {
+          if (!isNetworkError(e)) {
+            logServerError("permanentDelete (30d cleanup)", e, { id: task.id });
+          }
+        }
       }
     }, 3600000); // Check every hour
     return () => clearInterval(cleanup);
-  }, [tasks]);
+  }, []);
 
   // Tick každých 30s — pro fade animaci recently added úkolů (5 min retention)
   useEffect(() => {
@@ -9153,13 +9923,39 @@ export default function App() {
       });
       // Force re-render pro fade opacity
       setRecentTick(t => t + 1);
+
+      // Cleanup echo prevention timestamps starší než 30s — prevence memory leaku
+      // při dlouhých sessions s mnoha úpravami.
+      const thirtySecAgo = now - 30000;
+      for (const id of Object.keys(localEditsRef.current)) {
+        if (localEditsRef.current[id] < thirtySecAgo) delete localEditsRef.current[id];
+      }
+      for (const id of Object.keys(localCommentEditsRef.current)) {
+        if (localCommentEditsRef.current[id] < thirtySecAgo) delete localCommentEditsRef.current[id];
+      }
     }, 30000); // 30s
     return () => clearInterval(tick);
   }, []);
 
   const permanentlyDeleteTask = useCallback(async (taskId) => {
-    setTasks(prev => prev.filter(t => t.id !== taskId));
-    await supabase.from("tasks").delete().eq("id", taskId);
+    // Optimistický update — drž zálohu pro případ rollback při server chybě
+    let backup = null;
+    setTasks(prev => {
+      backup = prev.find(t => t.id === taskId) || null;
+      return prev.filter(t => t.id !== taskId);
+    });
+    try {
+      const { error } = await supabase.from("tasks").delete().eq("id", taskId);
+      if (error) throw error;
+    } catch (e) {
+      if (isNetworkError(e)) {
+        console.warn("permanentlyDeleteTask offline — aplikováno lokálně, server se posune při příštím flush");
+      } else {
+        logServerError("permanentlyDeleteTask", e, { taskId });
+        // Server odmítl — vrať úkol zpět do UI
+        if (backup) setTasks(prev => prev.find(t => t.id === taskId) ? prev : [backup, ...prev]);
+      }
+    }
   }, []);
 
   const restoreTask = useCallback((taskId) => {
@@ -9418,27 +10214,50 @@ export default function App() {
     }
 
     // Search
-    if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery));
+    if (searchQuery) result = result.filter(t => searchMatch(t, searchQuery, customLists));
 
     // Sort — pokud user nastaví sortMode, respektujeme to vždy
     // (i v Today view). Pokud nechá default "created", v Today view použijeme smart urgency.
+    // Sort modes: smart, priority,
+    //   date_asc / date_desc (nejbližší termín první / nejvzdálenější první),
+    //   created_desc / created_asc (nejnovější první / nejstarší první),
+    //   alpha_asc / alpha_desc (A→Z / Z→A).
+    // Legacy aliasy: "date" = date_asc, "created" = created_desc (kvůli zachování starých localStorage hodnot).
     if (sortMode === "smart") {
       result = [...result].sort(smartSort);
     } else if (sortMode === "priority") {
       result = [...result].sort((a, b) => getPriority(a.priority).weight - getPriority(b.priority).weight);
-    } else if (sortMode === "date") {
+    } else if (sortMode === "date" || sortMode === "date_asc") {
       result = [...result].sort((a, b) => {
         const aDays = daysDiff(a.dueDate);
         const bDays = daysDiff(b.dueDate);
-        // Úkoly bez termínu (NaN) na konec
         if (isNaN(aDays) && isNaN(bDays)) return 0;
         if (isNaN(aDays)) return 1;
         if (isNaN(bDays)) return -1;
         return aDays - bDays;
       });
-    } else if (sortMode === "created") {
-      // V Today view a smart kontextu = urgency-based; jinak nejnovější
-      if (viewStatus === "today") {
+    } else if (sortMode === "date_desc") {
+      result = [...result].sort((a, b) => {
+        const aDays = daysDiff(a.dueDate);
+        const bDays = daysDiff(b.dueDate);
+        if (isNaN(aDays) && isNaN(bDays)) return 0;
+        if (isNaN(aDays)) return 1;
+        if (isNaN(bDays)) return -1;
+        return bDays - aDays;
+      });
+    } else if (sortMode === "alpha_asc") {
+      result = [...result].sort((a, b) =>
+        (a.title || "").localeCompare(b.title || "", "cs", { sensitivity: "base" })
+      );
+    } else if (sortMode === "alpha_desc") {
+      result = [...result].sort((a, b) =>
+        (b.title || "").localeCompare(a.title || "", "cs", { sensitivity: "base" })
+      );
+    } else if (sortMode === "created_asc") {
+      result = [...result].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    } else if (sortMode === "created" || sortMode === "created_desc") {
+      // Default: V Today view smart urgency, jinak nejnovější
+      if (viewStatus === "today" && sortMode === "created") {
         result = [...result].sort((a, b) => urgencyScore(b, currentUser.name) - urgencyScore(a, currentUser.name));
       } else {
         result = [...result].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -9456,7 +10275,7 @@ export default function App() {
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, customLists]);
 
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
@@ -9557,8 +10376,21 @@ export default function App() {
           ungrouped.push(...tasks);
         }
       });
+      // Vyčlenit zapomenuté úkoly (>7 dní bez termínu) z bigGroups i ungrouped — půjdou do vlastní sekce dole
+      const forgottenTasks = [];
+      const filterForgotten = (arr) => arr.filter(t => {
+        if (isForgotten(t)) {
+          forgottenTasks.push(t);
+          return false;
+        }
+        return true;
+      });
+      bigGroups.forEach(g => { g.tasks = filterForgotten(g.tasks); });
+      const ungroupedFiltered = filterForgotten(ungrouped);
+
       // Render bigGroups (sekce + jejich úkoly), pak ungrouped
       bigGroups.forEach(({ listId, tasks }) => {
+        if (tasks.length === 0) return; // všechny byly zapomenuté → vynechej sekci
         const list = (customLists || []).find(l => l.id === listId);
         if (list) {
           items.push({
@@ -9570,7 +10402,13 @@ export default function App() {
         }
         tasks.forEach(task => items.push({ type: "task", task, key: task.id }));
       });
-      ungrouped.forEach(task => items.push({ type: "task", task, key: task.id }));
+      ungroupedFiltered.forEach(task => items.push({ type: "task", task, key: task.id }));
+
+      // Sekce zapomenuté — jen aktivní úkoly bez termínu vytvořené před >7 dny
+      if (forgottenTasks.length > 0) {
+        items.push({ type: "section_header_forgotten", key: "section-forgotten", count: forgottenTasks.length });
+        forgottenTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+      }
     } else {
       remainingActive.forEach(task => items.push({ type: "task", task, key: task.id }));
     }
@@ -9605,6 +10443,44 @@ export default function App() {
 
     return items;
   }, [filteredTasks, viewStatus, currentUser, recentlyAdded, customLists]);
+
+  // Pagination — z renderItems vytvoříme `visibleItems` omezený na prvních N tásk-items.
+  // Sekce headery se zobrazí jen pokud následuje aspoň jeden viditelný task.
+  // Done/deleted/progress karty se nepočítají do limitu — limit aplikujeme jen na aktivní úkoly,
+  // aby uživatel měl vždy přehled o splněných/smazaných (jsou už pod aktivními).
+  const { visibleItems, hiddenActiveCount, totalActiveCount } = useMemo(() => {
+    let visibleTaskCount = 0;
+    let totalActive = 0;
+    // Spočítat celkové aktivní (pro porovnání s limit)
+    for (const it of renderItems) {
+      if (it.type === "task" && !isDone(it.task) && !isDeleted(it.task) && it.type !== "progress") {
+        totalActive++;
+      }
+    }
+    if (totalActive <= renderLimit) {
+      return { visibleItems: renderItems, hiddenActiveCount: 0, totalActiveCount: totalActive };
+    }
+    // Filtrovat: do limit počítáme jen aktivní. Done/deleted/progress projdou vždy.
+    const result = [];
+    for (const it of renderItems) {
+      const isActiveTask = it.type === "task" && !isDone(it.task) && !isDeleted(it.task);
+      if (isActiveTask) {
+        if (visibleTaskCount < renderLimit) {
+          result.push(it);
+          visibleTaskCount++;
+        }
+        // přes limit — skip
+      } else {
+        // sekce headery, dividery, progress, done, deleted — vždy
+        result.push(it);
+      }
+    }
+    return {
+      visibleItems: result,
+      hiddenActiveCount: totalActive - visibleTaskCount,
+      totalActiveCount: totalActive,
+    };
+  }, [renderItems, renderLimit]);
 
   // Helper: apply all filters EXCEPT the one being computed for.
   // `skip` parameter: "scope" | "status" | "category" | "priority" — omits that filter from counting.
@@ -9962,6 +10838,16 @@ export default function App() {
               <span>{themeName === "dark" ? "☀️" : "🌙"}</span>
               <span>{themeName === "dark" ? "Světlý režim" : "Tmavý režim"}</span>
             </button>
+            <button onClick={() => { enterBulkMode(null); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>☑️</span><span>Hromadný výběr</span>
+            </button>
             <button onClick={() => { setShowNotifPanel(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -10001,7 +10887,7 @@ export default function App() {
               textAlign: "center", lineHeight: 1.4, fontWeight: 500,
             }}>
               © {new Date().getFullYear()} Michal Bělohlav<br/>
-              Rodinné úkoly
+              Rodinné úkoly · v{APP_VERSION}
             </div>
           </div>
         </>
@@ -10075,6 +10961,7 @@ export default function App() {
             tasks={tasks}
             comments={comments}
             currentUser={currentUser}
+            customLists={customLists}
             theme={theme}
             onClose={() => setShowSearchSheet(false)}
             onNavigate={(taskId) => {
@@ -10277,8 +11164,20 @@ export default function App() {
               l.is_shared || l.created_by_user === currentUser.name);
             return (
           <>
-          {/* Kompaktní ikonový filter row — popovery s nadpisem */}
-          <div style={{ position: "relative", marginBottom: "8px" }} data-filter-icon-row>
+          {/* Kompaktní ikonový filter row — popovery s nadpisem.
+              Sticky: zůstává viditelný i když uživatel scrolluje detailem úkolu.
+              `top` posune dolů o výšku hlavního headeru, který je nahoře sticky.
+              Když je header schovaný (auto-hide na scrollu dolů), filter se vyšplhá na top. */}
+          <div style={{
+            position: "sticky",
+            top: headerHidden ? "0px" : "56px",
+            zIndex: 25,
+            background: theme.bg,
+            paddingTop: "4px",
+            paddingBottom: "4px",
+            marginBottom: "4px",
+            transition: "top 0.3s ease-out",
+          }} data-filter-icon-row>
             <div style={{
               display: "flex", alignItems: "stretch", gap: "4px",
             }}>
@@ -10354,9 +11253,21 @@ export default function App() {
                       isActive={scopeActive}
                       title="Pro koho je úkol"
                       onClick={() => setFilterPopover(filterPopover === "scope" ? null : "scope")} />
-                    <IconBtn icon="↕" color={theme.accent}
-                      isActive={false}
-                      title="Řazení"
+                    <IconBtn
+                      icon={(() => {
+                        // Dynamická ikona podle aktuálního sortu — uživatel hned vidí aktivní směr
+                        if (sortMode === "smart") return "🎯";
+                        if (sortMode === "priority") return "❗";
+                        if (sortMode === "date" || sortMode === "date_asc") return "📅↑";
+                        if (sortMode === "date_desc") return "📅↓";
+                        if (sortMode === "alpha_asc") return "A↓";
+                        if (sortMode === "alpha_desc") return "Z↓";
+                        if (sortMode === "created_asc") return "🆕↑";
+                        return "🆕↓"; // created / created_desc
+                      })()}
+                      color={theme.accent}
+                      isActive={sortMode !== "created"}
+                      title={`Řazení (aktuálně: ${sortMode})`}
                       onClick={() => setFilterPopover(filterPopover === "sort" ? null : "sort")} />
                     <IconBtn icon={dateIcon} color={theme.accent}
                       isActive={dateActive}
@@ -10514,20 +11425,36 @@ export default function App() {
 
               if (filterPopover === "sort") {
                 const opts = [
-                  { value: "created",  label: "Nejnovější" },
-                  { value: "smart",    label: "Chytré řazení" },
-                  { value: "priority", label: "Podle priority" },
-                  { value: "date",     label: "Podle termínu" },
+                  { value: "smart",        icon: "🎯", label: "Chytré řazení" },
+                  { value: "priority",     icon: "❗", label: "Podle priority" },
+                  { value: "date_asc",     icon: "📅", label: "Termín — nejbližší první", arrow: "↑" },
+                  { value: "date_desc",    icon: "📅", label: "Termín — nejvzdálenější první", arrow: "↓" },
+                  { value: "created_desc", icon: "🆕", label: "Vytvořeno — nejnovější první", arrow: "↓" },
+                  { value: "created_asc",  icon: "🆕", label: "Vytvořeno — nejstarší první", arrow: "↑" },
+                  { value: "alpha_asc",    icon: "🔤", label: "Abecedně A → Z", arrow: "↓" },
+                  { value: "alpha_desc",   icon: "🔤", label: "Abecedně Z → A", arrow: "↑" },
                 ];
+                // Zachovat zpětnou kompatibilitu s legacy hodnotami
+                const isActive = (v) => {
+                  if (sortMode === v) return true;
+                  if (sortMode === "created" && v === "created_desc") return true;
+                  if (sortMode === "date" && v === "date_asc") return true;
+                  return false;
+                };
                 return (
                   <div style={popoverWrap} data-filter-popover onClick={e => e.stopPropagation()}>
                     <div style={popHeader}>↕ Řazení</div>
                     {opts.map(o => (
                       <button key={o.value} type="button"
                         onClick={() => { setSortMode(o.value); setFilterPopover(null); }}
-                        style={optStyle(sortMode === o.value)}>
-                        <span style={{ width: "20px", fontSize: "16px" }}>↕</span>
+                        style={optStyle(isActive(o.value))}>
+                        <span style={{ width: "20px", fontSize: "14px" }}>{o.icon}</span>
                         <span style={{ flex: 1 }}>{o.label}</span>
+                        {o.arrow && (
+                          <span style={{ fontSize: "16px", color: theme.textSub, fontWeight: 700 }}>
+                            {o.arrow}
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -10739,6 +11666,59 @@ export default function App() {
           })()}
         </div>
 
+        {/* Trash view info banner */}
+        {viewStatus === "trash" && filteredTasks.length > 0 && (
+          <div style={{
+            margin: "0 0 8px 0",
+            padding: "10px 12px",
+            background: theme.inputBg,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: 8,
+            fontSize: 12,
+            color: theme.textMid,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}>
+            <span>ℹ️ Úkoly v koši se automaticky smažou po 30 dnech.</span>
+            {currentUser?.admin && (
+              <button
+                onClick={() => {
+                  const trashed = tasks.filter(t => t.status === "deleted");
+                  if (trashed.length === 0) return;
+                  if (!window.confirm(`Vyprázdnit koš? Trvale smazat ${trashed.length} úkolů?`)) return;
+                  // Sekvenčně permanentně smazat všechny
+                  (async () => {
+                    for (const t of trashed) {
+                      try {
+                        const { error } = await supabase.from("tasks").delete().eq("id", t.id);
+                        if (error) throw error;
+                      } catch (e) {
+                        if (!isNetworkError(e)) logServerError("emptyTrash", e, { id: t.id });
+                      }
+                    }
+                    setTasks(prev => prev.filter(t => t.status !== "deleted"));
+                  })();
+                }}
+                style={{
+                  marginLeft: "auto",
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: "transparent",
+                  color: theme.red,
+                  border: `1px solid ${theme.red}`,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Vyprázdnit koš
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Task list */}
         {filteredTasks.length === 0 ? (
           <div style={{ textAlign: "center", color: theme.textDim, padding: "50px 20px" }}>
@@ -10765,7 +11745,7 @@ export default function App() {
               let shownDoneSep = false;
               let shownDelSep = false;
               // Find if there is at least 1 unread-from-others task
-              const hasUnread = renderItems.some(it =>
+              const hasUnread = visibleItems.some(it =>
                 it.type === "task" && it.task.seenBy &&
                 !it.task.seenBy.includes(currentUser.name) &&
                 it.task.createdBy !== currentUser.name &&
@@ -10774,7 +11754,7 @@ export default function App() {
               // Track when we've passed all unreads (to show normal section header after)
               let passedUnread = false;
 
-              return renderItems.map(item => {
+              return visibleItems.map(item => {
                 // Section header: "Právě přidáno"
                 if (item.type === "section_header_recent") {
                   return (
@@ -10875,6 +11855,31 @@ export default function App() {
                         fontSize: "10px", color: theme.textMid, fontWeight: 600,
                       }}>
                         {item.count} {item.count === 1 ? "úkol" : item.count < 5 ? "úkoly" : "úkolů"}
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_header_forgotten") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "16px 0 6px",
+                      padding: "8px 12px",
+                      background: `${theme.purple}10`,
+                      border: `1px dashed ${theme.purple}60`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.purple, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.3px",
+                      }}>
+                        💤 Zapomenuté ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        bez termínu, vytvořené před více než 7 dny
                       </span>
                     </div>
                   );
@@ -10985,37 +11990,101 @@ export default function App() {
                         </span>
                       </div>
                     )}
-                    <TaskCard
-                      task={task}
-                      currentUser={currentUser}
-                      users={users}
-                      onStatusChange={changeStatus}
-                      onMarkSeen={markSeen}
-                      onUpdate={updateTask}
-                      onDelete={deleteTask}
-                      onRestore={restoreTask}
-                      onPermanentDelete={permanentlyDeleteTask}
+                    <BulkSelectableCard
+                      taskId={task.id}
+                      bulkMode={bulkMode}
+                      isSelected={bulkSelection.has(task.id)}
+                      onToggle={toggleBulkSelection}
+                      onLongPress={enterBulkMode}
                       theme={theme}
-                      comments={comments.filter(c => c.taskId === task.id)}
-                      onAddComment={addComment}
-                      onToggleReaction={toggleReaction}
-                      onMarkCommentsSeen={markCommentsSeen}
-                      autoOpen={scrollToTaskId === task.id}
-                      isHighlighted={highlightedTaskId === task.id}
-                      progressItem={item.type === "progress" ? item.checklistItem : null}
-                      recentlyAdded={item.recentlyAdded === true}
-                      fadeProgress={item.fadeProgress || 0}
-                      isToday={item.isToday === true}
-                      customLists={customLists}
-                      onStartFocus={(taskId) => {
-                        setFocusInitialTask(taskId);
-                        setShowFocus(true);
-                      }}
-                    />
+                    >
+                      <TaskCard
+                        task={task}
+                        currentUser={currentUser}
+                        users={users}
+                        onStatusChange={changeStatus}
+                        onMarkSeen={markSeen}
+                        onUpdate={updateTask}
+                        onDelete={deleteTask}
+                        onRestore={restoreTask}
+                        onPermanentDelete={permanentlyDeleteTask}
+                        theme={theme}
+                        comments={comments.filter(c => c.taskId === task.id)}
+                        onAddComment={addComment}
+                        onToggleReaction={toggleReaction}
+                        onMarkCommentsSeen={markCommentsSeen}
+                        autoOpen={scrollToTaskId === task.id}
+                        isHighlighted={highlightedTaskId === task.id}
+                        progressItem={item.type === "progress" ? item.checklistItem : null}
+                        recentlyAdded={item.recentlyAdded === true}
+                        fadeProgress={item.fadeProgress || 0}
+                        isToday={item.isToday === true}
+                        customLists={customLists}
+                        onStartFocus={(taskId) => {
+                          setFocusInitialTask(taskId);
+                          setShowFocus(true);
+                        }}
+                      />
+                    </BulkSelectableCard>
                   </div>
                 );
               });
             })()}
+          </div>
+        )}
+
+        {/* Pagination — Načíst další */}
+        {hiddenActiveCount > 0 && (
+          <div style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            background: theme.inputBg,
+            border: `1px dashed ${theme.cardBorder}`,
+            borderRadius: 10,
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            alignItems: "center",
+          }}>
+            <div style={{ fontSize: 12, color: theme.textMid }}>
+              Zobrazeno {totalActiveCount - hiddenActiveCount} z {totalActiveCount} aktivních úkolů
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+              <button
+                onClick={() => setRenderLimit(prev => prev + PAGE_SIZE)}
+                style={{
+                  padding: "8px 16px",
+                  background: theme.accent,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Načíst dalších {Math.min(PAGE_SIZE, hiddenActiveCount)}
+              </button>
+              <button
+                onClick={() => setRenderLimit(totalActiveCount + 100)}
+                style={{
+                  padding: "8px 16px",
+                  background: "transparent",
+                  color: theme.textSub,
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Zobrazit vše
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: theme.textDim, marginTop: 2 }}>
+              💡 Tip: Pro lepší přehled si rozděl úkoly do <strong>kategorií</strong> nebo <strong>vlastních seznamů</strong>
+            </div>
           </div>
         )}
 
@@ -11031,7 +12100,7 @@ export default function App() {
           userSelect: "none",
           fontWeight: 500,
         }}>
-          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly
+          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
         </div>
       </div>
 
@@ -11041,6 +12110,352 @@ export default function App() {
         onUndo={performUndo}
         theme={theme}
       />
+
+      {/* Bulk action bar — viditelný když je zapnutý bulk mode a aspoň 1 úkol vybraný */}
+      {bulkMode && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background: theme.cardBg,
+          borderTop: `1px solid ${theme.cardBorder}`,
+          boxShadow: "0 -4px 16px rgba(0,0,0,0.15)",
+          padding: "10px 12px",
+          paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
+          zIndex: 9998,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}>
+          <button
+            onClick={exitBulkMode}
+            aria-label="Zrušit výběr"
+            style={{
+              padding: "8px 10px",
+              background: "transparent",
+              color: theme.textSub,
+              border: "none",
+              fontSize: 18,
+              cursor: "pointer",
+              borderRadius: 6,
+              minWidth: 36,
+            }}
+          >
+            ✕
+          </button>
+          <div style={{ fontSize: 13, color: theme.text, fontWeight: 600, minWidth: 80 }}>
+            {bulkSelection.size === 0 ? "Žádný výběr" : `Vybráno ${bulkSelection.size}`}
+          </div>
+          <div style={{ flex: 1 }} />
+          {bulkSelection.size > 0 && (
+            <>
+              <button
+                onClick={bulkComplete}
+                aria-label="Označit jako splněné"
+                title="Splnit"
+                style={{
+                  padding: "10px 12px",
+                  background: "transparent",
+                  color: "#10b981",
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 18,
+                  cursor: "pointer",
+                  minWidth: 44,
+                  minHeight: 44,
+                }}
+              >
+                ✓
+              </button>
+              <select
+                onChange={(e) => { if (e.target.value) bulkSetPriority(e.target.value); }}
+                defaultValue=""
+                aria-label="Změnit prioritu"
+                title="Priorita"
+                style={{
+                  padding: "10px 8px",
+                  background: theme.inputBg,
+                  color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  minHeight: 44,
+                }}
+              >
+                <option value="" disabled>Priorita</option>
+                <option value="urgent">‼ Akutní</option>
+                <option value="important">! Důležité</option>
+                <option value="low">— Nedůležité</option>
+              </select>
+              <select
+                onChange={(e) => { if (e.target.value) bulkAssign(e.target.value); }}
+                defaultValue=""
+                aria-label="Přiřadit"
+                title="Přiřadit"
+                style={{
+                  padding: "10px 8px",
+                  background: theme.inputBg,
+                  color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  minHeight: 44,
+                }}
+              >
+                <option value="" disabled>Přiřadit</option>
+                {(users || []).map(u => (
+                  <option key={u.name} value={u.name}>👤 {u.name}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Smazat ${bulkSelection.size} úkolů?`)) bulkDelete();
+                }}
+                aria-label="Smazat"
+                title="Smazat"
+                style={{
+                  padding: "10px 12px",
+                  background: "transparent",
+                  color: "#ef4444",
+                  border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: 8,
+                  fontSize: 18,
+                  cursor: "pointer",
+                  minWidth: 44,
+                  minHeight: 44,
+                }}
+              >
+                🗑
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* PWA install banner — aktivní jen v Chrome/Edge/Brave + když user nemá appku nainstalovanou */}
+      {showInstallBanner && pwaInstallEvent && (
+        <div style={{
+          position: "fixed",
+          bottom: 16,
+          left: 16,
+          right: 16,
+          maxWidth: 480,
+          margin: "0 auto",
+          background: theme.cardBg,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 12,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+          padding: 14,
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+        }}>
+          <div style={{ fontSize: 32, flexShrink: 0 }}>📱</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: theme.text }}>
+              Nainstalovat na plochu
+            </div>
+            <div style={{ fontSize: 12, color: theme.textSub, marginTop: 2 }}>
+              Rychlejší přístup, vypadá jako nativní aplikace
+            </div>
+          </div>
+          <button
+            onClick={handlePwaInstall}
+            style={{
+              padding: "8px 14px",
+              background: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            Instalovat
+          </button>
+          <button
+            onClick={handlePwaDismiss}
+            aria-label="Zavřít"
+            style={{
+              padding: "6px 8px",
+              background: "transparent",
+              color: theme.textSub,
+              border: "none",
+              borderRadius: 6,
+              fontSize: 18,
+              cursor: "pointer",
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   ERROR BOUNDARY — last line of defense
+   Když kdekoli v render tree vyletí výjimka, místo bílé stránky
+   ukáže recovery screen s tlačítkem Reload + diagnostické info.
+   ═══════════════════════════════════════════════════════ */
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("[ErrorBoundary] caught:", error);
+    console.error("[ErrorBoundary] component stack:", errorInfo?.componentStack);
+    this.setState({ errorInfo });
+    // Zaznamenej do localStorage pro pozdější diagnostiku (max 5 posledních)
+    try {
+      const log = JSON.parse(localStorage.getItem("ft_render_errors") || "[]");
+      log.unshift({
+        ts: new Date().toISOString(),
+        message: error?.message || String(error),
+        stack: error?.stack || null,
+        componentStack: errorInfo?.componentStack || null,
+      });
+      localStorage.setItem("ft_render_errors", JSON.stringify(log.slice(0, 5)));
+    } catch (e) { /* ignore */ }
+  }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  handleClearAndReload = () => {
+    // Nuclear option — vyčistí cache (ne PIN/přihlášení) a reload.
+    // Užitečné, pokud cache je v rozbitém stavu.
+    try {
+      localStorage.removeItem("ft_cache_tasks");
+      localStorage.removeItem("ft_cache_users");
+      localStorage.removeItem("ft_cache_comments");
+      localStorage.removeItem("ft_offline_queue");
+    } catch (e) { /* ignore */ }
+    window.location.reload();
+  };
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    const errorMsg = this.state.error?.message || String(this.state.error);
+    const stack = this.state.error?.stack || "";
+    const componentStack = this.state.errorInfo?.componentStack || "";
+
+    return (
+      <div style={{
+        minHeight: "100vh",
+        background: "#fef2f2",
+        color: "#1f2937",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        padding: "24px",
+        boxSizing: "border-box",
+      }}>
+        <div style={{
+          maxWidth: 640,
+          margin: "0 auto",
+          background: "white",
+          borderRadius: 12,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+          padding: 24,
+        }}>
+          <div style={{ fontSize: 48, textAlign: "center", marginBottom: 8 }}>⚠️</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, textAlign: "center", margin: "0 0 8px" }}>
+            Něco se rozbilo
+          </h1>
+          <p style={{ textAlign: "center", color: "#6b7280", margin: "0 0 20px", fontSize: 14 }}>
+            Aplikace narazila na neočekávanou chybu. Zkus jedno z těchto řešení:
+          </p>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+            <button
+              onClick={this.handleReload}
+              style={{
+                padding: "12px 16px",
+                background: "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 16,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              🔄 Načíst znovu
+            </button>
+            <button
+              onClick={this.handleClearAndReload}
+              style={{
+                padding: "12px 16px",
+                background: "#f3f4f6",
+                color: "#1f2937",
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              🧹 Vyčistit cache a načíst znovu
+            </button>
+          </div>
+
+          <details style={{ fontSize: 12, color: "#6b7280" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
+              Technické detaily (pošli Michalovi)
+            </summary>
+            <div style={{
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+              padding: 12,
+              marginTop: 8,
+              fontFamily: "ui-monospace, monospace",
+              fontSize: 11,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 300,
+              overflow: "auto",
+            }}>
+              <div style={{ fontWeight: 700, color: "#dc2626" }}>{errorMsg}</div>
+              {stack && <div style={{ marginTop: 8, opacity: 0.75 }}>{stack}</div>}
+              {componentStack && (
+                <div style={{ marginTop: 8, opacity: 0.6 }}>
+                  <div style={{ fontWeight: 600 }}>Component stack:</div>
+                  {componentStack}
+                </div>
+              )}
+            </div>
+          </details>
+
+          <p style={{ fontSize: 11, color: "#9ca3af", textAlign: "center", marginTop: 16 }}>
+            © 2026 Michal Bělohlav
+          </p>
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }
