@@ -1552,6 +1552,7 @@ function noteFromDb(n) {
     isShared: !!n.is_shared, // legacy fallback
     pinned: !!n.pinned,
     sharedWith: Array.isArray(n.shared_with) ? n.shared_with : [],
+    deletedAt: n.deleted_at || null, // soft delete
   };
 }
 function noteToDb(n) {
@@ -1562,6 +1563,7 @@ function noteToDb(n) {
     is_shared: (n.sharedWith && n.sharedWith.length > 0) || !!n.isShared, // legacy compat
     pinned: !!n.pinned,
     shared_with: Array.isArray(n.sharedWith) ? n.sharedWith : [],
+    deleted_at: n.deletedAt || null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -1645,9 +1647,13 @@ async function apiUpdateNote(note) {
   }
 }
 
+// Soft delete — nastaví deleted_at, poznámka jde do koše
 async function apiDeleteNote(id) {
   try {
-    const { error } = await supabase.from("notes").delete().eq("id", id);
+    const { error } = await supabase
+      .from("notes")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id);
     if (error) throw error;
   } catch (e) {
     if (isNetworkError(e)) {
@@ -1655,6 +1661,29 @@ async function apiDeleteNote(id) {
     } else {
       logServerError("apiDeleteNote", e, { id });
     }
+  }
+}
+
+// Hard delete — trvalé odstranění z DB (z koše)
+async function apiHardDeleteNote(id) {
+  try {
+    const { error } = await supabase.from("notes").delete().eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    logServerError("apiHardDeleteNote", e, { id });
+  }
+}
+
+// Restore — obnov ze koše
+async function apiRestoreNote(id) {
+  try {
+    const { error } = await supabase
+      .from("notes")
+      .update({ deleted_at: null })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    logServerError("apiRestoreNote", e, { id });
   }
 }
 
@@ -2716,12 +2745,13 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
     return (div.textContent || div.innerText || "").trim();
   };
 
-  // Filter podle search
+  // Filter podle search — bez smazaných (deleted)
   const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const q = norm(search.trim());
+  const visibleNotes = notes.filter(n => !n.deletedAt);
   const filtered = q
-    ? notes.filter(n => norm(n.title).includes(q) || norm(stripHtml(n.content)).includes(q))
-    : notes;
+    ? visibleNotes.filter(n => norm(n.title).includes(q) || norm(stripHtml(n.content)).includes(q))
+    : visibleNotes;
 
   // Rozdělit do sekcí
   const pinned = filtered.filter(n => n.pinned);
@@ -2952,10 +2982,11 @@ function CopyTaskButton({ task, theme }) {
 
 function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   const [input, setInput] = useState("");
-  const [expanded, setExpanded] = useState(false);
+  const hasEntries = task.scratchPad && task.scratchPad.filter(e => !e.deletedAt).length > 0;
+  // Default expanded — jen pokud existuje obsah (zápisky). Prázdný deník = sbalený.
+  const [expanded, setExpanded] = useState(hasEntries);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
-  const hasEntries = task.scratchPad && task.scratchPad.length > 0;
 
   const addEntry = () => {
     if (!input.trim()) return;
@@ -2977,8 +3008,11 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   };
 
   const deleteEntry = (entryId) => {
-    if (!confirm("Smazat tento zápis?")) return;
-    const newPad = (task.scratchPad || []).filter(e => e.id !== entryId);
+    if (!confirm("Smazat tento zápis? Najdeš ho v koši.")) return;
+    // Soft delete — nastavíme deletedAt místo odstranění z pole
+    const newPad = (task.scratchPad || []).map(e =>
+      e.id === entryId ? { ...e, deletedAt: new Date().toISOString() } : e
+    );
     onUpdate(task.id, { scratchPad: newPad });
   };
 
@@ -3033,7 +3067,7 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           fontSize: "11px", color: hasEntries ? theme.purple : theme.textMid, fontWeight: 800,
           textTransform: "uppercase", letterSpacing: "0.5px",
         }}>
-          📔 Pracovní deník {hasEntries && `(${task.scratchPad.length})`}
+          📔 Pracovní deník {hasEntries && `(${task.scratchPad.filter(e => !e.deletedAt).length})`}
         </span>
         <span style={{ fontSize: "10px", color: theme.textMid }}>
           {expanded ? "▲" : "▼"}
@@ -3065,7 +3099,7 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           {/* Entries */}
           {hasEntries && (
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              {task.scratchPad.map(entry => (
+              {task.scratchPad.filter(e => !e.deletedAt).map(entry => (
                 <div key={entry.id} style={{
                   padding: "6px 8px",
                   background: theme.card,
@@ -8532,6 +8566,8 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
         if (norm(t.title).includes(qNorm)) return true;
         if (t.note && norm(t.note).includes(qNorm)) return true;
         if ((t.checklist || []).some(item => norm(item.text).includes(qNorm))) return true;
+        // Pracovní deník (scratchPad) — hledej v ne-smazaných záznamech
+        if ((t.scratchPad || []).some(e => !e.deletedAt && norm(e.text).includes(qNorm))) return true;
         return false;
       })
       .slice(0, 30);
@@ -8560,8 +8596,10 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
       .slice(0, 20);
 
     // Notes — moje + sdílené, hledáme v title + content (stripped HTML)
+    // Smazané poznámky (deletedAt) NEvracíme z search (najdeš je v koši)
     const matchedNotes = isSmartQuery ? [] : notes
       .filter(n => {
+        if (n.deletedAt) return false; // skip smazané
         // Visibility: vlastní, legacy isShared, nebo sharedWith obsahuje mě / "*"
         const isVisible =
           n.createdBy === currentUser.name ||
@@ -8616,15 +8654,23 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
     return (start > 0 ? "..." : "") + text.substring(start, end) + (end < text.length ? "..." : "");
   };
 
-  const sectionLabel = (icon, text, count) => (
+  const sectionLabel = (icon, text, count, color) => (
     <div style={{
-      fontSize: 10, fontWeight: 800, color: theme.textMid,
-      textTransform: "uppercase", letterSpacing: "0.4px",
-      marginTop: 12, marginBottom: 6, padding: "0 2px",
-      display: "flex", alignItems: "center", gap: 6,
+      marginTop: 14, marginBottom: 8,
+      paddingLeft: 10, borderLeft: `3px solid ${color}`,
+      display: "flex", alignItems: "center", gap: 8,
     }}>
-      <span>{icon}</span>
-      <span>{text} ({count})</span>
+      <span style={{ fontSize: 14 }}>{icon}</span>
+      <span style={{
+        fontSize: 11, fontWeight: 800, color: color,
+        textTransform: "uppercase", letterSpacing: "0.5px",
+        flex: 1,
+      }}>{text}</span>
+      <span style={{
+        fontSize: 10, fontWeight: 700, color: "#fff",
+        background: color, padding: "2px 8px", borderRadius: 10,
+        minWidth: 18, textAlign: "center",
+      }}>{count}</span>
     </div>
   );
 
@@ -8706,7 +8752,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               {/* Tasks section */}
               {results.tasks.length > 0 && (
                 <>
-                  {sectionLabel("📋", "Úkoly", results.tasks.length)}
+                  {sectionLabel("📋", "Úkoly", results.tasks.length, theme.accent)}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {results.tasks.map(t => (
                       <button key={`task-${t.id}`}
@@ -8730,11 +8776,30 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                           {!isDeleted(t) && isDone(t) && "✓ "}
                           {highlight(t.title, query)}
                         </div>
-                        {t.note && (
+                        {t.note && norm(t.note).includes(qNorm) && (
                           <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4 }}>
                             {highlight(excerpt(t.note, query), query)}
                           </div>
                         )}
+                        {/* ScratchPad match — excerpt z prvního záznamu pracovního deníku který obsahuje query */}
+                        {(() => {
+                          const scratchMatch = (t.scratchPad || []).find(e =>
+                            !e.deletedAt && norm(e.text).includes(qNorm)
+                          );
+                          if (!scratchMatch) return null;
+                          return (
+                            <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4,
+                              borderLeft: `2px solid ${theme.purple || theme.accent}`,
+                              paddingLeft: 6, marginTop: 2,
+                            }}>
+                              <span style={{ fontSize: 9, fontWeight: 700, color: theme.purple || theme.accent,
+                                textTransform: "uppercase", letterSpacing: "0.4px", marginRight: 4 }}>
+                                Deník:
+                              </span>
+                              {highlight(excerpt(scratchMatch.text, query), query)}
+                            </div>
+                          );
+                        })()}
                         <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
                           {isDeleted(t) && (
                             <span style={{
@@ -8761,7 +8826,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               {/* Comments section */}
               {results.comments.length > 0 && (
                 <>
-                  {sectionLabel("💬", "Komentáře", results.comments.length)}
+                  {sectionLabel("💬", "Komentáře", results.comments.length, "#a855f7")}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {results.comments.map(c => {
                       const task = tasks.find(t => t.id === c.taskId);
@@ -8795,7 +8860,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               {/* Reminders section */}
               {results.reminders.length > 0 && (
                 <>
-                  {sectionLabel("🔔", "Připomínky", results.reminders.length)}
+                  {sectionLabel("🔔", "Připomínky", results.reminders.length, theme.red)}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {results.reminders.map(r => (
                       <button key={`rem-${r.id}`}
@@ -8833,7 +8898,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               {/* Notes section */}
               {results.notes.length > 0 && (
                 <>
-                  {sectionLabel("📝", "Poznámky", results.notes.length)}
+                  {sectionLabel("📝", "Poznámky", results.notes.length, theme.green)}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {results.notes.map(n => {
                       const plain = stripHtml(n.content);
@@ -11094,7 +11159,14 @@ function App() {
   const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [filter, setFilter] = useState("my");
-  const [viewStatus, setViewStatus] = useState("active");
+  // Default view — uživatel si může v menu nastavit, který view se zobrazí jako homepage
+  // Stored in localStorage as "ft_default_view" (default = "active")
+  const [defaultView, setDefaultView] = useState(() => {
+    try { return localStorage.getItem("ft_default_view") || "active"; } catch (e) { return "active"; }
+  });
+  const [viewStatus, setViewStatus] = useState(() => {
+    try { return localStorage.getItem("ft_default_view") || "active"; } catch (e) { return "active"; }
+  });
   const [sortMode, setSortMode] = useState("created");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all"); // "all" | "low" | "important" | "urgent"
@@ -11895,6 +11967,34 @@ function App() {
     return () => clearInterval(interval);
   }, [loading, currentUser]);
 
+  // Globální Esc handler — když je user na hlavní stránce (žádný modal otevřený),
+  // Esc přepne na defaultView (homepage). Pokud je modal otevřený, Esc ho zavře
+  // (řeší si to každý modal sám přes useEscapeKey hook).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      // Pokud je nějaký modal otevřený, neřešíme — modal si Esc zachytí sám
+      const anyModalOpen =
+        showReminderSheet || showQuickReminder || showNotesSheet ||
+        editingNote !== null || showStatsSheet || showSearchSheet ||
+        showCalendar || showFocus || showCreateList || editingList !== null ||
+        showAdmin || updatesPanelOpen;
+      if (anyModalOpen) return;
+      // Není modal — pokud nejsem v defaultView, přepni
+      if (viewStatus !== defaultView) {
+        e.preventDefault();
+        setViewStatus(defaultView);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    viewStatus, defaultView,
+    showReminderSheet, showQuickReminder, showNotesSheet, editingNote,
+    showStatsSheet, showSearchSheet, showCalendar, showFocus,
+    showCreateList, editingList, showAdmin, updatesPanelOpen,
+  ]);
+
   // Recurring check + keepalive
   useEffect(() => {
     const interval = setInterval(() => {
@@ -12235,13 +12335,17 @@ function App() {
   // takže 1h timer fakticky nikdy nedoběhl a cleanup neprobíhal).
   const tasksRef = useRef(tasks);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  const notesRef = useRef(notes);
+  useEffect(() => { notesRef.current = notes; }, [notes]);
   useEffect(() => {
     const cleanup = setInterval(async () => {
       const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const toDelete = tasksRef.current.filter(t =>
+
+      // 1) Tasks v koši > 30 dní
+      const toDeleteTasks = tasksRef.current.filter(t =>
         t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() < cutoff
       );
-      for (const task of toDelete) {
+      for (const task of toDeleteTasks) {
         try {
           const { error } = await supabase.from("tasks").delete().eq("id", task.id);
           if (error) throw error;
@@ -12251,6 +12355,30 @@ function App() {
             logServerError("permanentDelete (30d cleanup)", e, { id: task.id });
           }
         }
+      }
+
+      // 2) Notes v koši > 30 dní → hard delete
+      const toDeleteNotes = (notesRef.current || []).filter(n =>
+        n.deletedAt && new Date(n.deletedAt).getTime() < cutoff
+      );
+      for (const note of toDeleteNotes) {
+        await apiHardDeleteNote(note.id);
+        setNotes(prev => prev.filter(x => x.id !== note.id));
+      }
+
+      // 3) ScratchPad entries v rámci úkolů > 30 dní → odstranit z pole
+      const tasksWithOldScratch = tasksRef.current.filter(t =>
+        Array.isArray(t.scratchPad) && t.scratchPad.some(e =>
+          e.deletedAt && new Date(e.deletedAt).getTime() < cutoff
+        )
+      );
+      for (const task of tasksWithOldScratch) {
+        const cleanedPad = task.scratchPad.filter(e =>
+          !e.deletedAt || new Date(e.deletedAt).getTime() >= cutoff
+        );
+        const updated = { ...task, scratchPad: cleanedPad };
+        setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
+        await apiUpdateTask(updated);
       }
     }, 3600000); // Check every hour
     return () => clearInterval(cleanup);
@@ -13234,7 +13362,7 @@ function App() {
             onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             📝
-            {notes.length > 0 && (
+            {notes.filter(n => !n.deletedAt).length > 0 && (
               <span style={{
                 position: "absolute", top: 2, right: 2,
                 background: theme.textSub, color: "#fff",
@@ -13242,7 +13370,7 @@ function App() {
                 fontSize: 9, fontWeight: 700,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 padding: "0 3px",
-              }}>{notes.length}</span>
+              }}>{notes.filter(n => !n.deletedAt).length}</span>
             )}
           </button>
           {/* Notifications - jen badge když existují */}
@@ -13360,6 +13488,42 @@ function App() {
                 <span>👥</span><span>Správa uživatelů</span>
               </button>
             )}
+            {/* Default view picker — co se zobrazí jako homepage (a kam Esc vede) */}
+            <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+            <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+              🏠 Domovský pohled (Esc)
+            </div>
+            {[
+              { value: "today",       icon: "🎯", label: "Dnes" },
+              { value: "active",      icon: "📋", label: "Aktivní" },
+              { value: "in_progress", icon: "🔥", label: "Rozpracované" },
+              { value: "all",         icon: "🌐", label: "Vše" },
+            ].map(opt => {
+              const isSel = defaultView === opt.value;
+              return (
+                <button key={opt.value}
+                  onClick={() => {
+                    setDefaultView(opt.value);
+                    try { localStorage.setItem("ft_default_view", opt.value); } catch (e) { /* ignore */ }
+                    setViewStatus(opt.value);
+                    setShowUserMenu(false);
+                  }}
+                  style={{
+                    ...buttonStyle(), padding: "6px 12px", fontSize: 12,
+                    background: isSel ? `${theme.accent}15` : "transparent",
+                    color: isSel ? theme.accent : theme.text,
+                    border: "none", textAlign: "left",
+                    display: "flex", alignItems: "center", gap: 8,
+                    fontWeight: isSel ? 700 : 400,
+                  }}
+                  onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
+                  <span>{opt.icon}</span><span>{opt.label}</span>
+                  {isSel && <span style={{ marginLeft: "auto", fontSize: 10 }}>✓</span>}
+                </button>
+              );
+            })}
             <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
             <button onClick={() => { setCurrentUser(null); setShowUserMenu(false); }}
               style={{
@@ -14115,7 +14279,6 @@ function App() {
                   { value: "in_progress", icon: "🔥", label: "Rozpracované" },
                   { value: "planned",     icon: "⏰", label: "Plánované" },
                   { value: "done",        icon: "✓",  label: "Splněné" },
-                  { value: "trash",       icon: "🗑", label: "Koš" },
                   { value: "all",         icon: "🌐", label: "Vše" },
                 ];
                 return (
@@ -14495,6 +14658,169 @@ function App() {
             )}
           </div>
         )}
+
+        {/* Trash view: smazané poznámky a deníkové zápisy */}
+        {viewStatus === "trash" && (() => {
+          // Smazané poznámky (jen moje + sdílené se mnou)
+          const deletedNotes = notes.filter(n => {
+            if (!n.deletedAt) return false;
+            if (n.createdBy === currentUser?.name) return true;
+            if (n.isShared) return true;
+            if (Array.isArray(n.sharedWith)) {
+              return n.sharedWith.includes("*") || n.sharedWith.includes(currentUser?.name);
+            }
+            return false;
+          });
+          // Smazané deníkové zápisy z mých úkolů
+          const deletedScratchEntries = [];
+          tasks.forEach(t => {
+            if (!Array.isArray(t.scratchPad)) return;
+            // Privacy: jen zápisy v mých úkolech
+            const isMine = t.createdBy === currentUser?.name ||
+              (t.assignedTo || []).includes(currentUser?.name);
+            if (!isMine && !currentUser?.admin) return;
+            t.scratchPad.forEach(entry => {
+              if (entry.deletedAt) {
+                deletedScratchEntries.push({ ...entry, taskId: t.id, taskTitle: t.title });
+              }
+            });
+          });
+          deletedScratchEntries.sort((a, b) =>
+            new Date(b.deletedAt || 0) - new Date(a.deletedAt || 0)
+          );
+
+          if (deletedNotes.length === 0 && deletedScratchEntries.length === 0) return null;
+
+          const trashSectionLabel = (icon, text, count, color) => (
+            <div style={{
+              marginTop: 16, marginBottom: 8,
+              paddingLeft: 10, borderLeft: `3px solid ${color}`,
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <span style={{ fontSize: 14 }}>{icon}</span>
+              <span style={{
+                fontSize: 11, fontWeight: 800, color: color,
+                textTransform: "uppercase", letterSpacing: "0.5px", flex: 1,
+              }}>{text}</span>
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: "#fff",
+                background: color, padding: "2px 8px", borderRadius: 10,
+                minWidth: 18, textAlign: "center",
+              }}>{count}</span>
+            </div>
+          );
+
+          return (
+            <div>
+              {/* Smazané poznámky */}
+              {deletedNotes.length > 0 && (
+                <>
+                  {trashSectionLabel("📝", "Smazané poznámky", deletedNotes.length, theme.green)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {deletedNotes.map(n => {
+                      const stripHtml = (html) => {
+                        if (!html) return "";
+                        const div = document.createElement("div");
+                        div.innerHTML = html;
+                        return (div.textContent || "").trim();
+                      };
+                      const preview = stripHtml(n.content);
+                      return (
+                        <div key={n.id} style={{
+                          background: theme.card, padding: "10px 12px",
+                          border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
+                          opacity: 0.85,
+                        }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: theme.text, textDecoration: "line-through" }}>
+                            {n.title || <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
+                          </div>
+                          {preview && (
+                            <div style={{ fontSize: 11, color: theme.textMid, marginTop: 3,
+                              display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                            }}>{preview}</div>
+                          )}
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button onClick={async () => {
+                              await apiRestoreNote(n.id);
+                              setNotes(prev => prev.map(x => x.id === n.id ? { ...x, deletedAt: null } : x));
+                            }} style={{
+                              ...buttonStyle(), padding: "5px 10px", fontSize: 11,
+                              background: `${theme.green}15`, color: theme.green,
+                              border: `1px solid ${theme.green}30`, fontWeight: 600,
+                            }}>↩ Obnovit</button>
+                            <button onClick={async () => {
+                              if (!confirm("Trvale smazat tuto poznámku?")) return;
+                              await apiHardDeleteNote(n.id);
+                              setNotes(prev => prev.filter(x => x.id !== n.id));
+                            }} style={{
+                              ...buttonStyle(), padding: "5px 10px", fontSize: 11,
+                              background: "transparent", color: theme.red,
+                              border: `1px solid ${theme.red}40`, fontWeight: 600,
+                            }}>🗑 Trvale smazat</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Smazané deníkové zápisy */}
+              {deletedScratchEntries.length > 0 && (
+                <>
+                  {trashSectionLabel("📔", "Smazané zápisy z deníku", deletedScratchEntries.length, theme.purple || "#a855f7")}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {deletedScratchEntries.map(entry => (
+                      <div key={`${entry.taskId}_${entry.id}`} style={{
+                        background: theme.card, padding: "10px 12px",
+                        border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
+                        opacity: 0.85,
+                      }}>
+                        <div style={{ fontSize: 13, color: theme.text, textDecoration: "line-through" }}>
+                          {entry.text}
+                        </div>
+                        <div style={{ fontSize: 10, color: theme.textSub, marginTop: 3 }}>
+                          z úkolu „<strong>{entry.taskTitle}</strong>"
+                        </div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <button onClick={() => {
+                            // Restore: nastav deletedAt = null v entry
+                            const task = tasks.find(t => t.id === entry.taskId);
+                            if (!task) return;
+                            const newPad = (task.scratchPad || []).map(e =>
+                              e.id === entry.id ? { ...e, deletedAt: null } : e
+                            );
+                            const updated = { ...task, scratchPad: newPad };
+                            setTasks(prev => prev.map(t => t.id === entry.taskId ? updated : t));
+                            apiUpdateTask(updated);
+                          }} style={{
+                            ...buttonStyle(), padding: "5px 10px", fontSize: 11,
+                            background: `${theme.green}15`, color: theme.green,
+                            border: `1px solid ${theme.green}30`, fontWeight: 600,
+                          }}>↩ Obnovit</button>
+                          <button onClick={() => {
+                            if (!confirm("Trvale smazat tento zápis?")) return;
+                            const task = tasks.find(t => t.id === entry.taskId);
+                            if (!task) return;
+                            const newPad = (task.scratchPad || []).filter(e => e.id !== entry.id);
+                            const updated = { ...task, scratchPad: newPad };
+                            setTasks(prev => prev.map(t => t.id === entry.taskId ? updated : t));
+                            apiUpdateTask(updated);
+                          }} style={{
+                            ...buttonStyle(), padding: "5px 10px", fontSize: 11,
+                            background: "transparent", color: theme.red,
+                            border: `1px solid ${theme.red}40`, fontWeight: 600,
+                          }}>🗑 Trvale smazat</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Task list */}
         {filteredTasks.length === 0 ? (
