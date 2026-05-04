@@ -11662,7 +11662,6 @@ function App() {
 
   // Initial data load
   useEffect(() => {
-    if (!currentUser?.name) return; // Bez currentUser nemůžeme filtrovat sdílené entity
     (async () => {
       // Při startu ověř DB schéma — předejde tichým chybám typu PGRST204
       // (chybějící sloupec → INSERT/UPDATE selhává → změny se neuloží)
@@ -11699,23 +11698,8 @@ function App() {
         console.warn("Custom lists tabulka možná neexistuje, spusť migration_custom_lists.sql:", e);
       }
 
-      // Reminders — soukromé pro aktuálního uživatele (filter v DB query)
-      try {
-        const myReminders = await apiLoadReminders(currentUser?.name);
-        console.log("[reminders] Loaded", myReminders.length, "active reminders");
-        setReminders(myReminders);
-      } catch (e) {
-        console.warn("Reminders tabulka možná neexistuje, spusť SQL migrace:", e);
-      }
-
-      // Notes — vlastní + sdílené (filter v DB query)
-      try {
-        const myNotes = await apiLoadNotes(currentUser?.name);
-        console.log("[notes] Loaded", myNotes.length, "notes");
-        setNotes(myNotes);
-      } catch (e) {
-        console.warn("Notes tabulka možná neexistuje, spusť SQL migrace:", e);
-      }
+      // Reminders + Notes loadují se v samostatném effect
+      // (vyžadují currentUser?.name, který nemusí být známý při initial mount)
 
       setLoading(false);
     })();
@@ -11761,6 +11745,30 @@ function App() {
         .catch(err => console.warn("SW registration failed:", err));
     }
   }, []);
+
+  // User-scoped data load — Reminders + Notes
+  // Tyto entity vyžadují currentUser pro filtraci. Effect proběhne pokaždé
+  // když se currentUser změní (login, logout, switch user) — chytne i případ
+  // kdy initial load proběhl PŘED session restore z localStorage.
+  useEffect(() => {
+    if (!currentUser?.name) return;
+    (async () => {
+      try {
+        const myReminders = await apiLoadReminders(currentUser.name);
+        console.log("[reminders] Loaded", myReminders.length, "active reminders");
+        setReminders(myReminders);
+      } catch (e) {
+        console.warn("Reminders load failed:", e);
+      }
+      try {
+        const myNotes = await apiLoadNotes(currentUser.name);
+        console.log("[notes] Loaded", myNotes.length, "notes");
+        setNotes(myNotes);
+      } catch (e) {
+        console.warn("Notes load failed:", e);
+      }
+    })();
+  }, [currentUser?.name]);
 
   // Sync user session to service worker + save push subscription for user
   useEffect(() => {
