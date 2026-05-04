@@ -6924,25 +6924,31 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                       : "!";
 
         // Helper button
-        const IconButton = ({ active, color, children, onClick, segmentKey, title }) => (
+        const IconButton = ({ active, color, children, onClick, segmentKey, title, isOpen }) => {
+          // Otevřený popover má prioritu — viditelný outline silnější než active
+          // Pokud popover otevřený A není ještě "active" (vybraná hodnota) → outline ring
+          // Pokud i active i isOpen → highlight remains active styling
+          const showOpen = isOpen && !active;
+          return (
           <div style={{ position: "relative", flex: 1 }}>
             <button type="button" onClick={onClick}
               title={title}
               style={{
                 width: "100%", height: "35px",
-                background: active ? `${color}15` : theme.inputBg,
-                color: active ? color : theme.textMid,
-                border: `1.5px solid ${active ? color : theme.inputBorder}`,
+                background: active ? `${color}15` : showOpen ? `${color}08` : theme.inputBg,
+                color: active ? color : showOpen ? color : theme.textMid,
+                border: `1.5px solid ${active ? color : showOpen ? color : theme.inputBorder}`,
                 borderRadius: "10px",
                 fontSize: "16px", fontWeight: 700,
                 cursor: "pointer", fontFamily: FONT,
-                boxShadow: active ? `0 1px 4px ${color}25` : "none",
+                boxShadow: active ? `0 1px 4px ${color}25` : showOpen ? `0 0 0 2px ${color}30` : "none",
                 transition: "all 0.15s",
               }}>
               {children}
             </button>
           </div>
-        );
+          );
+        };
 
         return (
           <div data-typing-row style={{
@@ -6962,6 +6968,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
               {/* Datum */}
               <IconButton active={!!dueDate}
+                isOpen={openSegment === "t_date"}
                 color={theme.accent}
                 title={`Termín: ${dateLabel}`}
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_date" ? null : "t_date"); }}>
@@ -6970,6 +6977,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
               {/* Pro koho */}
               <IconButton active={!assigneesIsMe}
+                isOpen={openSegment === "t_who"}
                 color={theme.accent}
                 title="Komu úkol zadávám"
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_who" ? null : "t_who"); }}>
@@ -6978,6 +6986,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
               {/* Seznam */}
               <IconButton active={!!quickCategory}
+                isOpen={openSegment === "t_list"}
                 color={curList?.color || theme.accent}
                 title="Seznam"
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_list" ? null : "t_list"); }}>
