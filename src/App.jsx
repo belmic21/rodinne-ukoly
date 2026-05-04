@@ -1578,12 +1578,14 @@ async function apiLoadNotes(userName) {
   //   1) vlastní (created_by = userName)
   //   2) sdílené konkrétně se mnou (shared_with obsahuje userName nebo "*" = všichni)
   //   3) legacy: is_shared = true (back-compat pro staré notes před migrací)
+  if (!userName) {
+    console.warn("[apiLoadNotes] called without userName, returning empty");
+    return [];
+  }
   try {
     const { data, error } = await supabase
       .from("notes")
       .select("*")
-      // Filter na klientu nebo přes .or() — Supabase array contains nemá ideální syntaxi
-      // Načteme vše a filtrujeme. (Pro 4-člennou rodinu OK.)
       .order("pinned", { ascending: false })
       .order("updated_at", { ascending: false });
     if (error) throw error;
@@ -1597,6 +1599,7 @@ async function apiLoadNotes(userName) {
       }
       return false;
     });
+    console.log(`[apiLoadNotes] DB returned ${all.length} rows, filtered ${filtered.length} for user "${userName}"`);
     cacheSet(CACHE_NOTES, filtered);
     return filtered;
   } catch (e) {
@@ -1655,17 +1658,22 @@ async function apiUpdateNote(note) {
 // Soft delete — nastaví deleted_at, poznámka jde do koše
 async function apiDeleteNote(id) {
   try {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("notes")
       .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id);
+      .eq("id", id)
+      .select();
     if (error) throw error;
+    console.log(`[apiDeleteNote] id=${id} updated, returned ${data?.length || 0} rows`);
+    return true;
   } catch (e) {
     if (isNetworkError(e)) {
       addToOfflineQueue({ type: "delete_note", id });
     } else {
       logServerError("apiDeleteNote", e, { id });
+      console.error("[apiDeleteNote] failed:", e.message);
     }
+    return false;
   }
 }
 
@@ -11654,6 +11662,7 @@ function App() {
 
   // Initial data load
   useEffect(() => {
+    if (!currentUser?.name) return; // Bez currentUser nemůžeme filtrovat sdílené entity
     (async () => {
       // Při startu ověř DB schéma — předejde tichým chybám typu PGRST204
       // (chybějící sloupec → INSERT/UPDATE selhává → změny se neuloží)
@@ -14115,8 +14124,15 @@ function App() {
               }
             }}
             onDelete={async (id) => {
-              setNotes(prev => prev.filter(n => n.id !== id));
-              await apiDeleteNote(id);
+              const now = new Date().toISOString();
+              // Optimistic update — označ jako smazanou (jde do koše, ne pryč ze state)
+              setNotes(prev => prev.map(n => n.id === id ? { ...n, deletedAt: now } : n));
+              const ok = await apiDeleteNote(id);
+              if (!ok) {
+                // Rollback při neúspěchu
+                setNotes(prev => prev.map(n => n.id === id ? { ...n, deletedAt: null } : n));
+                alert("Nepodařilo se smazat poznámku, zkus to znovu.");
+              }
             }}
             onConvertToTask={(taskData) => {
               // taskData: { title, note }
