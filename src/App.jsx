@@ -1097,14 +1097,15 @@ async function apiLoadUsers() {
 
 async function apiLoadTasks() {
   // Server je vždy zdroj pravdy. Cache se používá JEN když jsme offline (catch).
-  // Předtím tu byla složitá merge logika, která způsobovala "úkoly se vrací po smazání"
-  // — pokud jsi smazal úkol a refresh nebo focus event proběhl rychleji než dorazil
-  // realtime DELETE event, lokální cache měla "deleted" status a server "active",
-  // takže merge úkol vrátil zpět. Teď: server = pravda, vždy.
   try {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (error) throw error;
-    const serverTasks = (data || []).map(dbToTask);
+    const serverTasks = (data || []).map(row => {
+      const t = dbToTask(row);
+      // Granulární sdílení — propagovat z DB sloupce shared_with
+      if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
+      return t;
+    });
     cacheSet(CACHE_TASKS, serverTasks);
     return serverTasks;
   } catch (e) {
@@ -1161,14 +1162,16 @@ async function apiCreateTask(task) {
   cacheSet(CACHE_TASKS, [task, ...cached]);
 
   try {
-    const { error } = await supabase.from("tasks").insert(taskToDb(task));
+    const dbRow = { ...taskToDb(task) };
+    // Granulární sdílení — propsat shared_with field (existuje od migrace)
+    if (Array.isArray(task.sharedWith)) dbRow.shared_with = task.sharedWith;
+    const { error } = await supabase.from("tasks").insert(dbRow);
     if (error) throw error;
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiCreateTask offline, queued");
       addToOfflineQueue({ type: "create_task", task });
     } else {
-      // Server chyba (4xx/5xx) — queue by stejně selhal, jen logujeme.
       logServerError("apiCreateTask", e, taskToDb(task));
     }
   }
@@ -1180,14 +1183,15 @@ async function apiUpdateTask(task) {
   cacheSet(CACHE_TASKS, cached.map(t => t.id === task.id ? task : t));
 
   try {
-    const { error } = await supabase.from("tasks").update(taskToDb(task)).eq("id", task.id);
+    const dbRow = { ...taskToDb(task) };
+    if (Array.isArray(task.sharedWith)) dbRow.shared_with = task.sharedWith;
+    const { error } = await supabase.from("tasks").update(dbRow).eq("id", task.id);
     if (error) throw error;
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiUpdateTask offline, queued");
       addToOfflineQueue({ type: "update_task", task });
     } else {
-      // Server chyba (4xx/5xx) — queue by stejně selhal, jen logujeme.
       logServerError("apiUpdateTask", e, taskToDb(task));
     }
   }
@@ -1283,6 +1287,7 @@ function reminderFromDb(r) {
     createdAt: r.created_at,
     dismissedAt: r.dismissed_at,
     notified: !!r.notified,
+    sharedWith: Array.isArray(r.shared_with) ? r.shared_with : [],
   };
 }
 function reminderToDb(r) {
@@ -1292,26 +1297,46 @@ function reminderToDb(r) {
     created_by: r.createdBy,
     dismissed_at: r.dismissedAt || null,
     notified: !!r.notified,
+    shared_with: Array.isArray(r.sharedWith) ? r.sharedWith : [],
   };
 }
 
 async function apiLoadReminders(userName = null) {
+  // Načte aktivní reminders:
+  //   1) vlastní (created_by = userName)
+  //   2) sdílené se mnou (shared_with obsahuje userName nebo "*")
   try {
-    let query = supabase
+    const { data, error } = await supabase
       .from("reminders")
       .select("*")
       .is("dismissed_at", null)
       .order("remind_at", { ascending: true });
-    if (userName) query = query.eq("created_by", userName);
-    const { data, error } = await query;
     if (error) throw error;
-    const reminders = (data || []).map(reminderFromDb);
-    cacheSet(CACHE_REMINDERS, reminders);
-    return reminders;
+    const all = (data || []).map(reminderFromDb);
+    const filtered = userName
+      ? all.filter(r => {
+          if (r.createdBy === userName) return true;
+          if (Array.isArray(r.sharedWith)) {
+            if (r.sharedWith.includes("*")) return true;
+            if (r.sharedWith.includes(userName)) return true;
+          }
+          return false;
+        })
+      : all;
+    cacheSet(CACHE_REMINDERS, filtered);
+    return filtered;
   } catch (e) {
     if (isNetworkError(e)) {
       const cached = cacheGet(CACHE_REMINDERS) || [];
-      return userName ? cached.filter(r => r.createdBy === userName) : cached;
+      return userName
+        ? cached.filter(r => {
+            if (r.createdBy === userName) return true;
+            if (Array.isArray(r.sharedWith)) {
+              return r.sharedWith.includes("*") || r.sharedWith.includes(userName);
+            }
+            return false;
+          })
+        : cached;
     }
     logServerError("apiLoadReminders", e);
     return [];
@@ -1453,8 +1478,9 @@ function noteFromDb(n) {
     createdBy: n.created_by,
     createdAt: n.created_at,
     updatedAt: n.updated_at,
-    isShared: !!n.is_shared,
+    isShared: !!n.is_shared, // legacy fallback
     pinned: !!n.pinned,
+    sharedWith: Array.isArray(n.shared_with) ? n.shared_with : [],
   };
 }
 function noteToDb(n) {
@@ -1462,29 +1488,50 @@ function noteToDb(n) {
     title: n.title || "",
     content: n.content || "",
     created_by: n.createdBy,
-    is_shared: !!n.isShared,
+    is_shared: (n.sharedWith && n.sharedWith.length > 0) || !!n.isShared, // legacy compat
     pinned: !!n.pinned,
+    shared_with: Array.isArray(n.sharedWith) ? n.sharedWith : [],
     updated_at: new Date().toISOString(),
   };
 }
 
 async function apiLoadNotes(userName) {
-  // Načte poznámky: vlastní (created_by = userName) NEBO sdílené (is_shared = true)
+  // Načte poznámky:
+  //   1) vlastní (created_by = userName)
+  //   2) sdílené konkrétně se mnou (shared_with obsahuje userName nebo "*" = všichni)
+  //   3) legacy: is_shared = true (back-compat pro staré notes před migrací)
   try {
     const { data, error } = await supabase
       .from("notes")
       .select("*")
-      .or(`created_by.eq.${userName},is_shared.eq.true`)
+      // Filter na klientu nebo přes .or() — Supabase array contains nemá ideální syntaxi
+      // Načteme vše a filtrujeme. (Pro 4-člennou rodinu OK.)
       .order("pinned", { ascending: false })
       .order("updated_at", { ascending: false });
     if (error) throw error;
-    const notes = (data || []).map(noteFromDb);
-    cacheSet(CACHE_NOTES, notes);
-    return notes;
+    const all = (data || []).map(noteFromDb);
+    const filtered = all.filter(n => {
+      if (n.createdBy === userName) return true;
+      if (n.isShared) return true; // legacy
+      if (Array.isArray(n.sharedWith)) {
+        if (n.sharedWith.includes("*")) return true;
+        if (n.sharedWith.includes(userName)) return true;
+      }
+      return false;
+    });
+    cacheSet(CACHE_NOTES, filtered);
+    return filtered;
   } catch (e) {
     if (isNetworkError(e)) {
       const cached = cacheGet(CACHE_NOTES) || [];
-      return cached.filter(n => n.createdBy === userName || n.isShared);
+      return cached.filter(n => {
+        if (n.createdBy === userName) return true;
+        if (n.isShared) return true;
+        if (Array.isArray(n.sharedWith)) {
+          return n.sharedWith.includes("*") || n.sharedWith.includes(userName);
+        }
+        return false;
+      });
     }
     logServerError("apiLoadNotes", e);
     return [];
@@ -1547,7 +1594,7 @@ async function apiDeleteNote(id) {
    2 kliky: tlačítko ⏰ → napsat text + vybrat čas → automaticky uložit.
    ═══════════════════════════════════════════════════════ */
 
-function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) {
+function QuickReminderModal({ theme, currentUser, users = [], onCreate, onClose, prefill }) {
   const [text, setText] = useState(prefill?.text || "");
   // Režim: "offset" (za X minut/hodin) | "absolute" (v konkrétní čas)
   const [mode, setMode] = useState("offset");
@@ -1556,9 +1603,11 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) 
   const [customOffsetValue, setCustomOffsetValue] = useState("");
   const [customOffsetUnit, setCustomOffsetUnit] = useState("min"); // "min" | "h" | "d"
   // Absolute režim
-  const [absolutePreset, setAbsolutePreset] = useState("tomorrow_8"); // string klíč nebo "custom"
+  const [absolutePreset, setAbsolutePreset] = useState("tomorrow_8");
   const [customDate, setCustomDate] = useState("");
   const [customTime, setCustomTime] = useState("");
+  // Sdílení
+  const [sharedWith, setSharedWith] = useState([]);
   const inputRef = useRef(null);
   useEscapeKey(onClose);
 
@@ -1644,6 +1693,7 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) 
       text: text.trim(),
       remindAt,
       createdBy: currentUser.name,
+      sharedWith,
       reactivateId: prefill?.originalId || null,
       reactivateWasDismissed: prefill?.wasDismissed || false,
     });
@@ -1808,6 +1858,21 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) 
           })()}
         </div>
 
+        {/* Sdílení sekce — víc než 1 user */}
+        {users.length > 1 && (
+          <div style={{
+            padding: "10px 12px", borderTop: `1px solid ${theme.cardBorder}`,
+          }}>
+            <SharedWithSelector
+              value={sharedWith}
+              onChange={setSharedWith}
+              users={users}
+              currentUser={currentUser}
+              theme={theme}
+            />
+          </div>
+        )}
+
         <div style={{
           padding: 12, borderTop: `1px solid ${theme.cardBorder}`,
           display: "flex", justifyContent: "flex-end", gap: 8,
@@ -1922,8 +1987,14 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
     (async () => {
       const dismissed = await apiLoadDismissedReminders();
       if (cancelled) return;
-      // Filter jen moje
-      const mine = dismissed.filter(r => r.createdBy === currentUser?.name);
+      // Filter: vlastní + sdílené se mnou
+      const mine = dismissed.filter(r => {
+        if (r.createdBy === currentUser?.name) return true;
+        if (Array.isArray(r.sharedWith)) {
+          return r.sharedWith.includes("*") || r.sharedWith.includes(currentUser?.name);
+        }
+        return false;
+      });
       setDismissedHistory(mine);
       setHistoryLoading(false);
 
@@ -1942,7 +2013,14 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
     return () => { cancelled = true; };
   }, [currentUser?.name, reminders]);
 
-  const myReminders = reminders.filter(r => r.createdBy === currentUser?.name && !r.dismissedAt);
+  const myReminders = reminders.filter(r => {
+    if (r.dismissedAt) return false;
+    if (r.createdBy === currentUser?.name) return true;
+    if (Array.isArray(r.sharedWith)) {
+      return r.sharedWith.includes("*") || r.sharedWith.includes(currentUser?.name);
+    }
+    return false;
+  });
   const now = Date.now();
   // Rozdělit na aktivní (čas v budoucnu) a propadlé (čas uběhl)
   const active = myReminders
@@ -2044,15 +2122,15 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-      display: "flex", alignItems: "flex-end", justifyContent: "center",
-      zIndex: 150,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 150, padding: 12,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: theme.card,
-        width: "100%", maxWidth: 560, maxHeight: "80vh",
-        borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        width: "100%", maxWidth: 560, maxHeight: "85vh",
+        borderRadius: 14,
         display: "flex", flexDirection: "column",
-        boxShadow: "0 -8px 24px rgba(0,0,0,0.3)",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
       }}>
         <div style={{
           padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
@@ -2163,6 +2241,84 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
    text se rovnou zobrazuje formátovaně. Storage formát: HTML string.
    ═══════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════
+   SHARED-WITH SELECTOR — multi-select kdo vidí entity (note/reminder/task).
+   Hodnota: array uživatelských jmen, "*" = všichni.
+   Příklad: ["Pavla"] → jen Pavla + autor; ["*"] → všichni; [] → soukromé.
+   ═══════════════════════════════════════════════════════ */
+
+function SharedWithSelector({ value = [], onChange, users = [], currentUser, theme }) {
+  const otherUsers = (users || []).filter(u => u && u.name !== currentUser?.name);
+  const allWithStar = value.includes("*");
+  const toggleUser = (name) => {
+    if (allWithStar) {
+      // Pokud je "*" zapnuté, vypnout * a nastavit pouze tento uživatel
+      onChange([name]);
+      return;
+    }
+    if (value.includes(name)) {
+      onChange(value.filter(v => v !== name));
+    } else {
+      onChange([...value, name]);
+    }
+  };
+  const toggleAll = () => {
+    if (allWithStar) onChange([]);
+    else onChange(["*"]);
+  };
+
+  if (otherUsers.length === 0) return null;
+
+  return (
+    <div style={{
+      padding: "8px 10px", background: theme.inputBg,
+      border: `1px solid ${theme.inputBorder}`, borderRadius: 8,
+      display: "flex", flexDirection: "column", gap: 6,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMid,
+        textTransform: "uppercase", letterSpacing: "0.4px" }}>
+        Sdílet s:
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {/* "Všichni" speciální option */}
+        <button onClick={toggleAll} type="button" style={{
+          padding: "5px 10px", fontSize: 12, fontWeight: 600,
+          background: allWithStar ? theme.accent : "transparent",
+          color: allWithStar ? "#fff" : theme.text,
+          border: `1px solid ${allWithStar ? theme.accent : theme.inputBorder}`,
+          borderRadius: 16, cursor: "pointer", fontFamily: FONT,
+        }}>
+          {allWithStar ? "✓ " : ""}🌍 Všichni
+        </button>
+        {/* Per-user toggles */}
+        {otherUsers.map(u => {
+          const active = !allWithStar && value.includes(u.name);
+          return (
+            <button key={u.name} onClick={() => toggleUser(u.name)} type="button" style={{
+              padding: "5px 10px", fontSize: 12, fontWeight: 600,
+              background: active ? theme.accent : "transparent",
+              color: active ? "#fff" : theme.text,
+              opacity: allWithStar ? 0.5 : 1,
+              border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
+              borderRadius: 16, cursor: allWithStar ? "default" : "pointer", fontFamily: FONT,
+            }}>
+              {active ? "✓ " : ""}{u.name}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 10, color: theme.textSub }}>
+        {value.length === 0 || (value.length === 1 && value[0] === "")
+          ? "🔒 Soukromé — vidíš jen ty"
+          : allWithStar
+            ? `🌍 Všichni v rodině uvidí (${otherUsers.length} ${otherUsers.length === 1 ? "uživatel" : "uživatelé"})`
+            : `👥 Uvidí: ${value.filter(v => v !== "*").join(", ")}`
+        }
+      </div>
+    </div>
+  );
+}
+
 function TipTapToolbar({ editor, theme }) {
   if (!editor) return null;
 
@@ -2219,10 +2375,16 @@ function TipTapToolbar({ editor, theme }) {
    Title + TipTap editor + sdílení/pin + akce (smazat / vytvořit úkol).
    ═══════════════════════════════════════════════════════ */
 
-function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onConvertToTask }) {
+function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, onClose, onConvertToTask }) {
   const isNew = !note?.id;
   const [title, setTitle] = useState(note?.title || "");
-  const [isShared, setIsShared] = useState(note?.isShared || false);
+  // sharedWith: array — pokud existující note má isShared=true ale prázdný sharedWith, považujeme za "*" (legacy)
+  const initialSharedWith = (() => {
+    if (Array.isArray(note?.sharedWith) && note.sharedWith.length > 0) return note.sharedWith;
+    if (note?.isShared) return ["*"];
+    return [];
+  })();
+  const [sharedWith, setSharedWith] = useState(initialSharedWith);
   const [pinned, setPinned] = useState(note?.pinned || false);
   const [saving, setSaving] = useState(false);
   const titleRef = useRef(null);
@@ -2270,7 +2432,8 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
       ...(note || {}),
       title: title.trim(),
       content: isEmptyContent ? "" : content,
-      isShared,
+      sharedWith, // granulární sdílení
+      isShared: sharedWith.length > 0, // legacy back-compat
       pinned,
       createdBy: note?.createdBy || currentUser.name,
     };
@@ -2294,7 +2457,7 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
       const snapshot = JSON.stringify({
         title: title.trim(),
         content: editor.getHTML(),
-        isShared, pinned,
+        sharedWith, pinned,
       });
       if (snapshot !== lastSavedSnapshotRef.current) {
         lastSavedSnapshotRef.current = snapshot;
@@ -2302,7 +2465,7 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
       }
     }, 8000);
     return () => clearInterval(interval);
-  }, [editor, title, isShared, pinned, canEdit]);
+  }, [editor, title, sharedWith, pinned, canEdit]);
 
   // Auto-save při unmount (zavření) — chytne i klik mimo modal
   useEffect(() => {
@@ -2399,30 +2562,36 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
           <EditorContent editor={editor} />
         </div>
 
+        {/* Sdílení sekce — viditelná jen pro editovatelné poznámky */}
+        {canEdit && users.length > 1 && (
+          <div style={{
+            padding: "8px 14px", borderTop: `1px solid ${theme.cardBorder}`,
+            flexShrink: 0,
+          }}>
+            <SharedWithSelector
+              value={sharedWith}
+              onChange={setSharedWith}
+              users={users}
+              currentUser={currentUser}
+              theme={theme}
+            />
+          </div>
+        )}
+
         <div style={{
           padding: "10px 14px", borderTop: `1px solid ${theme.cardBorder}`,
           display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8,
           flexShrink: 0,
         }}>
           {canEdit ? (
-            <>
-              <label style={{
-                display: "flex", alignItems: "center", gap: 5, fontSize: 12,
-                color: theme.textMid, cursor: "pointer", userSelect: "none",
-              }}>
-                <input type="checkbox" checked={isShared} onChange={e => setIsShared(e.target.checked)}
-                  style={{ cursor: "pointer" }} />
-                <span>👥 Sdílet s rodinou</span>
-              </label>
-              <label style={{
-                display: "flex", alignItems: "center", gap: 5, fontSize: 12,
-                color: theme.textMid, cursor: "pointer", userSelect: "none",
-              }}>
-                <input type="checkbox" checked={pinned} onChange={e => setPinned(e.target.checked)}
-                  style={{ cursor: "pointer" }} />
-                <span>📌 Připnout</span>
-              </label>
-            </>
+            <label style={{
+              display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+              color: theme.textMid, cursor: "pointer", userSelect: "none",
+            }}>
+              <input type="checkbox" checked={pinned} onChange={e => setPinned(e.target.checked)}
+                style={{ cursor: "pointer" }} />
+              <span>📌 Připnout</span>
+            </label>
           ) : (
             <div style={{ fontSize: 11, color: theme.textSub }}>
               Poznámka od <strong>{note.createdBy}</strong> · jen ke čtení
@@ -2485,7 +2654,15 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
 
   // Rozdělit do sekcí
   const pinned = filtered.filter(n => n.pinned);
-  const shared = filtered.filter(n => !n.pinned && n.isShared && n.createdBy !== currentUser?.name);
+  const shared = filtered.filter(n => {
+    if (n.pinned) return false;
+    if (n.createdBy === currentUser?.name) return false;
+    if (n.isShared) return true; // legacy
+    if (Array.isArray(n.sharedWith)) {
+      return n.sharedWith.includes("*") || n.sharedWith.includes(currentUser?.name);
+    }
+    return false;
+  });
   const mySharedOrPrivate = filtered.filter(n => !n.pinned && (n.createdBy === currentUser?.name));
 
   const formatDate = (iso) => {
@@ -2523,7 +2700,7 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}>
             {note.pinned && <span style={{ marginRight: 4 }}>📌</span>}
-            {note.isShared && <span style={{ marginRight: 4 }}>👥</span>}
+            {(note.isShared || (Array.isArray(note.sharedWith) && note.sharedWith.length > 0)) && <span style={{ marginRight: 4 }}>👥</span>}
             {note.title || <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
           </div>
           <div style={{
@@ -2539,7 +2716,7 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
             {preview}
           </div>
         )}
-        {!isMine && note.isShared && (
+        {!isMine && (note.isShared || (Array.isArray(note.sharedWith) && note.sharedWith.length > 0)) && (
           <div style={{ fontSize: 10, color: theme.textSub, marginTop: 4 }}>
             od <strong>{note.createdBy}</strong>
           </div>
@@ -2563,15 +2740,15 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-      display: "flex", alignItems: "flex-end", justifyContent: "center",
-      zIndex: 150,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 150, padding: 12,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: theme.card,
         width: "100%", maxWidth: 600, maxHeight: "85vh",
-        borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        borderRadius: 14,
         display: "flex", flexDirection: "column",
-        boxShadow: "0 -8px 24px rgba(0,0,0,0.3)",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
       }}>
         {/* Header */}
         <div style={{
@@ -8301,17 +8478,25 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
       })
       .slice(0, 20);
 
-    // Reminders — jen moje (vlastní)
+    // Reminders — vlastní + sdílené se mnou
     const matchedReminders = isSmartQuery ? [] : reminders
-      .filter(r =>
-        r.createdBy === currentUser.name && norm(r.text).includes(qNorm)
-      )
+      .filter(r => {
+        const isVisible =
+          r.createdBy === currentUser.name ||
+          (Array.isArray(r.sharedWith) && (r.sharedWith.includes("*") || r.sharedWith.includes(currentUser.name)));
+        return isVisible && norm(r.text).includes(qNorm);
+      })
       .slice(0, 20);
 
     // Notes — moje + sdílené, hledáme v title + content (stripped HTML)
     const matchedNotes = isSmartQuery ? [] : notes
       .filter(n => {
-        if (!(n.createdBy === currentUser.name || n.isShared)) return false;
+        // Visibility: vlastní, legacy isShared, nebo sharedWith obsahuje mě / "*"
+        const isVisible =
+          n.createdBy === currentUser.name ||
+          n.isShared ||
+          (Array.isArray(n.sharedWith) && (n.sharedWith.includes("*") || n.sharedWith.includes(currentUser.name)));
+        if (!isVisible) return false;
         if (norm(n.title).includes(qNorm)) return true;
         if (norm(stripHtml(n.content)).includes(qNorm)) return true;
         return false;
@@ -11290,24 +11475,42 @@ function App() {
       });
     realtimeChannelsRef.current.lists = listsChannel;
 
-    // Reminders realtime — synchronizace mezi zařízeními (soukromé pro currentUser)
+    // Reminders realtime — synchronizace + sdílení (granulární)
+    const reminderVisibleToMe = (row) => {
+      if (!row) return false;
+      if (row.created_by === currentUser?.name) return true;
+      const sw = Array.isArray(row.shared_with) ? row.shared_with : [];
+      return sw.includes("*") || sw.includes(currentUser?.name);
+    };
+
     const remindersChannel = supabase.channel("reminders-realtime-v1")
       .on("postgres_changes", { event: "*", schema: "public", table: "reminders" }, (payload) => {
         try {
-          const isMine = (payload.new?.created_by || payload.old?.created_by) === currentUser?.name;
-          if (!isMine) return; // soukromé připomínky — ignorovat cizí
+          const wasVisible = reminderVisibleToMe(payload.old);
+          const isVisible = reminderVisibleToMe(payload.new);
+          if (!wasVisible && !isVisible) return;
+
           if (payload.eventType === "INSERT") {
             const r = reminderFromDb(payload.new);
-            if (r && !r.dismissedAt) {
+            if (r && !r.dismissedAt && isVisible) {
               setReminders(prev => prev.find(x => x.id === r.id) ? prev : [...prev, r]);
             }
           } else if (payload.eventType === "UPDATE") {
             const r = reminderFromDb(payload.new);
             if (!r) return;
+            // Dismissed → odebrat
             if (r.dismissedAt) {
               setReminders(prev => prev.filter(x => x.id !== r.id));
+            } else if (!isVisible) {
+              // Sdílení odebráno
+              setReminders(prev => prev.filter(x => x.id !== r.id));
             } else {
-              setReminders(prev => prev.map(x => x.id === r.id ? r : x));
+              setReminders(prev => {
+                if (prev.find(x => x.id === r.id)) {
+                  return prev.map(x => x.id === r.id ? r : x);
+                }
+                return [...prev, r];
+              });
             }
           } else if (payload.eventType === "DELETE") {
             setReminders(prev => prev.filter(x => x.id !== payload.old.id));
@@ -11321,36 +11524,43 @@ function App() {
     realtimeChannelsRef.current.reminders = remindersChannel;
 
     // Notes realtime — synchronizace mezi zařízeními
-    // Filter na klientu: vlastní (created_by = currentUser) NEBO sdílené (is_shared = true)
+    // Filter na klientu: vlastní (created_by = currentUser) NEBO sdílené se mnou (shared_with)
+    const isVisibleToMe = (row) => {
+      if (!row) return false;
+      if (row.created_by === currentUser?.name) return true;
+      if (row.is_shared) return true; // legacy
+      const sw = Array.isArray(row.shared_with) ? row.shared_with : [];
+      return sw.includes("*") || sw.includes(currentUser?.name);
+    };
+
     const notesChannel = supabase.channel("notes-realtime-v1")
       .on("postgres_changes", { event: "*", schema: "public", table: "notes" }, (payload) => {
         try {
           const newRow = payload.new || {};
           const oldRow = payload.old || {};
-          const isMine = newRow.created_by === currentUser?.name || oldRow.created_by === currentUser?.name;
-          const isShared = newRow.is_shared || oldRow.is_shared;
-          if (!isMine && !isShared) return; // nemohu vidět cizí soukromé poznámky
+          const wasVisible = isVisibleToMe(oldRow);
+          const isVisible = isVisibleToMe(newRow);
 
           if (payload.eventType === "INSERT") {
+            if (!isVisible) return;
             const n = noteFromDb(payload.new);
-            if (n && (n.createdBy === currentUser?.name || n.isShared)) {
-              setNotes(prev => prev.find(x => x.id === n.id) ? prev : [n, ...prev]);
-            }
+            if (n) setNotes(prev => prev.find(x => x.id === n.id) ? prev : [n, ...prev]);
           } else if (payload.eventType === "UPDATE") {
             const n = noteFromDb(payload.new);
             if (!n) return;
-            // Pokud poznámka přestala být sdílená a není moje → odebrat
-            if (n.createdBy !== currentUser?.name && !n.isShared) {
+            // Pokud poznámka přestala být sdílená se mnou → odebrat
+            if (!isVisible) {
               setNotes(prev => prev.filter(x => x.id !== n.id));
             } else {
               setNotes(prev => {
                 if (prev.find(x => x.id === n.id)) {
                   return prev.map(x => x.id === n.id ? n : x);
                 }
-                return [n, ...prev]; // INSERT jako side effect (např. když jiný user nasdílel)
+                return [n, ...prev]; // nasdílena poprvé
               });
             }
           } else if (payload.eventType === "DELETE") {
+            if (!wasVisible && !isVisible) return;
             setNotes(prev => prev.filter(x => x.id !== payload.old.id));
           }
         } catch (e) {
@@ -11512,6 +11722,107 @@ function App() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [loading]);
+
+  // Live sync — VRSTVA 2: polling fallback každých 30 s když je appka otevřená.
+  // Pojistka pro případ, kdy realtime nedoručí event (slabá síť, mobilní suspend).
+  // Žádné loading indikátory — silent refresh na pozadí.
+  useEffect(() => {
+    if (loading || !currentUser) return;
+    let cancelled = false;
+    const POLL_MS = 30000; // 30 s
+
+    const tick = async () => {
+      if (cancelled) return;
+      // Skip pokud appka není visible (visibilitychange už vyřeší re-fetch)
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      try {
+        const [freshTasks, freshComments, freshReminders, freshNotes] = await Promise.all([
+          apiLoadTasks(),
+          apiLoadComments(),
+          apiLoadReminders(currentUser.name),
+          apiLoadNotes(currentUser.name),
+        ]);
+        if (cancelled) return;
+        // Apply updates jen pokud existují rozdíly (porovnání IDs+timestamps)
+        setTasks(prev => {
+          const sameLen = prev.length === freshTasks.length;
+          const sameIds = sameLen && prev.every((t, i) => t.id === freshTasks[i]?.id && t.updatedAt === freshTasks[i]?.updatedAt);
+          return sameIds ? prev : freshTasks;
+        });
+        setComments(prev => {
+          const sameLen = prev.length === freshComments.length;
+          const sameIds = sameLen && prev.every((c, i) => c.id === freshComments[i]?.id);
+          return sameIds ? prev : freshComments;
+        });
+        setReminders(prev => {
+          const sameLen = prev.length === freshReminders.length;
+          const sameIds = sameLen && prev.every((r, i) => r.id === freshReminders[i]?.id && r.remindAt === freshReminders[i]?.remindAt);
+          return sameIds ? prev : freshReminders;
+        });
+        setNotes(prev => {
+          const sameLen = prev.length === freshNotes.length;
+          const sameIds = sameLen && prev.every((n, i) => n.id === freshNotes[i]?.id && n.updatedAt === freshNotes[i]?.updatedAt);
+          return sameIds ? prev : freshNotes;
+        });
+      } catch (e) {
+        console.warn("[live-sync poll] failed:", e?.message);
+      }
+    };
+
+    const interval = setInterval(tick, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [loading, currentUser]);
+
+  // Live sync — VRSTVA 3: agresivní channel reconnect (heartbeat-style).
+  // Každých 10 s zkontroluj stav všech kanálů; pokud kterýkoliv není joined,
+  // pokus se ho znovu připojit. Detekuje silent disconnect na slabé síti.
+  useEffect(() => {
+    if (loading) return;
+    const HEARTBEAT_MS = 10000;
+    const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      const channels = realtimeChannelsRef.current || {};
+      const labels = ["tasks", "users", "comments", "lists", "reminders", "notes"];
+      let needsRefetch = false;
+      labels.forEach(label => {
+        const ch = channels[label];
+        if (!ch) return;
+        const state = ch.state;
+        if (state !== "joined" && state !== "joining") {
+          console.warn(`[heartbeat] channel ${label} in state "${state}" — reconnecting`);
+          needsRefetch = true;
+          try {
+            ch.subscribe((status) => {
+              console.log(`[heartbeat ${label}] reconnect →`, status);
+            });
+          } catch (e) {
+            console.warn(`[heartbeat ${label}] reconnect failed:`, e);
+          }
+        }
+      });
+      // Pokud něco bylo broken, force fetch (chytne missed updates)
+      if (needsRefetch && currentUser) {
+        (async () => {
+          try {
+            const [freshTasks, freshReminders, freshNotes] = await Promise.all([
+              apiLoadTasks(),
+              apiLoadReminders(currentUser.name),
+              apiLoadNotes(currentUser.name),
+            ]);
+            setTasks(freshTasks);
+            setReminders(freshReminders);
+            setNotes(freshNotes);
+          } catch (e) {
+            console.warn("[heartbeat re-fetch] failed:", e?.message);
+          }
+        })();
+      }
+    }, HEARTBEAT_MS);
+    return () => clearInterval(interval);
+  }, [loading, currentUser]);
 
   // Recurring check + keepalive
   useEffect(() => {
@@ -11912,12 +12223,16 @@ function App() {
     if (loading || !currentUser) return;
     const checkReminders = async () => {
       const now = Date.now();
-      const due = reminders.filter(r =>
-        !r.notified &&
-        !r.dismissedAt &&
-        r.createdBy === currentUser.name &&
-        new Date(r.remindAt).getTime() <= now
-      );
+      const due = reminders.filter(r => {
+        if (r.notified || r.dismissedAt) return false;
+        if (new Date(r.remindAt).getTime() > now) return false;
+        // Vlastní + sdílené se mnou
+        if (r.createdBy === currentUser.name) return true;
+        if (Array.isArray(r.sharedWith)) {
+          return r.sharedWith.includes("*") || r.sharedWith.includes(currentUser.name);
+        }
+        return false;
+      });
       for (const r of due) {
         // Mark notified locally (optimistic) — zabrání opakované notifikaci na tomto zařízení
         setReminders(prev => prev.map(x => x.id === r.id ? { ...x, notified: true } : x));
@@ -12113,11 +12428,17 @@ function App() {
     // Admin vidí vše. Ostatní uživatelé vidí pouze:
     //   - úkoly které sami vytvořili
     //   - úkoly kde jsou v assignedTo[]
+    //   - úkoly explicitně sdílené se mnou (shared_with obsahuje moje jméno nebo "*")
     if (!currentUser.admin) {
-      result = result.filter(t =>
-        t.createdBy === currentUser.name ||
-        (t.assignedTo && t.assignedTo.includes(currentUser.name))
-      );
+      result = result.filter(t => {
+        if (t.createdBy === currentUser.name) return true;
+        if (t.assignedTo && t.assignedTo.includes(currentUser.name)) return true;
+        if (Array.isArray(t.sharedWith)) {
+          if (t.sharedWith.includes("*")) return true;
+          if (t.sharedWith.includes(currentUser.name)) return true;
+        }
+        return false;
+      });
     }
 
     // Status filter
@@ -13129,6 +13450,7 @@ function App() {
           <QuickReminderModal
             theme={theme}
             currentUser={currentUser}
+            users={users}
             prefill={reminderPrefill}
             onClose={() => {
               setShowQuickReminder(false);
@@ -13200,6 +13522,7 @@ function App() {
           <NoteEditor
             note={editingNote.id ? editingNote : null}
             currentUser={currentUser}
+            users={users}
             theme={theme}
             onClose={() => setEditingNote(null)}
             onSave={async (data) => {
