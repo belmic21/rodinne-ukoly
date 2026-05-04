@@ -1,5 +1,10 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Component } from "react";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
+import Placeholder from "@tiptap/extension-placeholder";
+import Underline from "@tiptap/extension-underline";
 
 /* ═══════════════════════════════════════════════════════
    CONFIGURATION
@@ -805,6 +810,38 @@ const GLOBAL_CSS = `
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
 body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
+/* TipTap editor styly — placeholder + heading + list */
+.tiptap-editor-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: rgba(127,127,127,0.5);
+  pointer-events: none;
+  height: 0;
+}
+.tiptap-editor-content h1 { font-size: 22px; font-weight: 800; margin: 12px 0 6px; }
+.tiptap-editor-content h2 { font-size: 18px; font-weight: 700; margin: 10px 0 6px; }
+.tiptap-editor-content ul, .tiptap-editor-content ol { margin: 6px 0; padding-left: 22px; }
+.tiptap-editor-content li { margin: 2px 0; }
+.tiptap-editor-content blockquote {
+  border-left: 3px solid currentColor;
+  padding-left: 10px;
+  margin: 6px 0;
+  opacity: 0.85;
+  font-style: italic;
+}
+.tiptap-editor-content a {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+.tiptap-editor-content code {
+  background-color: rgba(127,127,127,0.15);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.92em;
+}
+.tiptap-editor-content p { margin: 4px 0; }
+.tiptap-editor-content:focus { outline: none; }
 `;
 
 /* ═══ Style helpers ═══ */
@@ -1384,6 +1421,112 @@ async function apiDeleteReminder(id) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════
+   NOTES API — strukturované poznámky s markdown formátováním.
+   Vlastní tabulka `notes`. Hybridní viditelnost: vlastní (created_by)
+   nebo sdílené (is_shared = true).
+   Sloupce: id, title, content, created_by, created_at, updated_at,
+   is_shared, pinned
+   ═══════════════════════════════════════════════════════ */
+
+const CACHE_NOTES = "ft_cache_notes";
+
+function noteFromDb(n) {
+  if (!n) return null;
+  return {
+    id: n.id,
+    title: n.title || "",
+    content: n.content || "",
+    createdBy: n.created_by,
+    createdAt: n.created_at,
+    updatedAt: n.updated_at,
+    isShared: !!n.is_shared,
+    pinned: !!n.pinned,
+  };
+}
+function noteToDb(n) {
+  return {
+    title: n.title || "",
+    content: n.content || "",
+    created_by: n.createdBy,
+    is_shared: !!n.isShared,
+    pinned: !!n.pinned,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function apiLoadNotes(userName) {
+  // Načte poznámky: vlastní (created_by = userName) NEBO sdílené (is_shared = true)
+  try {
+    const { data, error } = await supabase
+      .from("notes")
+      .select("*")
+      .or(`created_by.eq.${userName},is_shared.eq.true`)
+      .order("pinned", { ascending: false })
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    const notes = (data || []).map(noteFromDb);
+    cacheSet(CACHE_NOTES, notes);
+    return notes;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      const cached = cacheGet(CACHE_NOTES) || [];
+      return cached.filter(n => n.createdBy === userName || n.isShared);
+    }
+    logServerError("apiLoadNotes", e);
+    return [];
+  }
+}
+
+async function apiCreateNote(note) {
+  try {
+    const { data, error } = await supabase
+      .from("notes")
+      .insert(noteToDb(note))
+      .select()
+      .single();
+    if (error) throw error;
+    return noteFromDb(data);
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "create_note", note });
+      return { ...note, id: `temp-${Date.now()}` };
+    } else {
+      logServerError("apiCreateNote", e, noteToDb(note));
+      return null;
+    }
+  }
+}
+
+async function apiUpdateNote(note) {
+  try {
+    const { error } = await supabase
+      .from("notes")
+      .update(noteToDb(note))
+      .eq("id", note.id);
+    if (error) throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "update_note", note });
+    } else {
+      logServerError("apiUpdateNote", e, noteToDb(note));
+    }
+  }
+}
+
+async function apiDeleteNote(id) {
+  try {
+    const { error } = await supabase.from("notes").delete().eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "delete_note", id });
+    } else {
+      logServerError("apiDeleteNote", e, { id });
+    }
+  }
+}
+
 
 
 /* ═══════════════════════════════════════════════════════
@@ -1683,6 +1826,23 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) 
 
 function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
   if (!reminder) return null;
+  // Spočítat jak dávno měl reminder proběhnout
+  const remindAtDate = new Date(reminder.remindAt);
+  const diffMs = Date.now() - remindAtDate.getTime();
+  const diffMin = Math.round(diffMs / 60000);
+  const relativeLabel = (() => {
+    if (diffMin < 1) return "právě teď";
+    if (diffMin < 60) return `před ${diffMin} min`;
+    const h = Math.round(diffMin / 60);
+    if (h < 24) return `před ${h} h`;
+    const d = Math.round(h / 24);
+    if (d < 7) return `před ${d} ${d === 1 ? "dnem" : (d < 5 ? "dny" : "dny")}`;
+    return `před ${Math.round(d / 7)} týdny`;
+  })();
+  const absoluteLabel = remindAtDate.toLocaleString("cs-CZ", {
+    weekday: "short", day: "numeric", month: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
   return (
     <div style={{
       position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)",
@@ -1701,6 +1861,10 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
             textTransform: "uppercase", letterSpacing: "0.4px" }}>Připomínka</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
             {reminder.text}
+          </div>
+          <div style={{ fontSize: 11, color: theme.textMid, marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            <span>📅 Naplánováno: <strong>{absoluteLabel}</strong></span>
+            <span style={{ color: theme.textSub }}>· {relativeLabel}</span>
           </div>
         </div>
         <button onClick={onDismiss} style={{
@@ -1827,12 +1991,23 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
           }}>
             {r.text}
           </div>
-          <div style={{ fontSize: 11, color: timeColor, marginTop: 3 }}>
-            {variant === "history"
-              ? `✓ vyřízeno ${formatTime(r.dismissedAt)}`
-              : `⏰ ${formatTime(r.remindAt)} · ${formatAbsolute(r.remindAt)}`
-            }
-          </div>
+          {variant === "history" ? (
+            <div style={{ fontSize: 11, color: timeColor, marginTop: 3 }}>
+              ✓ vyřízeno {formatTime(r.dismissedAt)} ·
+              <span style={{ marginLeft: 4, color: theme.textSub }}>
+                naplánováno bylo na {formatAbsolute(r.remindAt)}
+              </span>
+            </div>
+          ) : variant === "expired" ? (
+            <div style={{ fontSize: 11, color: timeColor, marginTop: 3, lineHeight: 1.5 }}>
+              <div>📅 <strong>Naplánováno:</strong> {formatAbsolute(r.remindAt)}</div>
+              <div style={{ color: theme.textSub }}>⏱ {formatTime(r.remindAt)}</div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: timeColor, marginTop: 3 }}>
+              ⏰ {formatTime(r.remindAt)} · {formatAbsolute(r.remindAt)}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
           {actions}
@@ -1962,6 +2137,447 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
               textAlign: "center", padding: "40px 20px",
               color: theme.textSub, fontSize: 13,
             }}>Žádné připomínky. Klikni na <strong>+ Nová připomínka</strong> a začni.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   TIPTAP RICH TEXT EDITOR — WYSIWYG pro poznámky.
+   Toolbar s tlačítky (B/I/U/S/H1/H2/list/link) — uživatel nikdy nevidí markdown,
+   text se rovnou zobrazuje formátovaně. Storage formát: HTML string.
+   ═══════════════════════════════════════════════════════ */
+
+function TipTapToolbar({ editor, theme }) {
+  if (!editor) return null;
+
+  const btn = (active, onClick, title, children, extraStyle = {}) => (
+    <button onClick={onClick} title={title} type="button" style={{
+      padding: "5px 9px", fontSize: 12, fontWeight: 700,
+      background: active ? theme.accent : theme.inputBg,
+      color: active ? "#fff" : theme.text,
+      border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
+      borderRadius: 6, cursor: "pointer", fontFamily: FONT,
+      minWidth: 30,
+      ...extraStyle,
+    }}>{children}</button>
+  );
+
+  const insertLink = () => {
+    const prevUrl = editor.getAttributes("link").href || "";
+    const url = prompt("URL odkazu (prázdné = odstranit):", prevUrl);
+    if (url === null) return;
+    if (url === "") {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+    } else {
+      editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+    }
+  };
+
+  return (
+    <div style={{
+      display: "flex", gap: 4, flexWrap: "wrap",
+      padding: "6px 8px", borderBottom: `1px solid ${theme.cardBorder}`,
+      background: theme.bg,
+    }}>
+      {btn(editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), "Tučně", "B", { fontWeight: 900 })}
+      {btn(editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), "Kurzíva", "I", { fontStyle: "italic" })}
+      {btn(editor.isActive("underline"), () => editor.chain().focus().toggleUnderline().run(), "Podtrženo", "U", { textDecoration: "underline" })}
+      {btn(editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run(), "Přeškrtnuto", "S", { textDecoration: "line-through" })}
+      <span style={{ width: 1, background: theme.cardBorder, margin: "0 2px" }} />
+      {btn(editor.isActive("heading", { level: 1 }), () => editor.chain().focus().toggleHeading({ level: 1 }).run(), "Nadpis 1", "H1")}
+      {btn(editor.isActive("heading", { level: 2 }), () => editor.chain().focus().toggleHeading({ level: 2 }).run(), "Nadpis 2", "H2")}
+      <span style={{ width: 1, background: theme.cardBorder, margin: "0 2px" }} />
+      {btn(editor.isActive("bulletList"), () => editor.chain().focus().toggleBulletList().run(), "Seznam", "•")}
+      {btn(editor.isActive("orderedList"), () => editor.chain().focus().toggleOrderedList().run(), "Číslovaný seznam", "1.")}
+      {btn(editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), "Citace", "❝")}
+      <span style={{ width: 1, background: theme.cardBorder, margin: "0 2px" }} />
+      {btn(editor.isActive("link"), insertLink, "Odkaz", "🔗")}
+      {btn(false, () => editor.chain().focus().undo().run(), "Zpět (Ctrl+Z)", "↶")}
+      {btn(false, () => editor.chain().focus().redo().run(), "Vpřed (Ctrl+Y)", "↷")}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   NOTE EDITOR — modální editor jedné poznámky.
+   Title + TipTap editor + sdílení/pin + akce (smazat / vytvořit úkol).
+   ═══════════════════════════════════════════════════════ */
+
+function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onConvertToTask }) {
+  const isNew = !note?.id;
+  const [title, setTitle] = useState(note?.title || "");
+  const [isShared, setIsShared] = useState(note?.isShared || false);
+  const [pinned, setPinned] = useState(note?.pinned || false);
+  const [saving, setSaving] = useState(false);
+  const titleRef = useRef(null);
+
+  // Permission: jen autor (nebo nová) může editovat
+  const canEdit = isNew || note?.createdBy === currentUser.name;
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [1, 2] },
+      }),
+      Underline,
+      Link.configure({
+        openOnClick: true,
+        HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+      }),
+      Placeholder.configure({
+        placeholder: "Začni psát...",
+      }),
+    ],
+    content: note?.content || "",
+    editable: canEdit,
+    editorProps: {
+      attributes: {
+        class: "tiptap-editor-content",
+        style: `padding:14px;font-size:14px;line-height:1.6;color:${theme.text};font-family:${FONT};min-height:240px;outline:none;word-break:break-word;`,
+      },
+    },
+  });
+
+  useEscapeKey(onClose);
+
+  useEffect(() => {
+    if (isNew) titleRef.current?.focus();
+  }, [isNew]);
+
+  const handleSave = async () => {
+    if (!editor) return;
+    const content = editor.getHTML();
+    const isEmptyContent = content === "<p></p>" || content.trim() === "";
+    if (!title.trim() && isEmptyContent) {
+      onClose();
+      return;
+    }
+    setSaving(true);
+    const data = {
+      ...(note || {}),
+      title: title.trim(),
+      content: isEmptyContent ? "" : content,
+      isShared,
+      pinned,
+      createdBy: note?.createdBy || currentUser.name,
+    };
+    await onSave(data);
+    setSaving(false);
+    onClose();
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("Opravdu smazat tuto poznámku?")) return;
+    if (note?.id) await onDelete(note.id);
+    onClose();
+  };
+
+  const handleConvert = () => {
+    if (!editor) return;
+    if (!confirm("Vytvořit úkol z této poznámky?")) return;
+    const plainText = editor.getText();
+    onConvertToTask({
+      title: title.trim() || "Úkol z poznámky",
+      note: plainText,
+    });
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 200, padding: 12,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.card, borderRadius: 12,
+        border: `1px solid ${theme.cardBorder}`,
+        maxWidth: 720, width: "100%", maxHeight: "92vh",
+        display: "flex", flexDirection: "column",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+      }}>
+        {/* Header — title input + close */}
+        <div style={{
+          padding: "10px 14px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, flexShrink: 0,
+        }}>
+          <input
+            ref={titleRef}
+            type="text"
+            placeholder="Název poznámky..."
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            disabled={!canEdit}
+            style={{
+              flex: 1, padding: "6px 8px", fontSize: 15, fontWeight: 700,
+              background: "transparent", border: "none",
+              color: theme.text, fontFamily: FONT, outline: "none",
+              minWidth: 0,
+            }}
+          />
+          <button onClick={onClose} title="Zavřít" style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1, flexShrink: 0,
+          }}>×</button>
+        </div>
+
+        {canEdit && <TipTapToolbar editor={editor} theme={theme} />}
+
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 240 }}>
+          <EditorContent editor={editor} />
+        </div>
+
+        <div style={{
+          padding: "10px 14px", borderTop: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8,
+          flexShrink: 0,
+        }}>
+          {canEdit ? (
+            <>
+              <label style={{
+                display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+                color: theme.textMid, cursor: "pointer", userSelect: "none",
+              }}>
+                <input type="checkbox" checked={isShared} onChange={e => setIsShared(e.target.checked)}
+                  style={{ cursor: "pointer" }} />
+                <span>👥 Sdílet s rodinou</span>
+              </label>
+              <label style={{
+                display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+                color: theme.textMid, cursor: "pointer", userSelect: "none",
+              }}>
+                <input type="checkbox" checked={pinned} onChange={e => setPinned(e.target.checked)}
+                  style={{ cursor: "pointer" }} />
+                <span>📌 Připnout</span>
+              </label>
+            </>
+          ) : (
+            <div style={{ fontSize: 11, color: theme.textSub }}>
+              Poznámka od <strong>{note.createdBy}</strong> · jen ke čtení
+            </div>
+          )}
+
+          <span style={{ flex: 1 }} />
+
+          {canEdit && !isNew && (
+            <button onClick={handleConvert} title="Vytvořit úkol z této poznámky" style={{
+              ...buttonStyle(), padding: "6px 10px", fontSize: 12,
+              background: theme.inputBg, color: theme.text,
+              border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+            }}>📋 Vytvořit úkol</button>
+          )}
+
+          {canEdit && !isNew && (
+            <button onClick={handleDelete} title="Smazat poznámku" style={{
+              ...buttonStyle(), padding: "6px 10px", fontSize: 12,
+              background: "transparent", color: theme.red,
+              border: `1px solid ${theme.red}40`, fontWeight: 600,
+            }}>🗑 Smazat</button>
+          )}
+
+          <button onClick={canEdit ? handleSave : onClose} disabled={saving} style={{
+            ...buttonStyle(), padding: "6px 14px", fontSize: 12, fontWeight: 700,
+            background: theme.accent, color: "#fff",
+            opacity: saving ? 0.6 : 1,
+          }}>{canEdit ? (saving ? "Ukládám..." : "✓ Uložit") : "Zavřít"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   NOTES SHEET — list všech poznámek (vlastní + sdílené).
+   Sekce: 📌 Připnuté / 👥 Sdílené / 🔒 Moje soukromé.
+   Kliknutí otevře NoteEditor.
+   ═══════════════════════════════════════════════════════ */
+
+function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
+  useEscapeKey(onClose);
+  const [search, setSearch] = useState("");
+
+  // Strip HTML tags pro preview
+  const stripHtml = (html) => {
+    if (!html) return "";
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    return (div.textContent || div.innerText || "").trim();
+  };
+
+  // Filter podle search
+  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const q = norm(search.trim());
+  const filtered = q
+    ? notes.filter(n => norm(n.title).includes(q) || norm(stripHtml(n.content)).includes(q))
+    : notes;
+
+  // Rozdělit do sekcí
+  const pinned = filtered.filter(n => n.pinned);
+  const shared = filtered.filter(n => !n.pinned && n.isShared && n.createdBy !== currentUser?.name);
+  const mySharedOrPrivate = filtered.filter(n => !n.pinned && (n.createdBy === currentUser?.name));
+
+  const formatDate = (iso) => {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffH = (now - d) / (1000 * 60 * 60);
+    if (diffH < 1) return "před chvílí";
+    if (diffH < 24) return `před ${Math.round(diffH)} h`;
+    if (diffH < 24 * 7) return `před ${Math.round(diffH / 24)} d`;
+    return d.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" });
+  };
+
+  const NoteCard = ({ note }) => {
+    const isMine = note.createdBy === currentUser?.name;
+    const preview = stripHtml(note.content);
+    return (
+      <div onClick={() => onEdit(note)} style={{
+        background: theme.inputBg,
+        border: `1px solid ${theme.inputBorder}`,
+        borderRadius: 10,
+        padding: "10px 12px",
+        cursor: "pointer",
+        transition: "border-color 0.15s, transform 0.05s",
+      }}
+        onMouseEnter={e => e.currentTarget.style.borderColor = theme.accent}
+        onMouseLeave={e => e.currentTarget.style.borderColor = theme.inputBorder}
+      >
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, marginBottom: 4,
+        }}>
+          <div style={{
+            fontSize: 14, fontWeight: 700, color: theme.text,
+            wordBreak: "break-word", flex: 1, minWidth: 0,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {note.pinned && <span style={{ marginRight: 4 }}>📌</span>}
+            {note.isShared && <span style={{ marginRight: 4 }}>👥</span>}
+            {note.title || <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
+          </div>
+          <div style={{
+            fontSize: 10, color: theme.textSub, whiteSpace: "nowrap", flexShrink: 0,
+          }}>{formatDate(note.updatedAt)}</div>
+        </div>
+        {preview && (
+          <div style={{
+            fontSize: 12, color: theme.textMid, lineHeight: 1.4,
+            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+            overflow: "hidden", wordBreak: "break-word",
+          }}>
+            {preview}
+          </div>
+        )}
+        {!isMine && note.isShared && (
+          <div style={{ fontSize: 10, color: theme.textSub, marginTop: 4 }}>
+            od <strong>{note.createdBy}</strong>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const sectionLabel = (icon, text, count) => (
+    <div style={{
+      fontSize: 10, fontWeight: 800, color: theme.textMid,
+      textTransform: "uppercase", letterSpacing: "0.4px",
+      marginTop: 12, marginBottom: 6, padding: "0 2px",
+      display: "flex", alignItems: "center", gap: 6,
+    }}>
+      <span>{icon}</span>
+      <span>{text} ({count})</span>
+    </div>
+  );
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+      zIndex: 150,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.card,
+        width: "100%", maxWidth: 600, maxHeight: "85vh",
+        borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        display: "flex", flexDirection: "column",
+        boxShadow: "0 -8px 24px rgba(0,0,0,0.3)",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "12px 14px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, flexShrink: 0,
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
+            📝 Poznámky
+          </div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        {/* Search input + create button */}
+        <div style={{
+          padding: 10, borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", gap: 6, flexShrink: 0,
+        }}>
+          <input
+            type="text"
+            placeholder="Hledat v poznámkách..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{
+              ...inputStyle(theme), flex: 1, padding: "8px 10px", fontSize: 13,
+            }}
+          />
+          <button onClick={onCreate} style={{
+            ...buttonStyle(), padding: "8px 14px", fontSize: 13, fontWeight: 700,
+            background: theme.accent, color: "#fff", flexShrink: 0,
+          }}>+ Nová</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+          {filtered.length === 0 ? (
+            <div style={{
+              textAlign: "center", padding: "40px 20px",
+              color: theme.textSub, fontSize: 13,
+            }}>
+              {search
+                ? "Žádné poznámky neodpovídají hledání."
+                : <>Žádné poznámky. Klikni na <strong>+ Nová</strong> a začni.</>
+              }
+            </div>
+          ) : (
+            <>
+              {pinned.length > 0 && (
+                <>
+                  {sectionLabel("📌", "Připnuté", pinned.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {pinned.map(n => <NoteCard key={n.id} note={n} />)}
+                  </div>
+                </>
+              )}
+              {shared.length > 0 && (
+                <>
+                  {sectionLabel("👥", "Sdílené od ostatních", shared.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {shared.map(n => <NoteCard key={n.id} note={n} />)}
+                  </div>
+                </>
+              )}
+              {mySharedOrPrivate.length > 0 && (
+                <>
+                  {sectionLabel("🗒", "Moje", mySharedOrPrivate.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {mySharedOrPrivate.map(n => <NoteCard key={n.id} note={n} />)}
+                  </div>
+                </>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -9931,6 +10547,10 @@ function App() {
   const [showReminderSheet, setShowReminderSheet] = useState(false); // dropdown / sheet s přehledem
   const [showQuickReminder, setShowQuickReminder] = useState(false); // quick add modal
   const [reminderPrefill, setReminderPrefill] = useState(null); // pre-fill pro reaktivaci: { text, originalId, wasDismissed }
+  // Notes — strukturované poznámky s rich text editorem
+  const [notes, setNotes] = useState([]);
+  const [showNotesSheet, setShowNotesSheet] = useState(false);
+  const [editingNote, setEditingNote] = useState(null); // null = closed, {} = new, {...} = editing existing
   // Echo prevention — sleduje časy posledních lokálních editů taskID
   // Realtime UPDATE events do 1.5s od vlastní editace ignorujeme,
   // aby nepřepisovaly náš čerstvý lokální stav.
@@ -10202,6 +10822,15 @@ function App() {
         console.warn("Reminders tabulka možná neexistuje, spusť SQL migrace:", e);
       }
 
+      // Notes — vlastní + sdílené (filter v DB query)
+      try {
+        const myNotes = await apiLoadNotes(currentUser?.name);
+        console.log("[notes] Loaded", myNotes.length, "notes");
+        setNotes(myNotes);
+      } catch (e) {
+        console.warn("Notes tabulka možná neexistuje, spusť SQL migrace:", e);
+      }
+
       setLoading(false);
     })();
 
@@ -10292,7 +10921,7 @@ function App() {
   }, [tasks, currentUser]);
 
   // Realtime subscriptions
-  const realtimeChannelsRef = useRef({ tasks: null, users: null, comments: null, lists: null, reminders: null });
+  const realtimeChannelsRef = useRef({ tasks: null, users: null, comments: null, lists: null, reminders: null, notes: null });
 
   useEffect(() => {
     if (loading) return;
@@ -10410,13 +11039,55 @@ function App() {
       });
     realtimeChannelsRef.current.reminders = remindersChannel;
 
+    // Notes realtime — synchronizace mezi zařízeními
+    // Filter na klientu: vlastní (created_by = currentUser) NEBO sdílené (is_shared = true)
+    const notesChannel = supabase.channel("notes-realtime-v1")
+      .on("postgres_changes", { event: "*", schema: "public", table: "notes" }, (payload) => {
+        try {
+          const newRow = payload.new || {};
+          const oldRow = payload.old || {};
+          const isMine = newRow.created_by === currentUser?.name || oldRow.created_by === currentUser?.name;
+          const isShared = newRow.is_shared || oldRow.is_shared;
+          if (!isMine && !isShared) return; // nemohu vidět cizí soukromé poznámky
+
+          if (payload.eventType === "INSERT") {
+            const n = noteFromDb(payload.new);
+            if (n && (n.createdBy === currentUser?.name || n.isShared)) {
+              setNotes(prev => prev.find(x => x.id === n.id) ? prev : [n, ...prev]);
+            }
+          } else if (payload.eventType === "UPDATE") {
+            const n = noteFromDb(payload.new);
+            if (!n) return;
+            // Pokud poznámka přestala být sdílená a není moje → odebrat
+            if (n.createdBy !== currentUser?.name && !n.isShared) {
+              setNotes(prev => prev.filter(x => x.id !== n.id));
+            } else {
+              setNotes(prev => {
+                if (prev.find(x => x.id === n.id)) {
+                  return prev.map(x => x.id === n.id ? n : x);
+                }
+                return [n, ...prev]; // INSERT jako side effect (např. když jiný user nasdílel)
+              });
+            }
+          } else if (payload.eventType === "DELETE") {
+            setNotes(prev => prev.filter(x => x.id !== payload.old.id));
+          }
+        } catch (e) {
+          console.error("[realtime notes] handler error:", e, payload);
+        }
+      }).subscribe((status) => {
+        console.log("[realtime notes]", status);
+      });
+    realtimeChannelsRef.current.notes = notesChannel;
+
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(commentsChannel);
       supabase.removeChannel(listsChannel);
       supabase.removeChannel(remindersChannel);
-      realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null, reminders: null };
+      supabase.removeChannel(notesChannel);
+      realtimeChannelsRef.current = { tasks: null, users: null, comments: null, lists: null, reminders: null, notes: null };
     };
   }, [loading]);
 
@@ -10433,6 +11104,7 @@ function App() {
         comments: channels.comments?.state || "n/a",
         lists: channels.lists?.state || "n/a",
         reminders: channels.reminders?.state || "n/a",
+        notes: channels.notes?.state || "n/a",
       };
       let serverErrors = [];
       let renderErrors = [];
@@ -10456,6 +11128,7 @@ function App() {
           comments: comments.length,
           customLists: customLists.length,
           reminders: reminders.length,
+          notes: notes.length,
         },
         realtime: channelStates,
         offlineQueueSize: offlineQueue.length,
@@ -10525,17 +11198,20 @@ function App() {
       ensureChannelHealthy(channels.comments, "comments");
       ensureChannelHealthy(channels.lists, "lists");
       ensureChannelHealthy(channels.reminders, "reminders");
+      ensureChannelHealthy(channels.notes, "notes");
 
       // 2) Force refresh ze serveru — chytne změny zmeškané během odpojení
       try {
-        const [freshTasks, freshComments, freshReminders] = await Promise.all([
+        const [freshTasks, freshComments, freshReminders, freshNotes] = await Promise.all([
           apiLoadTasks(),
           apiLoadComments(),
           apiLoadReminders(currentUser?.name),
+          apiLoadNotes(currentUser?.name),
         ]);
         setTasks(freshTasks);
         setComments(freshComments);
         setReminders(freshReminders);
+        setNotes(freshNotes);
         // custom_lists raw fetch
         const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
         if (data) setCustomLists(data);
@@ -11845,6 +12521,37 @@ function App() {
               );
             })()}
           </button>
+          {/* Notes ikona — strukturované poznámky */}
+          <button onClick={async () => {
+            setShowNotesSheet(true);
+            // Force refresh — pokud realtime něco zmeškal
+            try {
+              const fresh = await apiLoadNotes(currentUser?.name);
+              setNotes(fresh);
+            } catch (e) {
+              console.warn("Notes refresh failed:", e);
+            }
+          }}
+            title="Poznámky"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px", position: "relative",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            📝
+            {notes.length > 0 && (
+              <span style={{
+                position: "absolute", top: 2, right: 2,
+                background: theme.textSub, color: "#fff",
+                borderRadius: "50%", minWidth: 14, height: 14,
+                fontSize: 9, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px",
+              }}>{notes.length}</span>
+            )}
+          </button>
           {/* Notifications - jen badge když existují */}
           <button onClick={() => setUpdatesPanelOpen(true)}
             title="Zprávy"
@@ -12185,6 +12892,61 @@ function App() {
                 const created = await apiCreateReminder(newData);
                 if (created) setReminders(prev => [...prev, created]);
               }
+            }}
+          />
+        )}
+
+        {/* Notes sheet — list všech poznámek */}
+        {showNotesSheet && (
+          <NotesSheet
+            notes={notes}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowNotesSheet(false)}
+            onCreate={() => {
+              setShowNotesSheet(false);
+              setEditingNote({}); // {} = nová prázdná poznámka
+            }}
+            onEdit={(note) => {
+              setShowNotesSheet(false);
+              setEditingNote(note);
+            }}
+          />
+        )}
+
+        {/* Note editor — modal pro tvorbu/editaci poznámky */}
+        {editingNote !== null && (
+          <NoteEditor
+            note={editingNote.id ? editingNote : null}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setEditingNote(null)}
+            onSave={async (data) => {
+              if (data.id) {
+                // Update existující
+                await apiUpdateNote(data);
+                setNotes(prev => prev.map(n => n.id === data.id ? { ...n, ...data, updatedAt: new Date().toISOString() } : n));
+              } else {
+                // Vytvořit novou
+                const created = await apiCreateNote(data);
+                if (created) setNotes(prev => [created, ...prev]);
+              }
+            }}
+            onDelete={async (id) => {
+              setNotes(prev => prev.filter(n => n.id !== id));
+              await apiDeleteNote(id);
+            }}
+            onConvertToTask={(taskData) => {
+              // taskData: { title, note }
+              addTask({
+                title: taskData.title,
+                note: taskData.note,
+                createdBy: currentUser.name,
+                assignedTo: [currentUser.name],
+                category: "other",
+                priority: "normal",
+                status: "active",
+              });
             }}
           />
         )}
