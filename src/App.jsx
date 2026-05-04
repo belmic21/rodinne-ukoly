@@ -2624,7 +2624,13 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
 
   const handleDelete = async () => {
     if (!confirm("Opravdu smazat tuto poznámku?")) return;
-    const id = savedNoteRef.current?.id || note?.id;
+    let id = savedNoteRef.current?.id || note?.id;
+    // Pokud poznámka ještě nemá ID (auto-save neproběhl), nejdřív ji ulož,
+    // získej ID, a pak smaž — abychom ji našli v koši.
+    if (!id && silentSaveRef.current) {
+      await silentSaveRef.current();
+      id = savedNoteRef.current?.id;
+    }
     if (id) await onDelete(id);
     onClose();
   };
@@ -6465,9 +6471,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       if (containerRef.current.contains(e.target)) return;
       // Klik na popover (mimo container, ale uvnitř popoveru)
       if (e.target.closest("[data-typing-popover]")) return;
+      // Klik na TypingFilterRow (parametry úkolu) — neukončit
+      if (e.target.closest("[data-typing-row]")) return;
       // Pokud má text, neukončit (uživatel zatím není hotov)
       if (text.trim().length > 0) return;
-      // Klik mimo + prázdný input → ukončit typing mode
+      // Pokud má vybrané parametry úkolu (priorita, kategorie, jiní uživatelé), neukončit
+      if (quickPriority || quickCategory || (quickAssignees && quickAssignees.length > 0)) return;
+      // Klik mimo + prázdný input + žádné parametry → ukončit typing mode
       setIsTypingPersist(false);
       setOpenSegment(null);
       if (onTypingChange) onTypingChange(false);
@@ -6480,7 +6490,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       clearTimeout(t);
       document.removeEventListener("click", onDocClick);
     };
-  }, [isTypingPersist, text, onTypingChange]);
+  }, [isTypingPersist, text, onTypingChange, quickPriority, quickCategory, quickAssignees]);
 
   // Auto-update default termín při změně filtru — jen když není text/uživatel nepíše a není showFull
   useEffect(() => {
@@ -6926,7 +6936,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         );
 
         return (
-          <div style={{
+          <div data-typing-row style={{
             marginTop: "4px",
             position: "relative",
           }}>
@@ -6969,7 +6979,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               <IconButton active={!!quickPriority && quickPriority !== "low"}
                 color={priColor}
                 title={`Priorita: ${quickPriority === "urgent" ? "Urgent" : quickPriority === "important" ? "Důležité" : "žádná"}`}
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (!quickPriority || quickPriority === "low") setQuickPriority("important");
                   else if (quickPriority === "important") setQuickPriority("urgent");
                   else setQuickPriority(null);
@@ -14412,22 +14423,27 @@ function App() {
             }}>
               {(() => {
                 // Helper IconBtn s aktivním stavem a klikem
-                const IconBtn = ({ icon, color, isActive, onClick, title, popoverKey }) => (
-                  <button type="button" onClick={onClick} title={title}
-                    style={{
-                      flex: 1, height: "35px",
-                      background: isActive ? `${color}15` : theme.inputBg,
-                      color: isActive ? color : theme.textMid,
-                      border: `1.5px solid ${isActive ? color : theme.inputBorder}`,
-                      borderRadius: "10px",
-                      fontSize: "16px", fontWeight: 700,
-                      cursor: "pointer", fontFamily: FONT,
-                      boxShadow: isActive ? `0 1px 4px ${color}25` : "none",
-                      transition: "all 0.15s",
-                    }}>
-                    {icon}
-                  </button>
-                );
+                const IconBtn = ({ icon, color, isActive, isOpen, onClick, title, popoverKey }) => {
+                  // Otevřený popover = výrazný outline (silnější než isActive)
+                  // isActive = filtr má aktivní hodnotu (filtruje něco)
+                  const showOpen = isOpen && !isActive;
+                  return (
+                    <button type="button" onClick={onClick} title={title}
+                      style={{
+                        flex: 1, height: "35px",
+                        background: isActive ? `${color}15` : showOpen ? `${color}08` : theme.inputBg,
+                        color: isActive ? color : showOpen ? color : theme.textMid,
+                        border: `1.5px solid ${isActive ? color : showOpen ? color : theme.inputBorder}`,
+                        borderRadius: "10px",
+                        fontSize: "16px", fontWeight: 700,
+                        cursor: "pointer", fontFamily: FONT,
+                        boxShadow: isActive ? `0 1px 4px ${color}25` : showOpen ? `0 0 0 2px ${color}30` : "none",
+                        transition: "all 0.15s",
+                      }}>
+                      {icon}
+                    </button>
+                  );
+                };
 
                 // Status icon výběr
                 const statusIcons = {
@@ -14435,7 +14451,10 @@ function App() {
                   planned: "⏰", done: "✓", trash: "🗑", all: "🌐",
                 };
                 const statusIcon = statusIcons[viewStatus] || "📋";
-                const statusActive = viewStatus !== "active";
+                // statusActive = svítí pokud user změnil status z výchozího defaultView.
+                // Pokud user má homepage = "today" a vidí "today" → není aktivní filtr.
+                // Pokud klikne na filter a vybere "all" → aktivní (jiný stav než default).
+                const statusActive = viewStatus !== defaultView;
 
                 // Scope icon
                 const scopeIcons = { my: "👤", for_me: "📥", assigned: "📤",
@@ -14476,10 +14495,12 @@ function App() {
                   <>
                     <IconBtn icon={statusIcon} color={theme.accent}
                       isActive={statusActive}
+                      isOpen={filterPopover === "status"}
                       title="Status úkolu"
                       onClick={() => setFilterPopover(filterPopover === "status" ? null : "status")} />
                     <IconBtn icon={scopeIcon} color={theme.accent}
                       isActive={scopeActive}
+                      isOpen={filterPopover === "scope"}
                       title="Pro koho je úkol"
                       onClick={() => setFilterPopover(filterPopover === "scope" ? null : "scope")} />
                     <IconBtn
@@ -14496,14 +14517,17 @@ function App() {
                       })()}
                       color={theme.accent}
                       isActive={sortMode !== "created"}
+                      isOpen={filterPopover === "sort"}
                       title={`Řazení (aktuálně: ${sortMode})`}
                       onClick={() => setFilterPopover(filterPopover === "sort" ? null : "sort")} />
                     <IconBtn icon={dateIcon} color={theme.accent}
                       isActive={dateActive}
+                      isOpen={filterPopover === "date"}
                       title="Termín splnění"
                       onClick={() => setFilterPopover(filterPopover === "date" ? null : "date")} />
                     <IconBtn icon={listIcon} color={theme.accent}
                       isActive={listActive}
+                      isOpen={filterPopover === "list"}
                       title="Seznam"
                       onClick={() => setFilterPopover(filterPopover === "list" ? null : "list")} />
                     <button type="button" onClick={() => {
