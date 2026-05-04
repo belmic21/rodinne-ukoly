@@ -479,8 +479,13 @@ function searchMatch(task, query, customLists = []) {
 }
 
 function smartSort(a, b) {
-  const aOverdue = daysDiff(a.dueDate) < 0 && !isDone(a);
-  const bOverdue = daysDiff(b.dueDate) < 0 && !isDone(b);
+  // Done úkoly vždy na konec, nedokončené první
+  const aDone = isDone(a);
+  const bDone = isDone(b);
+  if (aDone !== bDone) return aDone ? 1 : -1;
+
+  const aOverdue = daysDiff(a.dueDate) < 0 && !aDone;
+  const bOverdue = daysDiff(b.dueDate) < 0 && !bDone;
   if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
 
   const aForgot = isForgotten(a);
@@ -2523,29 +2528,46 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
   }, [isNew]);
 
   // Build data object pro save — sdílí logiku mezi handleSave (s close) a auto-save
+  // savedNoteRef sleduje aktuální note po prvním save (ID + ostatní atributy)
+  // — bez tohoto by každý auto-save tick vytvořil duplicitní INSERT.
+  const savedNoteRef = useRef(note);
+  useEffect(() => {
+    savedNoteRef.current = note;
+  }, [note]);
+
   const buildData = () => {
     if (!editor) return null;
     const content = editor.getHTML();
     const isEmptyContent = content === "<p></p>" || content.trim() === "";
     if (!title.trim() && isEmptyContent) return null; // prázdná poznámka — neukládat
+    // Vždy použij savedNoteRef (= aktuální note po prvním uložení) jako bázi
+    const base = savedNoteRef.current || note || {};
     return {
-      ...(note || {}),
+      ...base,
       title: title.trim(),
       content: isEmptyContent ? "" : content,
       sharedWith, // granulární sdílení
       isShared: sharedWith.length > 0, // legacy back-compat
       pinned,
-      createdBy: note?.createdBy || currentUser.name,
+      createdBy: base.createdBy || currentUser.name,
     };
   };
 
   // Silent save — neuvolňuje modal, jen pošle data na server
+  // KRITICKÉ: po prvním save aktualizuj savedNoteRef tak, aby další save byl UPDATE, ne další INSERT.
   const silentSaveRef = useRef(null);
   silentSaveRef.current = async () => {
     if (!canEdit) return;
     const data = buildData();
     if (!data) return;
-    await onSave(data);
+    const result = await onSave(data);
+    // Pokud onSave vrací nově vytvořený note (s id), uložme si ID pro další save
+    if (result && result.id && !savedNoteRef.current?.id) {
+      savedNoteRef.current = result;
+    } else if (data.id) {
+      // Update — savedNoteRef je už aktuální
+      savedNoteRef.current = data;
+    }
   };
 
   // Auto-save při periodicky každých 8s pokud něco změněno (background save)
@@ -2586,14 +2608,16 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
       return;
     }
     setSaving(true);
-    await onSave(data);
+    const result = await onSave(data);
+    if (result && result.id) savedNoteRef.current = result;
     setSaving(false);
     onClose();
   };
 
   const handleDelete = async () => {
     if (!confirm("Opravdu smazat tuto poznámku?")) return;
-    if (note?.id) await onDelete(note.id);
+    const id = savedNoteRef.current?.id || note?.id;
+    if (id) await onDelete(id);
     onClose();
   };
 
@@ -14050,13 +14074,12 @@ function App() {
               const wasShared = Array.isArray(data.sharedWith) && data.sharedWith.length > 0;
               if (data.id) {
                 // Update existující
-                // Detekce: pokud poznámka **nově** získala sharedWith (přidán nový recipient), pošli push
                 const previousNote = notes.find(n => n.id === data.id);
                 const previousShared = Array.isArray(previousNote?.sharedWith) ? previousNote.sharedWith : [];
                 const newRecipients = (data.sharedWith || []).filter(name => !previousShared.includes(name));
                 await apiUpdateNote(data);
-                setNotes(prev => prev.map(n => n.id === data.id ? { ...n, ...data, updatedAt: new Date().toISOString() } : n));
-                // Push pro nové recipients (kteří nebyli předtím)
+                const updatedNote = { ...data, updatedAt: new Date().toISOString() };
+                setNotes(prev => prev.map(n => n.id === data.id ? { ...n, ...updatedNote } : n));
                 if (newRecipients.length > 0) {
                   const expandedRecipients = newRecipients.includes("*")
                     ? users.filter(u => u && u.name && u.name !== currentUser.name).map(u => u.name)
@@ -14069,12 +14092,12 @@ function App() {
                     });
                   }
                 }
+                return updatedNote; // vrať pro auto-save tracking
               } else {
                 // Vytvořit novou
                 const created = await apiCreateNote(data);
                 if (created) {
                   setNotes(prev => [created, ...prev]);
-                  // Push pro sdílené příjemce
                   if (wasShared) {
                     const expandedRecipients = data.sharedWith.includes("*")
                       ? users.filter(u => u && u.name && u.name !== currentUser.name).map(u => u.name)
@@ -14086,7 +14109,9 @@ function App() {
                       });
                     }
                   }
+                  return created; // vrať pro auto-save tracking
                 }
+                return null;
               }
             }}
             onDelete={async (id) => {
