@@ -557,49 +557,120 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 // Trigger push notification via Supabase Edge Function
-async function triggerPushNotification(task) {
+// Generic push trigger — pošle notifikaci přes Edge Function super-api.
+// Backward compat: pokud je předán "task" objekt, funguje stará struktura.
+// Nový styl: { recipients, title, message, type, payload }
+async function sendPushNotification({ recipients, title, message, type = "task", payload = null, task = null, createdBy = null, assignedTo = null }) {
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (!supabaseUrl) return;
+
+    // Backward compat — pokud volající poslal starou strukturu (task + assignedTo + createdBy)
+    let body;
+    if (task && assignedTo) {
+      body = { task: { id: task.id, title: task.title }, assignedTo, createdBy };
+    } else {
+      body = {
+        // Edge Function vyžaduje task + assignedTo + createdBy podle aktuální logiky.
+        // Pošleme tam stejnou strukturu, ale title/message přizpůsobíme typu.
+        task: { id: payload?.id || `${type}-${Date.now()}`, title: title },
+        assignedTo: recipients || [],
+        createdBy: createdBy || "system", // "system" = Edge Function pošle všem v assignedTo (nevynechá tvůrce)
+      };
+    }
+
     await fetch(`${supabaseUrl}/functions/v1/super-api`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${supabaseKey}`,
       },
-      body: JSON.stringify({
-        task: { id: task.id, title: task.title },
-        assignedTo: task.assignedTo,
-        createdBy: task.createdBy,
-      }),
+      body: JSON.stringify(body),
     });
   } catch (e) {
     console.warn("Push trigger failed:", e);
   }
 }
 
+async function triggerPushNotification(task) {
+  // Volá se při vytvoření nového úkolu — notifikuje assignedTo (kromě tvůrce)
+  return sendPushNotification({ task, assignedTo: task.assignedTo, createdBy: task.createdBy });
+}
+
 // Trigger push notification when a task is completed (notify the creator)
 async function triggerCompletionNotification(task, completedByUser) {
-  // Only notify if task was assigned by someone ELSE to the completer
   if (!task.createdBy || task.createdBy === completedByUser) return;
-  try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/super-api`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${supabaseKey}`,
-      },
-      body: JSON.stringify({
-        task: { id: task.id, title: `✓ ${completedByUser} splnil: ${task.title}` },
-        assignedTo: [task.createdBy],
-        createdBy: completedByUser,
-      }),
-    });
-  } catch (e) {
-    console.warn("Completion push trigger failed:", e);
+  return sendPushNotification({
+    task: { id: task.id, title: `✓ ${completedByUser} splnil: ${task.title}` },
+    assignedTo: [task.createdBy],
+    createdBy: completedByUser,
+  });
+}
+
+// Trigger push při novém komentáři u úkolu
+async function triggerCommentNotification(task, comment, commentAuthor) {
+  // Recipients: autor úkolu + všichni assigned, kromě toho kdo komentoval
+  const recipients = new Set();
+  if (task.createdBy && task.createdBy !== commentAuthor) recipients.add(task.createdBy);
+  (task.assignedTo || []).forEach(name => {
+    if (name && name !== commentAuthor) recipients.add(name);
+  });
+  if (recipients.size === 0) return;
+
+  // Krátký výtah komentáře (max 100 znaků)
+  const excerpt = (comment.content || "").substring(0, 100);
+  return sendPushNotification({
+    task: { id: task.id, title: `💬 ${commentAuthor} komentoval: ${task.title}` },
+    assignedTo: Array.from(recipients),
+    createdBy: commentAuthor,
+  });
+}
+
+// Trigger push při nové sdílené poznámce
+async function triggerNoteNotification(note) {
+  // Recipients: kdo má v sharedWith (nebo "*" = všichni mimo tvůrce)
+  if (!Array.isArray(note.sharedWith) || note.sharedWith.length === 0) return;
+  // sharedWith = ["*"] znamená všechny — Edge Function má usersList? Ne. Klient ví kdo je v rodině.
+  // Edge Function vynechá tvůrce, ale potřebujeme jí předat seznam jmen.
+  // Pokud je "*", musíme předat všechny ostatní uživatele.
+  let recipients = note.sharedWith.filter(n => n !== "*");
+  if (note.sharedWith.includes("*")) {
+    // V tomto případě poslat všem zaregistrovaným users (klient ví kdo) — ale tady to nevíme,
+    // spolehneme se na to že DB push_subscriptions obsahuje pouze platné uživatele.
+    // Edge Function načte všechny push_subscriptions s user_name v recipients.
+    // Workaround: necháme klienta předat všechny ostatní uživatele.
+    // → Ale klient nemá users seznam v této funkci. Řešení: caller předá users.
+    // Pro jednoduchost: pokud "*", předáme jen ty co jsou v sharedWith mimo *. Pokud je tam jen *, neposíláme.
+    // Lepší způsob: caller (App.jsx) překóduje "*" na konkrétní jména PŘED voláním.
   }
+  if (recipients.length === 0) return;
+
+  const title = `📝 ${note.createdBy} ti nasdílel poznámku`;
+  return sendPushNotification({
+    task: { id: note.id, title: note.title || "Nová sdílená poznámka" },
+    assignedTo: recipients,
+    createdBy: note.createdBy,
+  });
+}
+
+// Trigger push pro reminder
+async function triggerReminderNotification(reminder) {
+  // Recipients: vlastník + sdílení uživatelé
+  const recipients = new Set([reminder.createdBy]);
+  if (Array.isArray(reminder.sharedWith)) {
+    reminder.sharedWith.forEach(name => {
+      if (name && name !== "*") recipients.add(name);
+    });
+    // "*" handle: pokud je tam *, push se rozešle všem v "recipients" (= jen vlastník + jména v sharedWith)
+    // Pro plné "*" (všichni v rodině) musí caller přidat všechny user names.
+  }
+
+  return sendPushNotification({
+    task: { id: reminder.id, title: `🔔 ${reminder.text}` },
+    assignedTo: Array.from(recipients),
+    createdBy: "system", // = Edge Function pošle všem v assignedTo (nevynechá nikoho)
+  });
 }
 
 function processRecurring(tasks) {
@@ -12311,25 +12382,10 @@ function App() {
     setComments(prev => [...prev, comment]);
     await apiCreateComment(comment);
     setPendingCount(getOfflineQueue().length);
-    // Push notification to others via Edge Function
+    // Push notification to others via Edge Function (přes generický helper)
     const task = tasks.find(t => t.id === taskId);
     if (task) {
-      const others = [...new Set([...(task.assignedTo || []), task.createdBy])]
-        .filter(n => n && n !== currentUser.name);
-      if (others.length > 0) {
-        try {
-          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-          const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-          fetch(`${supabaseUrl}/functions/v1/super-api`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseKey}` },
-            body: JSON.stringify({
-              task: { id: taskId, title: `💬 ${currentUser.name}: ${content.slice(0, 60)}` },
-              assignedTo: others, createdBy: currentUser.name,
-            }),
-          });
-        } catch (e) { console.warn("Comment push failed:", e); }
-      }
+      triggerCommentNotification(task, comment, currentUser.name);
     }
   }, [currentUser, tasks]);
 
@@ -13123,6 +13179,41 @@ function App() {
               );
             })()}
           </button>
+          {/* Trash ikona — přepne na koš (smazané úkoly) */}
+          <button onClick={() => setViewStatus("trash")}
+            title="Koš"
+            style={{
+              background: viewStatus === "trash" ? theme.inputBg : "none",
+              border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px", position: "relative",
+            }}
+            onMouseEnter={e => { if (viewStatus !== "trash") e.currentTarget.style.background = theme.inputBg; }}
+            onMouseLeave={e => { if (viewStatus !== "trash") e.currentTarget.style.background = "none"; }}>
+            🗑
+            {(() => {
+              // Počet úkolů v koši (jen viditelných pro currentUser)
+              const userNameLc = currentUser.name.toLowerCase();
+              const trashCount = tasks.filter(t => {
+                if (t.status !== "deleted") return false;
+                if (currentUser.admin) return true;
+                const createdByLc = (t.createdBy || "").toLowerCase();
+                const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+                return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+              }).length;
+              if (trashCount === 0) return null;
+              return (
+                <span style={{
+                  position: "absolute", top: 2, right: 2,
+                  background: theme.textSub, color: "#fff",
+                  borderRadius: "50%", minWidth: 14, height: 14,
+                  fontSize: 9, fontWeight: 700,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 3px",
+                }}>{trashCount}</span>
+              );
+            })()}
+          </button>
           {/* Notes ikona — strukturované poznámky */}
           <button onClick={async () => {
             setShowNotesSheet(true);
@@ -13493,7 +13584,23 @@ function App() {
               } else {
                 // Nová připomínka
                 const created = await apiCreateReminder(newData);
-                if (created) setReminders(prev => [...prev, created]);
+                if (created) {
+                  setReminders(prev => [...prev, created]);
+                  // Push pro sdílené uživatele (informace, že byla vytvořena sdílená připomínka)
+                  // Vlastní notifikace v daný čas přijde přes Reminder ticker (lokální + cron pro server-side)
+                  if (Array.isArray(created.sharedWith) && created.sharedWith.length > 0) {
+                    const expandedRecipients = created.sharedWith.includes("*")
+                      ? users.filter(u => u && u.name && u.name !== currentUser.name).map(u => u.name)
+                      : created.sharedWith.filter(n => n !== currentUser.name && n !== "*");
+                    if (expandedRecipients.length > 0) {
+                      sendPushNotification({
+                        task: { id: created.id, title: `🔔 ${currentUser.name} ti nasdílel připomínku: ${created.text}` },
+                        assignedTo: expandedRecipients,
+                        createdBy: currentUser.name,
+                      });
+                    }
+                  }
+                }
               }
             }}
           />
@@ -13526,14 +13633,46 @@ function App() {
             theme={theme}
             onClose={() => setEditingNote(null)}
             onSave={async (data) => {
+              const wasShared = Array.isArray(data.sharedWith) && data.sharedWith.length > 0;
               if (data.id) {
                 // Update existující
+                // Detekce: pokud poznámka **nově** získala sharedWith (přidán nový recipient), pošli push
+                const previousNote = notes.find(n => n.id === data.id);
+                const previousShared = Array.isArray(previousNote?.sharedWith) ? previousNote.sharedWith : [];
+                const newRecipients = (data.sharedWith || []).filter(name => !previousShared.includes(name));
                 await apiUpdateNote(data);
                 setNotes(prev => prev.map(n => n.id === data.id ? { ...n, ...data, updatedAt: new Date().toISOString() } : n));
+                // Push pro nové recipients (kteří nebyli předtím)
+                if (newRecipients.length > 0) {
+                  const expandedRecipients = newRecipients.includes("*")
+                    ? users.filter(u => u && u.name && u.name !== currentUser.name).map(u => u.name)
+                    : newRecipients.filter(n => n !== currentUser.name);
+                  if (expandedRecipients.length > 0) {
+                    triggerNoteNotification({
+                      ...data,
+                      sharedWith: expandedRecipients,
+                      createdBy: data.createdBy || currentUser.name,
+                    });
+                  }
+                }
               } else {
                 // Vytvořit novou
                 const created = await apiCreateNote(data);
-                if (created) setNotes(prev => [created, ...prev]);
+                if (created) {
+                  setNotes(prev => [created, ...prev]);
+                  // Push pro sdílené příjemce
+                  if (wasShared) {
+                    const expandedRecipients = data.sharedWith.includes("*")
+                      ? users.filter(u => u && u.name && u.name !== currentUser.name).map(u => u.name)
+                      : data.sharedWith.filter(n => n !== currentUser.name && n !== "*");
+                    if (expandedRecipients.length > 0) {
+                      triggerNoteNotification({
+                        ...created,
+                        sharedWith: expandedRecipients,
+                      });
+                    }
+                  }
+                }
               }
             }}
             onDelete={async (id) => {
