@@ -2578,12 +2578,17 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
     }
   };
 
+  // Příznak že byla poznámka smazána — zabrání auto-save od overriding deletedAt
+  const wasDeletedRef = useRef(false);
+
   // Auto-save při periodicky každých 8s pokud něco změněno (background save)
   const lastSavedSnapshotRef = useRef("");
   useEffect(() => {
     if (!canEdit) return;
     const interval = setInterval(() => {
       if (!editor) return;
+      // Po deletu už neukládat — jinak by se UPDATE přepsalo deletedAt zpět
+      if (wasDeletedRef.current) return;
       const snapshot = JSON.stringify({
         title: title.trim(),
         content: editor.getHTML(),
@@ -2600,8 +2605,9 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
   // Auto-save při unmount (zavření) — chytne i klik mimo modal
   useEffect(() => {
     return () => {
-      // Při unmount: pokud něco změněno, ulož na pozadí
-      if (canEdit && silentSaveRef.current) {
+      // Při unmount: pokud něco změněno, ulož na pozadí.
+      // VÝJIMKA: pokud byla poznámka smazána, neukládat — jinak by se UPDATE přepsalo deletedAt.
+      if (canEdit && silentSaveRef.current && !wasDeletedRef.current) {
         silentSaveRef.current();
       }
     };
@@ -2632,6 +2638,9 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
       id = savedNoteRef.current?.id;
     }
     if (id) await onDelete(id);
+    // Nastav příznak, aby unmount cleanup NEVOLAL silentSave
+    // (jinak by se UPDATE přepsalo deletedAt zpět na null!)
+    wasDeletedRef.current = true;
     onClose();
   };
 
@@ -12142,6 +12151,11 @@ function App() {
         setComments(freshComments);
         setReminders(freshReminders);
         setNotes(freshNotes);
+        // Diagnostický log — kolik je smazaných v polling (pomáhá ověřit že server má deletedAt)
+        const deletedCount = freshNotes.filter(n => n.deletedAt).length;
+        if (deletedCount > 0) {
+          console.log(`[polling] notes refresh: ${freshNotes.length} total, ${deletedCount} deleted`);
+        }
         // custom_lists raw fetch
         const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
         if (data) setCustomLists(data);
