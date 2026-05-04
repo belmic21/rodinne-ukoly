@@ -862,6 +862,19 @@ function useEscapeKey(handler, enabled = true) {
   }, [handler, enabled]);
 }
 
+// Hook: useWindowWidth — sleduje šířku okna pro responzivní layout.
+// Vrací aktuální šířku v px. Na PC s velkým monitorem můžeme použít
+// větší contentMaxWidth a víc místa pro úkoly / poznámky.
+function useWindowWidth() {
+  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
+
 const cardStyle = (th) => ({
   background: th.card,
   border: `1px solid ${th.cardBorder}`,
@@ -1824,7 +1837,7 @@ function QuickReminderModal({ theme, currentUser, onCreate, onClose, prefill }) 
    Tlačítka: ✕ (dismiss = vyřízeno) / Odložit (snooze 10 min)
    ═══════════════════════════════════════════════════════ */
 
-function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
+function ReminderToast({ reminder, theme, onDismiss, onSnooze, onClose }) {
   if (!reminder) return null;
   // Spočítat jak dávno měl reminder proběhnout
   const remindAtDate = new Date(reminder.remindAt);
@@ -1867,7 +1880,7 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze }) {
             <span style={{ color: theme.textSub }}>· {relativeLabel}</span>
           </div>
         </div>
-        <button onClick={onDismiss} style={{
+        <button onClick={onClose || onDismiss} title="Zavřít (připomínka zůstane aktivní)" style={{
           background: "none", border: "none", color: theme.textSub,
           fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
         }}>×</button>
@@ -2247,16 +2260,13 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
     if (isNew) titleRef.current?.focus();
   }, [isNew]);
 
-  const handleSave = async () => {
-    if (!editor) return;
+  // Build data object pro save — sdílí logiku mezi handleSave (s close) a auto-save
+  const buildData = () => {
+    if (!editor) return null;
     const content = editor.getHTML();
     const isEmptyContent = content === "<p></p>" || content.trim() === "";
-    if (!title.trim() && isEmptyContent) {
-      onClose();
-      return;
-    }
-    setSaving(true);
-    const data = {
+    if (!title.trim() && isEmptyContent) return null; // prázdná poznámka — neukládat
+    return {
       ...(note || {}),
       title: title.trim(),
       content: isEmptyContent ? "" : content,
@@ -2264,6 +2274,55 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
       pinned,
       createdBy: note?.createdBy || currentUser.name,
     };
+  };
+
+  // Silent save — neuvolňuje modal, jen pošle data na server
+  const silentSaveRef = useRef(null);
+  silentSaveRef.current = async () => {
+    if (!canEdit) return;
+    const data = buildData();
+    if (!data) return;
+    await onSave(data);
+  };
+
+  // Auto-save při periodicky každých 8s pokud něco změněno (background save)
+  const lastSavedSnapshotRef = useRef("");
+  useEffect(() => {
+    if (!canEdit) return;
+    const interval = setInterval(() => {
+      if (!editor) return;
+      const snapshot = JSON.stringify({
+        title: title.trim(),
+        content: editor.getHTML(),
+        isShared, pinned,
+      });
+      if (snapshot !== lastSavedSnapshotRef.current) {
+        lastSavedSnapshotRef.current = snapshot;
+        silentSaveRef.current?.();
+      }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [editor, title, isShared, pinned, canEdit]);
+
+  // Auto-save při unmount (zavření) — chytne i klik mimo modal
+  useEffect(() => {
+    return () => {
+      // Při unmount: pokud něco změněno, ulož na pozadí
+      if (canEdit && silentSaveRef.current) {
+        silentSaveRef.current();
+      }
+    };
+  }, [canEdit]);
+
+  // Explicitní handleSave — uloží + zavře
+  const handleSave = async () => {
+    if (!editor) return;
+    const data = buildData();
+    if (!data) {
+      onClose();
+      return;
+    }
+    setSaving(true);
     await onSave(data);
     setSaving(false);
     onClose();
@@ -2284,6 +2343,14 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
       note: plainText,
     });
     onClose();
+  };
+
+  // Enter v title input → uložit a zavřít
+  const handleTitleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSave();
+    }
   };
 
   return (
@@ -2311,6 +2378,7 @@ function NoteEditor({ note, theme, currentUser, onSave, onDelete, onClose, onCon
             placeholder="Název poznámky..."
             value={title}
             onChange={e => setTitle(e.target.value)}
+            onKeyDown={handleTitleKeyDown}
             disabled={!canEdit}
             style={{
               flex: 1, padding: "6px 8px", fontSize: 15, fontWeight: 700,
@@ -8173,7 +8241,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    SEARCH SHEET — full-screen vyhledávání
    ═══════════════════════════════════════════════════════ */
 
-function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, onClose, onNavigate }) {
+function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote }) {
   useEscapeKey(onClose);
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
@@ -8182,46 +8250,127 @@ function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, on
     setTimeout(() => inputRef.current?.focus(), 100);
   }, []);
 
-  // Detekce smart search syntax — pokud query obsahuje operátor (klíč:hodnota),
-  // zkratky (!high, @pavla, #nákup) nebo je delší kombinace tokenů,
-  // delegujeme na shared `searchMatch` funkci. Jinak použijeme původní fuzzy search
-  // (s diakritikou-insensitive normalizací).
   const isSmartQuery = useMemo(() => {
     const q = (query || "").trim();
     if (!q) return false;
     return /(\b[a-zA-Z]+:[\S]+)|(^!)|(\s!)|(^@)|(\s@)|(^#)|(\s#)/.test(q);
   }, [query]);
 
+  // Pomocná: strip HTML pro full-text v poznámkách
+  const stripHtml = (html) => {
+    if (!html) return "";
+    if (typeof document === "undefined") return html.replace(/<[^>]+>/g, "");
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    return (div.textContent || div.innerText || "").trim();
+  };
+
+  // Multi-type search: úkoly + komentáře (v rámci úkolů) + reminders + notes
   const results = useMemo(() => {
-    const q = (query || "").trim().toLowerCase();
-    if (q.length < 2) return [];
+    const q = (query || "").trim();
+    if (q.length < 2) return { tasks: [], comments: [], reminders: [], notes: [] };
     const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const qNorm = norm(q);
     const userNameLc = (currentUser.name || "").trim().toLowerCase();
-    return tasks
+
+    // Tasks
+    const matchedTasks = tasks
       .filter(t => {
-        // Privacy filter — search vždy ukazuje jen úkoly relevantní pro currentUser
-        // (autor nebo přiřazen), bez ohledu na admin flag
         const createdByLc = (t.createdBy || "").trim().toLowerCase();
         const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
         const isMine = createdByLc === userNameLc || assignedToLc.includes(userNameLc);
         if (!isMine) return false;
-
-        // Smart query — operátorová syntaxe (priority:high, due:today, ...)
-        if (isSmartQuery) {
-          return searchMatch(t, query, customLists);
-        }
-
-        // Fallback: fuzzy plain text search s diakritikou
+        if (isSmartQuery) return searchMatch(t, q, customLists);
         if (norm(t.title).includes(qNorm)) return true;
         if (t.note && norm(t.note).includes(qNorm)) return true;
         if ((t.checklist || []).some(item => norm(item.text).includes(qNorm))) return true;
-        const taskComments = comments.filter(c => c.taskId === t.id);
-        if (taskComments.some(c => c.content && norm(c.content).includes(qNorm))) return true;
         return false;
       })
       .slice(0, 30);
-  }, [tasks, comments, query, currentUser, isSmartQuery, customLists]);
+
+    // Comments — ukáže odděleně, ale linkuje na svůj úkol
+    const matchedComments = isSmartQuery ? [] : comments
+      .filter(c => {
+        if (!c.content || !norm(c.content).includes(qNorm)) return false;
+        // Privacy — komentáře k úkolům, kde jsem autor / assigned
+        const t = tasks.find(x => x.id === c.taskId);
+        if (!t) return false;
+        const createdByLc = (t.createdBy || "").trim().toLowerCase();
+        const assignedToLc = (t.assignedTo || []).map(n => (n || "").trim().toLowerCase());
+        return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+      })
+      .slice(0, 20);
+
+    // Reminders — jen moje (vlastní)
+    const matchedReminders = isSmartQuery ? [] : reminders
+      .filter(r =>
+        r.createdBy === currentUser.name && norm(r.text).includes(qNorm)
+      )
+      .slice(0, 20);
+
+    // Notes — moje + sdílené, hledáme v title + content (stripped HTML)
+    const matchedNotes = isSmartQuery ? [] : notes
+      .filter(n => {
+        if (!(n.createdBy === currentUser.name || n.isShared)) return false;
+        if (norm(n.title).includes(qNorm)) return true;
+        if (norm(stripHtml(n.content)).includes(qNorm)) return true;
+        return false;
+      })
+      .slice(0, 20);
+
+    return {
+      tasks: matchedTasks,
+      comments: matchedComments,
+      reminders: matchedReminders,
+      notes: matchedNotes,
+    };
+  }, [tasks, comments, reminders, notes, query, currentUser, isSmartQuery, customLists]);
+
+  const totalResults =
+    results.tasks.length + results.comments.length +
+    results.reminders.length + results.notes.length;
+
+  // Pomocná: highlight match v textu
+  const highlight = (text, q) => {
+    if (!q) return text;
+    const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const idx = norm(text).indexOf(norm(q));
+    if (idx < 0) return text;
+    const before = text.substring(0, idx);
+    const match = text.substring(idx, idx + q.length);
+    const after = text.substring(idx + q.length);
+    return (
+      <>
+        {before}
+        <mark style={{ background: `${theme.accent}40`, color: theme.text, padding: "0 2px", borderRadius: 2 }}>{match}</mark>
+        {after}
+      </>
+    );
+  };
+
+  // Pomocná: krátký excerpt z dlouhého textu kolem match
+  const excerpt = (text, q, maxLen = 80) => {
+    if (!text) return "";
+    if (text.length <= maxLen) return text;
+    const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const idx = norm(text).indexOf(norm(q));
+    if (idx < 0) return text.substring(0, maxLen) + "...";
+    const start = Math.max(0, idx - 30);
+    const end = Math.min(text.length, idx + q.length + 50);
+    return (start > 0 ? "..." : "") + text.substring(start, end) + (end < text.length ? "..." : "");
+  };
+
+  const sectionLabel = (icon, text, count) => (
+    <div style={{
+      fontSize: 10, fontWeight: 800, color: theme.textMid,
+      textTransform: "uppercase", letterSpacing: "0.4px",
+      marginTop: 12, marginBottom: 6, padding: "0 2px",
+      display: "flex", alignItems: "center", gap: 6,
+    }}>
+      <span>{icon}</span>
+      <span>{text} ({count})</span>
+    </div>
+  );
 
   return (
     <div onClick={onClose} style={{
@@ -8230,7 +8379,7 @@ function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, on
       animation: "slideUp 0.25s",
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
-        width: "100%", maxWidth: "560px", maxHeight: "92vh",
+        width: "100%", maxWidth: "600px", maxHeight: "92vh",
         marginTop: "20px",
         background: theme.bg, borderRadius: "16px",
         overflow: "auto",
@@ -8248,7 +8397,7 @@ function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, on
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat… nebo zkus !urgent, due:today, @pavla"
+            placeholder="Hledat napříč: úkoly, komentáře, připomínky, poznámky"
             style={{
               flex: 1, fontSize: "14px", padding: "8px 10px",
               background: theme.inputBg, color: theme.text,
@@ -8262,89 +8411,211 @@ function SearchSheet({ tasks, comments, currentUser, customLists = [], theme, on
           }}>×</button>
         </div>
 
-        {/* Smart search hint — zobrazí se jen pokud je input prázdný */}
-        {!query.trim() && (
+        {/* Smart query tipy */}
+        {isSmartQuery && (
           <div style={{
-            padding: "10px 16px",
+            padding: "10px 14px",
+            background: theme.inputBg,
             borderBottom: `1px solid ${theme.cardBorder}`,
-            fontSize: "11px",
-            color: theme.textMid,
-            lineHeight: 1.6,
+            fontSize: "11px", color: theme.textMid, lineHeight: 1.6,
           }}>
-            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.textSub }}>💡 Tipy pro hledání:</div>
-            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent</code> nebo <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>priority:high</code> — priorita</div>
-            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:today</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:overdue</code> · <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>due:week</code> — termín</div>
-            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>@pavla</code> — komu je úkol přiřazen</div>
-            <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>status:done</code> — stav (active, done, deleted, parked)</div>
-            <div style={{ marginTop: 4, opacity: 0.7 }}>Můžeš kombinovat: <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: 3 }}>!urgent due:today</code></div>
+            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.textSub }}>💡 Smart query — hledá jen v úkolech</div>
+            <div>Pro hledání v poznámkách/připomínkách napiš obyčejný text.</div>
           </div>
         )}
 
         {/* Results */}
         <div style={{ padding: "12px 14px" }}>
           {query.trim().length < 2 ? (
-            <div style={{ textAlign: "center", color: theme.textMid, fontSize: "13px", padding: "40px 0" }}>
-              Začni psát pro vyhledávání...
+            <div style={{
+              textAlign: "center", color: theme.textMid, fontSize: "13px",
+              padding: "40px 0",
+            }}>
+              <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
+              <div style={{ marginBottom: 8 }}>Začni psát pro vyhledávání...</div>
+              <div style={{ fontSize: 11, color: theme.textSub }}>
+                Hledá v úkolech, komentářích, připomínkách i poznámkách
+              </div>
             </div>
-          ) : results.length === 0 ? (
+          ) : totalResults === 0 ? (
             <div style={{ textAlign: "center", color: theme.textMid, fontSize: "13px", padding: "40px 0" }}>
               Žádné výsledky pro „{query}"
             </div>
           ) : (
             <>
               <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 600 }}>
-                {results.length} {results.length === 1 ? "výsledek" : results.length < 5 ? "výsledky" : "výsledků"}
+                {totalResults} {totalResults === 1 ? "výsledek" : totalResults < 5 ? "výsledky" : "výsledků"}
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                {results.map(t => (
-                  <button key={t.id}
-                    onClick={() => { onNavigate(t.id); onClose(); }}
-                    style={{
-                      ...buttonStyle(),
-                      textAlign: "left", padding: "10px 12px",
-                      background: theme.card,
-                      border: `1px solid ${theme.cardBorder}`,
-                      borderRadius: "8px",
-                      display: "flex", flexDirection: "column", gap: "4px",
-                      cursor: "pointer",
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
-                    onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text,
-                      textDecoration: isDeleted(t) ? "line-through" : "none",
-                      opacity: isDeleted(t) ? 0.6 : isDone(t) ? 0.75 : 1,
-                    }}>
-                      {isDeleted(t) && "🗑 "}
-                      {!isDeleted(t) && isDone(t) && "✓ "}
-                      {t.title}
-                    </div>
-                    <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center" }}>
-                      {isDeleted(t) && (
-                        <span style={{
-                          fontSize: "9px", fontWeight: 800, color: theme.red,
-                          background: `${theme.red}15`, padding: "1px 5px", borderRadius: "4px",
-                          textTransform: "uppercase", letterSpacing: "0.3px",
-                        }}>Koš</span>
-                      )}
-                      {!isDeleted(t) && isDone(t) && (
-                        <span style={{
-                          fontSize: "9px", fontWeight: 800, color: theme.green,
-                          background: `${theme.green}15`, padding: "1px 5px", borderRadius: "4px",
-                          textTransform: "uppercase", letterSpacing: "0.3px",
-                        }}>Splněné</span>
-                      )}
-                      {!isDeleted(t) && !isDone(t) && t.status === "in_progress" && (
-                        <span style={{
-                          fontSize: "9px", fontWeight: 800, color: "#ea580c",
-                          background: "#ea580c15", padding: "1px 5px", borderRadius: "4px",
-                          textTransform: "uppercase", letterSpacing: "0.3px",
-                        }}>Rozprac.</span>
-                      )}
-                      <span>{t.assignedTo?.join(", ") || "—"} · {t.createdAt && formatTimeTrace(t.createdAt)}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
+
+              {/* Tasks section */}
+              {results.tasks.length > 0 && (
+                <>
+                  {sectionLabel("📋", "Úkoly", results.tasks.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {results.tasks.map(t => (
+                      <button key={`task-${t.id}`}
+                        onClick={() => { onNavigate(t.id); onClose(); }}
+                        style={{
+                          ...buttonStyle(),
+                          textAlign: "left", padding: "10px 12px",
+                          background: theme.card,
+                          border: `1px solid ${theme.cardBorder}`,
+                          borderRadius: "8px",
+                          display: "flex", flexDirection: "column", gap: "4px",
+                          cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                        onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                        <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text,
+                          textDecoration: isDeleted(t) ? "line-through" : "none",
+                          opacity: isDeleted(t) ? 0.6 : isDone(t) ? 0.75 : 1,
+                        }}>
+                          {isDeleted(t) && "🗑 "}
+                          {!isDeleted(t) && isDone(t) && "✓ "}
+                          {highlight(t.title, query)}
+                        </div>
+                        {t.note && (
+                          <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4 }}>
+                            {highlight(excerpt(t.note, query), query)}
+                          </div>
+                        )}
+                        <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                          {isDeleted(t) && (
+                            <span style={{
+                              fontSize: "9px", fontWeight: 800, color: theme.red,
+                              background: `${theme.red}15`, padding: "1px 5px", borderRadius: "4px",
+                              textTransform: "uppercase", letterSpacing: "0.3px",
+                            }}>Koš</span>
+                          )}
+                          {!isDeleted(t) && isDone(t) && (
+                            <span style={{
+                              fontSize: "9px", fontWeight: 800, color: theme.green,
+                              background: `${theme.green}15`, padding: "1px 5px", borderRadius: "4px",
+                              textTransform: "uppercase", letterSpacing: "0.3px",
+                            }}>Splněné</span>
+                          )}
+                          <span>{t.assignedTo?.join(", ") || "—"}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Comments section */}
+              {results.comments.length > 0 && (
+                <>
+                  {sectionLabel("💬", "Komentáře", results.comments.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {results.comments.map(c => {
+                      const task = tasks.find(t => t.id === c.taskId);
+                      return (
+                        <button key={`comment-${c.id}`}
+                          onClick={() => { if (task) { onNavigate(task.id); onClose(); } }}
+                          style={{
+                            ...buttonStyle(),
+                            textAlign: "left", padding: "10px 12px",
+                            background: theme.card,
+                            border: `1px solid ${theme.cardBorder}`,
+                            borderRadius: "8px",
+                            display: "flex", flexDirection: "column", gap: "4px",
+                            cursor: "pointer",
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                          onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                          <div style={{ fontSize: 12, color: theme.text, lineHeight: 1.4 }}>
+                            {highlight(excerpt(c.content, query, 120), query)}
+                          </div>
+                          <div style={{ fontSize: 10, color: theme.textMid }}>
+                            <strong>{c.author}</strong> v úkolu „{task?.title || "(smazán)"}"
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Reminders section */}
+              {results.reminders.length > 0 && (
+                <>
+                  {sectionLabel("🔔", "Připomínky", results.reminders.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {results.reminders.map(r => (
+                      <button key={`rem-${r.id}`}
+                        onClick={() => { if (onOpenReminder) onOpenReminder(); onClose(); }}
+                        style={{
+                          ...buttonStyle(),
+                          textAlign: "left", padding: "10px 12px",
+                          background: theme.card,
+                          border: `1px solid ${theme.cardBorder}`,
+                          borderRadius: "8px",
+                          display: "flex", flexDirection: "column", gap: "4px",
+                          cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                        onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: theme.text,
+                          textDecoration: r.dismissedAt ? "line-through" : "none",
+                          opacity: r.dismissedAt ? 0.6 : 1,
+                        }}>
+                          {highlight(r.text, query)}
+                        </div>
+                        <div style={{ fontSize: 10, color: theme.textMid }}>
+                          📅 {new Date(r.remindAt).toLocaleString("cs-CZ", {
+                            day: "numeric", month: "numeric",
+                            hour: "2-digit", minute: "2-digit",
+                          })}
+                          {r.dismissedAt && " · ✓ vyřízeno"}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Notes section */}
+              {results.notes.length > 0 && (
+                <>
+                  {sectionLabel("📝", "Poznámky", results.notes.length)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {results.notes.map(n => {
+                      const plain = stripHtml(n.content);
+                      const isMine = n.createdBy === currentUser.name;
+                      return (
+                        <button key={`note-${n.id}`}
+                          onClick={() => { if (onOpenNote) onOpenNote(n); onClose(); }}
+                          style={{
+                            ...buttonStyle(),
+                            textAlign: "left", padding: "10px 12px",
+                            background: theme.card,
+                            border: `1px solid ${theme.cardBorder}`,
+                            borderRadius: "8px",
+                            display: "flex", flexDirection: "column", gap: "4px",
+                            cursor: "pointer",
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
+                          onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>
+                            {n.pinned && "📌 "}
+                            {n.isShared && "👥 "}
+                            {n.title ? highlight(n.title, query) : <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
+                          </div>
+                          {plain && (
+                            <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4 }}>
+                              {highlight(excerpt(plain, query), query)}
+                            </div>
+                          )}
+                          <div style={{ fontSize: 10, color: theme.textMid }}>
+                            {!isMine && <>od <strong>{n.createdBy}</strong> · </>}
+                            {new Date(n.updatedAt).toLocaleDateString("cs-CZ")}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
@@ -10651,6 +10922,16 @@ function App() {
   // Závislost `currentUser` — header existuje v DOM až po loginu, jinak `headerRef.current` je null.
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(0);
+  // Responsive layout — širší max-width na desktopu (více využití prostoru)
+  const windowWidth = useWindowWidth();
+  // Adaptivní max-width contentu:
+  // < 720 px → 100% (mobil)
+  // 720-1100 px → 720 px (tablet)
+  // > 1100 px → 880 px (desktop, využije více prostoru)
+  // > 1500 px → 1100 px (velký monitor)
+  const contentMaxWidth = windowWidth >= 1500 ? "1100px"
+    : windowWidth >= 1100 ? "880px"
+    : "720px";
   useLayoutEffect(() => {
     if (!headerRef.current) return;
     const measure = () => {
@@ -12691,7 +12972,7 @@ function App() {
       )}
 
       {/* ── Top container (non-scrollable) — header + input + filter ── */}
-      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px", width: "100%", flexShrink: 0 }}>
+      <div style={{ maxWidth: contentMaxWidth, margin: "0 auto", padding: "0 12px", width: "100%", flexShrink: 0 }}>
 
         {showAdmin && currentUser.admin && (
           <AdminPanel
@@ -12979,10 +13260,20 @@ function App() {
           <SearchSheet
             tasks={tasks}
             comments={comments}
+            reminders={reminders}
+            notes={notes}
             currentUser={currentUser}
             customLists={customLists}
             theme={theme}
             onClose={() => setShowSearchSheet(false)}
+            onOpenReminder={() => {
+              setShowSearchSheet(false);
+              setShowReminderSheet(true);
+            }}
+            onOpenNote={(note) => {
+              setShowSearchSheet(false);
+              setEditingNote(note);
+            }}
             onNavigate={(taskId) => {
               // Pokud je úkol v jiném view než aktuální, přepneme
               const t = tasks.find(x => x.id === taskId);
@@ -13688,7 +13979,7 @@ function App() {
         overflowX: "hidden",
         WebkitOverflowScrolling: "touch",
       }}>
-      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 12px 140px", width: "100%" }}>
+      <div style={{ maxWidth: contentMaxWidth, margin: "0 auto", padding: "0 12px 140px", width: "100%" }}>
 
         {/* Trash view info banner */}
         {viewStatus === "trash" && filteredTasks.length > 0 && (
@@ -14134,7 +14425,12 @@ function App() {
         <ReminderToast
           reminder={activeReminder}
           theme={theme}
+          onClose={() => {
+            // Křížek = jen zavřít toast, reminder zůstává v "Propadlé" sekci
+            setActiveReminder(null);
+          }}
           onDismiss={async () => {
+            // ✓ Hotovo = označit jako vyřízené (přesune do Historie)
             const id = activeReminder.id;
             setReminders(prev => prev.filter(r => r.id !== id));
             setActiveReminder(null);
