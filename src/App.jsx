@@ -8626,7 +8626,8 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
 
   // Pomocná: highlight match v textu
   const highlight = (text, q) => {
-    if (!q) return text;
+    if (!q) return text || "";
+    if (!text) return "";
     const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const idx = norm(text).indexOf(norm(q));
     if (idx < 0) return text;
@@ -8776,28 +8777,35 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                           {!isDeleted(t) && isDone(t) && "✓ "}
                           {highlight(t.title, query)}
                         </div>
-                        {t.note && norm(t.note).includes(qNorm) && (
-                          <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4 }}>
-                            {highlight(excerpt(t.note, query), query)}
-                          </div>
-                        )}
-                        {/* ScratchPad match — excerpt z prvního záznamu pracovního deníku který obsahuje query */}
+                        {/* Inline note + scratchPad match preview */}
                         {(() => {
+                          const localNorm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                          const localQNorm = localNorm((query || "").trim());
+                          if (!localQNorm) return null;
+                          const noteMatch = t.note && localNorm(t.note).includes(localQNorm);
                           const scratchMatch = (t.scratchPad || []).find(e =>
-                            !e.deletedAt && norm(e.text).includes(qNorm)
+                            !e.deletedAt && localNorm(e.text).includes(localQNorm)
                           );
-                          if (!scratchMatch) return null;
                           return (
-                            <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4,
-                              borderLeft: `2px solid ${theme.purple || theme.accent}`,
-                              paddingLeft: 6, marginTop: 2,
-                            }}>
-                              <span style={{ fontSize: 9, fontWeight: 700, color: theme.purple || theme.accent,
-                                textTransform: "uppercase", letterSpacing: "0.4px", marginRight: 4 }}>
-                                Deník:
-                              </span>
-                              {highlight(excerpt(scratchMatch.text, query), query)}
-                            </div>
+                            <>
+                              {noteMatch && (
+                                <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4 }}>
+                                  {highlight(excerpt(t.note, query), query)}
+                                </div>
+                              )}
+                              {scratchMatch && (
+                                <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.4,
+                                  borderLeft: `2px solid ${theme.purple || theme.accent}`,
+                                  paddingLeft: 6, marginTop: 2,
+                                }}>
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: theme.purple || theme.accent,
+                                    textTransform: "uppercase", letterSpacing: "0.4px", marginRight: 4 }}>
+                                    Deník:
+                                  </span>
+                                  {highlight(excerpt(scratchMatch.text, query), query)}
+                                </div>
+                              )}
+                            </>
                           );
                         })()}
                         <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
