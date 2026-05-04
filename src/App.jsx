@@ -2931,6 +2931,239 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
   );
 }
 
+/* ═══════════════════════════════════════════════════════
+   DASHBOARD SIDEBAR — Postranní panel pro PC widescreen mode (>= 1200 px).
+   Obsahuje 3 widgety: Aktivní reminders / Recent poznámky / Recent komentáře.
+   Klik na položku otevře relevantní panel/editor přes callback.
+   ═══════════════════════════════════════════════════════ */
+
+function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, theme, onOpenReminders, onOpenNotes, onOpenNote, onOpenTask, onCreateReminder, onCreateNote }) {
+  // Aktivní reminders — vlastní + sdílené, neuzavřené, top 5 nejbližších
+  const myActiveReminders = (reminders || [])
+    .filter(r => {
+      if (r.dismissedAt) return false;
+      if (r.createdBy === currentUser?.name) return true;
+      if (Array.isArray(r.sharedWith)) {
+        return r.sharedWith.includes("*") || r.sharedWith.includes(currentUser?.name);
+      }
+      return false;
+    })
+    .sort((a, b) => new Date(a.remindAt) - new Date(b.remindAt))
+    .slice(0, 5);
+
+  // Recent poznámky — vlastní + sdílené, ne smazané, řazené podle updatedAt
+  const myNotes = (notes || [])
+    .filter(n => {
+      if (n.deletedAt) return false;
+      if (n.createdBy === currentUser?.name) return true;
+      if (n.isShared) return true;
+      if (Array.isArray(n.sharedWith)) {
+        return n.sharedWith.includes("*") || n.sharedWith.includes(currentUser?.name);
+      }
+      return false;
+    })
+    .sort((a, b) => {
+      // Pinned nahoře, pak podle updatedAt
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return new Date(b.updatedAt) - new Date(a.updatedAt);
+    })
+    .slice(0, 5);
+
+  // Recent komentáře — posledních 24h, jen z mých úkolů
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const userNameLc = (currentUser?.name || "").toLowerCase();
+  const myRecentComments = (comments || [])
+    .filter(c => {
+      if (!c.content || c.type === "reaction") return false;
+      if (new Date(c.createdAt).getTime() < dayAgo) return false;
+      const t = tasks.find(x => x.id === c.taskId);
+      if (!t) return false;
+      const createdByLc = (t.createdBy || "").toLowerCase();
+      const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+      return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+    })
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 5);
+
+  // Strip HTML pro preview poznámek
+  const stripHtml = (html) => {
+    if (!html) return "";
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    return (div.textContent || "").trim();
+  };
+
+  const formatRelative = (iso) => {
+    const d = new Date(iso);
+    const diffMs = d.getTime() - Date.now();
+    const diffMin = Math.round(diffMs / 60000);
+    if (diffMin < 0) {
+      const m = Math.abs(diffMin);
+      if (m < 60) return `před ${m} min`;
+      const h = Math.round(m / 60);
+      if (h < 24) return `před ${h} h`;
+      return `před ${Math.round(h / 24)} d`;
+    }
+    if (diffMin < 60) return `za ${diffMin} min`;
+    const h = Math.round(diffMin / 60);
+    if (h < 24) return `za ${h} h`;
+    return `za ${Math.round(h / 24)} d`;
+  };
+
+  // Widget header s "+" tlačítkem a "Vše" tlačítkem
+  const WidgetHeader = ({ icon, title, count, onAdd, onShowAll, accentColor }) => (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 6,
+      padding: "10px 12px 8px", borderBottom: `1px solid ${theme.cardBorder}`,
+    }}>
+      <span style={{ fontSize: 14 }}>{icon}</span>
+      <span style={{
+        fontSize: 11, fontWeight: 800, color: accentColor || theme.text,
+        textTransform: "uppercase", letterSpacing: "0.5px", flex: 1,
+      }}>{title}</span>
+      <span style={{ fontSize: 10, color: theme.textSub }}>{count}</span>
+      {onAdd && (
+        <button onClick={onAdd} title="Nová" style={{
+          ...buttonStyle(), padding: "2px 7px", fontSize: 11, fontWeight: 700,
+          background: `${accentColor}15`, color: accentColor,
+          border: `1px solid ${accentColor}30`,
+        }}>+</button>
+      )}
+      {onShowAll && (
+        <button onClick={onShowAll} title="Vše" style={{
+          ...buttonStyle(), padding: "2px 7px", fontSize: 10, fontWeight: 600,
+          background: "transparent", color: theme.textSub,
+          border: `1px solid ${theme.inputBorder}`,
+        }}>›</button>
+      )}
+    </div>
+  );
+
+  const Widget = ({ children }) => (
+    <div style={{
+      background: theme.card, border: `1px solid ${theme.cardBorder}`,
+      borderRadius: 10, marginBottom: 12,
+      overflow: "hidden",
+    }}>{children}</div>
+  );
+
+  const ItemRow = ({ onClick, children, accentColor }) => (
+    <button onClick={onClick} style={{
+      ...buttonStyle(), width: "100%", textAlign: "left",
+      padding: "8px 12px", background: "transparent",
+      borderTop: `1px solid ${theme.cardBorder}40`,
+      borderLeft: "none", borderRight: "none", borderBottom: "none",
+      borderRadius: 0, color: theme.text,
+      cursor: "pointer", display: "block",
+    }}
+      onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+      {children}
+    </button>
+  );
+
+  return (
+    <div style={{ width: "100%", paddingLeft: 16 }}>
+      {/* Reminders widget */}
+      <Widget>
+        <WidgetHeader
+          icon="🔔" title="Aktivní připomínky" count={myActiveReminders.length}
+          onAdd={onCreateReminder} onShowAll={onOpenReminders}
+          accentColor={theme.accent}
+        />
+        {myActiveReminders.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center" }}>
+            Žádné aktivní připomínky
+          </div>
+        ) : myActiveReminders.map(r => {
+          const isPast = new Date(r.remindAt).getTime() < Date.now();
+          return (
+            <ItemRow key={r.id} onClick={onOpenReminders}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
+                {r.text}
+              </div>
+              <div style={{ fontSize: 10, color: isPast ? theme.red : theme.textSub, marginTop: 2 }}>
+                ⏰ {formatRelative(r.remindAt)}
+                {Array.isArray(r.sharedWith) && r.sharedWith.length > 0 && (
+                  <span style={{ marginLeft: 6 }}>· 👥</span>
+                )}
+              </div>
+            </ItemRow>
+          );
+        })}
+      </Widget>
+
+      {/* Notes widget */}
+      <Widget>
+        <WidgetHeader
+          icon="📝" title="Poznámky" count={myNotes.length}
+          onAdd={onCreateNote} onShowAll={onOpenNotes}
+          accentColor={theme.green}
+        />
+        {myNotes.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center" }}>
+            Žádné poznámky
+          </div>
+        ) : myNotes.map(n => {
+          const preview = stripHtml(n.content);
+          const isMine = n.createdBy === currentUser?.name;
+          return (
+            <ItemRow key={n.id} onClick={() => onOpenNote(n)}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: theme.text,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {n.pinned && "📌 "}
+                {(n.isShared || (Array.isArray(n.sharedWith) && n.sharedWith.length > 0)) && "👥 "}
+                {n.title || <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
+              </div>
+              {preview && (
+                <div style={{ fontSize: 10, color: theme.textMid, lineHeight: 1.4, marginTop: 2,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>{preview}</div>
+              )}
+              {!isMine && (
+                <div style={{ fontSize: 9, color: theme.textSub, marginTop: 2 }}>
+                  od {n.createdBy}
+                </div>
+              )}
+            </ItemRow>
+          );
+        })}
+      </Widget>
+
+      {/* Recent comments widget */}
+      {myRecentComments.length > 0 && (
+        <Widget>
+          <WidgetHeader
+            icon="💬" title="Aktivita za 24 h" count={myRecentComments.length}
+            accentColor="#a855f7"
+          />
+          {myRecentComments.map(c => {
+            const t = tasks.find(x => x.id === c.taskId);
+            const taskTitle = t ? (t.title || "(bez názvu)") : "(smazaný úkol)";
+            return (
+              <ItemRow key={c.id} onClick={() => t && onOpenTask(t.id)}>
+                <div style={{ fontSize: 11, color: theme.text, lineHeight: 1.4,
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                  overflow: "hidden", wordBreak: "break-word",
+                }}>
+                  <strong style={{ color: "#a855f7" }}>{c.author}:</strong> {c.content}
+                </div>
+                <div style={{ fontSize: 9, color: theme.textSub, marginTop: 2,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  v „{taskTitle}" · {formatRelative(c.createdAt)}
+                </div>
+              </ItemRow>
+            );
+          })}
+        </Widget>
+      )}
+    </div>
+  );
+}
+
 function CopyTaskButton({ task, theme }) {
   const [copied, setCopied] = useState(false);
 
@@ -11262,10 +11495,13 @@ function App() {
   const windowWidth = useWindowWidth();
   // Adaptivní max-width contentu:
   // < 720 px → 100% (mobil)
+  // < 720 px → 100% (mobil)
   // 720-1100 px → 720 px (tablet)
   // > 1100 px → 880 px (desktop, využije více prostoru)
-  // > 1500 px → 1100 px (velký monitor)
-  const contentMaxWidth = windowWidth >= 1500 ? "1100px"
+  // > 1200 px → 1280 px (wide mode — 2-col layout s postranním panelem)
+  // > 1500 px → 1500 px (velký monitor)
+  const contentMaxWidth = windowWidth >= 1500 ? "1500px"
+    : windowWidth >= 1200 ? "1280px"
     : windowWidth >= 1100 ? "880px"
     : "720px";
   useLayoutEffect(() => {
@@ -13556,7 +13792,13 @@ function App() {
       )}
 
       {/* ── Top container (non-scrollable) — header + input + filter ── */}
-      <div style={{ maxWidth: contentMaxWidth, margin: "0 auto", padding: "0 12px", width: "100%", flexShrink: 0 }}>
+      <div style={{
+        maxWidth: contentMaxWidth, margin: "0 auto",
+        padding: "0 12px", width: "100%", flexShrink: 0,
+        display: windowWidth >= 1200 ? "grid" : "block",
+        gridTemplateColumns: windowWidth >= 1200 ? "60% 40%" : "1fr",
+      }}>
+      <div>{/* Hlavní sloupec — input + filter */}
 
         {showAdmin && currentUser.admin && (
           <AdminPanel
@@ -14603,16 +14845,27 @@ function App() {
           })()}
         </div>
 
+      </div>{/* /hlavní sloupec - input/filter */}
+      {windowWidth >= 1200 && <div />}{/* prázdný druhý sloupec — sidebar je ve scrollable */}
+
       </div>
 
-      {/* ── Scrollable container — obsahuje pouze úkoly, scrolluje se uvnitř ── */}
+      {/* ── Scrollable container — obsahuje úkoly + (na PC) postranní panel ── */}
       <div style={{
         flex: 1,
         overflowY: "auto",
         overflowX: "hidden",
         WebkitOverflowScrolling: "touch",
       }}>
-      <div style={{ maxWidth: contentMaxWidth, margin: "0 auto", padding: "0 12px 140px", width: "100%" }}>
+      <div style={{
+        maxWidth: contentMaxWidth, margin: "0 auto",
+        padding: "0 12px 140px", width: "100%",
+        display: windowWidth >= 1200 ? "grid" : "block",
+        gridTemplateColumns: windowWidth >= 1200 ? "60% 40%" : "1fr",
+        gap: windowWidth >= 1200 ? 0 : 0,
+        alignItems: "start",
+      }}>
+      <div>{/* Hlavní sloupec — úkoly */}
 
         {/* Trash view info banner */}
         {viewStatus === "trash" && filteredTasks.length > 0 && (
@@ -15213,6 +15466,36 @@ function App() {
         }}>
           © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
         </div>
+      </div>{/* /hlavní sloupec úkolů */}
+
+      {/* Postranní panel — jen na PC widescreen (>= 1200 px) */}
+      {windowWidth >= 1200 && currentUser && (
+        <DashboardSidebar
+          reminders={reminders}
+          notes={notes}
+          comments={comments}
+          tasks={tasks}
+          currentUser={currentUser}
+          theme={theme}
+          onOpenReminders={() => setShowReminderSheet(true)}
+          onOpenNotes={() => setShowNotesSheet(true)}
+          onOpenNote={(note) => setEditingNote(note)}
+          onOpenTask={(taskId) => {
+            const t = tasks.find(x => x.id === taskId);
+            if (t) {
+              if (isDeleted(t)) setViewStatus("trash");
+              else if (t.status === "done") setViewStatus("done");
+              else setViewStatus("active");
+            }
+          }}
+          onCreateReminder={() => {
+            setReminderPrefill(null);
+            setShowQuickReminder(true);
+          }}
+          onCreateNote={() => setEditingNote({})}
+        />
+      )}
+
       </div>
       </div>
 
