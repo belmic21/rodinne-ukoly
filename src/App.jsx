@@ -582,14 +582,18 @@ async function sendPushNotification({ recipients, title, message, type = "task",
     // Backward compat — pokud volající poslal starou strukturu (task + assignedTo + createdBy)
     let body;
     if (task && assignedTo) {
-      body = { task: { id: task.id, title: task.title }, assignedTo, createdBy };
+      body = {
+        task: { id: task.id, title: task.title },
+        assignedTo,
+        createdBy,
+        notificationType: type, // pro deeplink — task / reminder / note / comment
+      };
     } else {
       body = {
-        // Edge Function vyžaduje task + assignedTo + createdBy podle aktuální logiky.
-        // Pošleme tam stejnou strukturu, ale title/message přizpůsobíme typu.
         task: { id: payload?.id || `${type}-${Date.now()}`, title: title },
         assignedTo: recipients || [],
-        createdBy: createdBy || "system", // "system" = Edge Function pošle všem v assignedTo (nevynechá tvůrce)
+        createdBy: createdBy || "system",
+        notificationType: type,
       };
     }
 
@@ -618,6 +622,7 @@ async function triggerCompletionNotification(task, completedByUser) {
     task: { id: task.id, title: `✓ ${completedByUser} splnil: ${task.title}` },
     assignedTo: [task.createdBy],
     createdBy: completedByUser,
+    type: "task",
   });
 }
 
@@ -631,58 +636,42 @@ async function triggerCommentNotification(task, comment, commentAuthor) {
   });
   if (recipients.size === 0) return;
 
-  // Krátký výtah komentáře (max 100 znaků)
-  const excerpt = (comment.content || "").substring(0, 100);
   return sendPushNotification({
     task: { id: task.id, title: `💬 ${commentAuthor} komentoval: ${task.title}` },
     assignedTo: Array.from(recipients),
     createdBy: commentAuthor,
+    type: "comment", // deeplink povede na úkol s otevřeným komentem
   });
 }
 
 // Trigger push při nové sdílené poznámce
 async function triggerNoteNotification(note) {
-  // Recipients: kdo má v sharedWith (nebo "*" = všichni mimo tvůrce)
   if (!Array.isArray(note.sharedWith) || note.sharedWith.length === 0) return;
-  // sharedWith = ["*"] znamená všechny — Edge Function má usersList? Ne. Klient ví kdo je v rodině.
-  // Edge Function vynechá tvůrce, ale potřebujeme jí předat seznam jmen.
-  // Pokud je "*", musíme předat všechny ostatní uživatele.
   let recipients = note.sharedWith.filter(n => n !== "*");
-  if (note.sharedWith.includes("*")) {
-    // V tomto případě poslat všem zaregistrovaným users (klient ví kdo) — ale tady to nevíme,
-    // spolehneme se na to že DB push_subscriptions obsahuje pouze platné uživatele.
-    // Edge Function načte všechny push_subscriptions s user_name v recipients.
-    // Workaround: necháme klienta předat všechny ostatní uživatele.
-    // → Ale klient nemá users seznam v této funkci. Řešení: caller předá users.
-    // Pro jednoduchost: pokud "*", předáme jen ty co jsou v sharedWith mimo *. Pokud je tam jen *, neposíláme.
-    // Lepší způsob: caller (App.jsx) překóduje "*" na konkrétní jména PŘED voláním.
-  }
   if (recipients.length === 0) return;
 
-  const title = `📝 ${note.createdBy} ti nasdílel poznámku`;
   return sendPushNotification({
     task: { id: note.id, title: note.title || "Nová sdílená poznámka" },
     assignedTo: recipients,
     createdBy: note.createdBy,
+    type: "note", // deeplink povede do poznámek na konkrétní note
   });
 }
 
 // Trigger push pro reminder
 async function triggerReminderNotification(reminder) {
-  // Recipients: vlastník + sdílení uživatelé
   const recipients = new Set([reminder.createdBy]);
   if (Array.isArray(reminder.sharedWith)) {
     reminder.sharedWith.forEach(name => {
       if (name && name !== "*") recipients.add(name);
     });
-    // "*" handle: pokud je tam *, push se rozešle všem v "recipients" (= jen vlastník + jména v sharedWith)
-    // Pro plné "*" (všichni v rodině) musí caller přidat všechny user names.
   }
 
   return sendPushNotification({
     task: { id: reminder.id, title: `🔔 ${reminder.text}` },
     assignedTo: Array.from(recipients),
-    createdBy: "system", // = Edge Function pošle všem v assignedTo (nevynechá nikoho)
+    createdBy: "system",
+    type: "reminder", // deeplink povede do připomínek
   });
 }
 
@@ -13923,6 +13912,72 @@ function App() {
     });
     return counts;
   }, [countTasks]);
+
+  // ── Deeplink handler ──
+  // Když přijde notifikace přes Telegram/email, klik na tlačítko otevře:
+  //   https://rodinne-ukoly.vercel.app/?open=task:123
+  //   https://rodinne-ukoly.vercel.app/?open=reminder:45
+  //   https://rodinne-ukoly.vercel.app/?open=note:67
+  //   https://rodinne-ukoly.vercel.app/?open=comment:89  (komentář → otevře úkol)
+  //
+  // Tento effect počká až jsou data načtená (tasks/notes/reminders) a otevře
+  // odpovídající entitu. Pak vyčistí URL parametr aby se to neopakovalo na refresh.
+  const deeplinkProcessedRef = useRef(false);
+  useEffect(() => {
+    if (deeplinkProcessedRef.current) return;
+    if (!currentUser) return;
+    if (loading) return;
+    // Ujistíme se že máme data — alespoň tasks (notes/reminders se mohou ještě dotahovat)
+    if (!Array.isArray(tasks)) return;
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const openParam = params.get("open");
+      if (!openParam) return;
+
+      const [type, rawId] = openParam.split(":");
+      if (!type || !rawId) {
+        deeplinkProcessedRef.current = true;
+        return;
+      }
+      const id = decodeURIComponent(rawId);
+
+      // Otevřít položku podle typu
+      if (type === "task" || type === "comment") {
+        // Najdi úkol — ID může být string i number, srovnáváme jako string
+        const taskExists = tasks.some(t => String(t.id) === id);
+        if (taskExists) {
+          // Reset filters aby byl úkol viditelný (možná je v koši, splněný atd.)
+          setViewStatus("all");
+          setHighlightedTaskId(id);
+          // setHighlightedTaskId spustí scrollIntoView v TaskCard useEffect
+        }
+      } else if (type === "reminder") {
+        // Otevři reminder sheet — uživatel uvidí svou připomínku
+        setShowReminderSheet(true);
+      } else if (type === "note") {
+        // Otevři danou poznámku v editoru
+        const note = (notes || []).find(n => String(n.id) === id);
+        if (note) {
+          setEditingNote(note);
+        } else {
+          // Pokud notes nemáme načtené nebo poznámka neexistuje, otevři aspoň seznam
+          setShowNotesSheet(true);
+        }
+      }
+
+      // Vyčisti URL parametr (history.replaceState — nezpůsobí navigaci)
+      params.delete("open");
+      const newSearch = params.toString();
+      const newUrl = window.location.pathname + (newSearch ? "?" + newSearch : "") + window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+
+      deeplinkProcessedRef.current = true;
+    } catch (e) {
+      console.warn("Deeplink handler failed:", e);
+      deeplinkProcessedRef.current = true;
+    }
+  }, [currentUser, loading, tasks, notes]);
 
   // ── Render ──
 
