@@ -4662,12 +4662,16 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           </div>
         )}
 
-        {/* Komentáře + Edit/Delete buttons — komentáře skryté u osobních úkolů (self-created + self-assigned) */}
+        {/* Komentáře + Edit/Delete buttons — různé větve podle typu úkolu */}
         {(() => {
           const isPersonalMonolog =
             task.createdBy === currentUser.name &&
             task.assignTo === "self" &&
             (task.assignedTo || []).every(n => n === currentUser.name);
+          // Úkol od jiného uživatele — já jsem v assignedTo, ale nejsem autor
+          const isFromOther = task.createdBy && task.createdBy !== currentUser.name &&
+            Array.isArray(task.assignedTo) && task.assignedTo.includes(currentUser.name);
+
           if (isPersonalMonolog) {
             // Just show the Edit + Delete buttons, no comments/reactions
             return (
@@ -4703,19 +4707,78 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               </div>
             );
           }
+
+          // Vždy renderuj TaskComments — komentáře jsou důležitá funkce.
+          // ALE: pod komentáři přidáme separate akční řádek "✏️ Upravit / ❌ Odmítnout / 🗑 Smazat"
+          // s textovými popisky, aby bylo jasné co dělají (ne jen malé ikonky v rohu reakcí).
           return (
-            <TaskComments
-              task={task}
-              comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
-              currentUser={currentUser}
-              onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
-              onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
-              onMarkSeen={onMarkCommentsSeen}
-              onEdit={() => setIsEditing(true)}
-              onDelete={onDelete ? () => onDelete(task.id) : null}
-              onReject={onReject ? () => onReject(task.id) : null}
-              theme={theme}
-            />
+            <>
+              <TaskComments
+                task={task}
+                comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
+                currentUser={currentUser}
+                onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
+                onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
+                onMarkSeen={onMarkCommentsSeen}
+                onEdit={null /* skrýt malou ikonu v rohu reakcí — máme dolní akční řádek */}
+                onDelete={null /* dtto */}
+                onReject={null}
+                theme={theme}
+              />
+              {/* Akční řádek s popisky pod komentáři */}
+              {task.status !== "deleted" && (
+                <div style={{
+                  display: "flex", gap: "6px", marginTop: "10px",
+                  paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
+                  justifyContent: "flex-end", flexWrap: "wrap",
+                }}>
+                  <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
+                    ...buttonStyle(),
+                    padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                    background: theme.accentSoft, color: theme.accent,
+                    border: `1px solid ${theme.accentBorder}`,
+                    borderRadius: "12px",
+                    display: "inline-flex", alignItems: "center", gap: "4px",
+                  }}>
+                    ✏️ Upravit
+                  </button>
+                  {/* ❌ Odmítnout — jen u cizích úkolů */}
+                  {isFromOther && onReject && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Odmítnout úkol "${task.title}"?\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`)) {
+                          onReject(task.id);
+                        }
+                      }}
+                      title={`Odmítnout úkol — ${task.createdBy} se to dozví`}
+                      style={{
+                        ...buttonStyle(),
+                        padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                        background: `${theme.orange || "#f59e0b"}15`,
+                        color: theme.orange || "#f59e0b",
+                        border: `1px solid ${theme.orange || "#f59e0b"}40`,
+                        borderRadius: "12px",
+                        display: "inline-flex", alignItems: "center", gap: "4px",
+                      }}
+                    >
+                      ❌ Odmítnout
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.red}08`, color: theme.red,
+                      border: `1px solid ${theme.red}25`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      🗑 Smazat
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           );
         })()}
         </div>
