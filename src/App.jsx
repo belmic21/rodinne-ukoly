@@ -10543,23 +10543,14 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
     setSaving(false);
   };
 
-  const SectionRow = ({ icon, title, status, statusColor, children }) => (
-    <div style={{
-      ...cardStyle(theme), padding: "14px",
-      marginBottom: 12,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 22 }}>{icon}</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{title}</div>
-          <div style={{ fontSize: 11, color: statusColor || theme.textSub, marginTop: 2 }}>
-            {status}
-          </div>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
+  // Pomocný styl pro každou kartu kanálu (push/telegram/email).
+  // POZOR: NEdefinovat tady jako sub-komponentu! Při každém re-renderu (např. změna emailu)
+  // by se SectionRow recreated → input ztratí focus → user může napsat jen 1 znak.
+  // Použijeme přímý JSX inline níže.
+  const sectionWrap = {
+    ...cardStyle(theme), padding: "14px",
+    marginBottom: 12,
+  };
 
   if (loading) {
     return (
@@ -10599,12 +10590,16 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
         </div>
 
         {/* PUSH */}
-        <SectionRow
-          icon="🔔"
-          title="Push (browser)"
-          status={prefs?.push_enabled !== false ? "Aktivní — okamžité notifikace přes browser" : "Vypnuto"}
-          statusColor={prefs?.push_enabled !== false ? theme.green : theme.textSub}
-        >
+        <div style={sectionWrap}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 22 }}>🔔</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>Push (browser)</div>
+              <div style={{ fontSize: 11, color: prefs?.push_enabled !== false ? theme.green : theme.textSub, marginTop: 2 }}>
+                {prefs?.push_enabled !== false ? "Aktivní — okamžité notifikace přes browser" : "Vypnuto"}
+              </div>
+            </div>
+          </div>
           <button onClick={togglePush} disabled={saving} style={{
             ...buttonStyle(),
             padding: "8px 14px", fontSize: 12, fontWeight: 700,
@@ -10618,17 +10613,21 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
             ⚠️ iPhone vyžaduje appku přidanou na plochu (Sdílet → Přidat na plochu)
             a otevřenou jako PWA. Pokud nefungují, zkus Telegram nebo email.
           </div>
-        </SectionRow>
+        </div>
 
         {/* TELEGRAM */}
-        <SectionRow
-          icon="📱"
-          title="Telegram"
-          status={prefs?.telegram_chat_id
-            ? "✅ Spárováno — notifikace jdou do Telegramu"
-            : "Nepřipojeno"}
-          statusColor={prefs?.telegram_chat_id ? theme.green : theme.textSub}
-        >
+        <div style={sectionWrap}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 22 }}>📱</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>Telegram</div>
+              <div style={{ fontSize: 11, color: prefs?.telegram_chat_id ? theme.green : theme.textSub, marginTop: 2 }}>
+                {prefs?.telegram_chat_id
+                  ? "✅ Spárováno — notifikace jdou do Telegramu"
+                  : "Nepřipojeno"}
+              </div>
+            </div>
+          </div>
           {prefs?.telegram_chat_id ? (
             <button onClick={unpairTelegram} disabled={saving} style={{
               ...buttonStyle(),
@@ -10676,19 +10675,23 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
           <div style={{ fontSize: 10, color: theme.textSub, marginTop: 8, lineHeight: 1.5 }}>
             Telegram funguje vždy — i když máš appku zavřenou. Doporučeno pro iPhone uživatele.
           </div>
-        </SectionRow>
+        </div>
 
         {/* EMAIL */}
-        <SectionRow
-          icon="✉️"
-          title="Email"
-          status={prefs?.email
-            ? (prefs?.email_enabled
-              ? `✅ Aktivní — ${prefs.email}`
-              : `⏸ Vypnuto — ${prefs.email}`)
-            : "Není nastaven"}
-          statusColor={prefs?.email && prefs?.email_enabled ? theme.green : theme.textSub}
-        >
+        <div style={sectionWrap}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 22 }}>✉️</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>Email</div>
+              <div style={{ fontSize: 11, color: prefs?.email && prefs?.email_enabled ? theme.green : theme.textSub, marginTop: 2 }}>
+                {prefs?.email
+                  ? (prefs?.email_enabled
+                    ? `✅ Aktivní — ${prefs.email}`
+                    : `⏸ Vypnuto — ${prefs.email}`)
+                  : "Není nastaven"}
+              </div>
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <input
               type="email"
@@ -10736,7 +10739,7 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
           <div style={{ fontSize: 10, color: theme.textSub, marginTop: 8, lineHeight: 1.5 }}>
             Email se hodí pokud nechceš push ani Telegram — funguje vždy a všude.
           </div>
-        </SectionRow>
+        </div>
 
         <div style={{
           marginTop: 14, padding: "10px 12px",
