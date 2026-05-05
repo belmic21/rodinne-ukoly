@@ -4307,7 +4307,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -6662,6 +6662,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onDelete={onDelete ? (taskId) => runWithAnimation("delete", () => onDelete(taskId)) : null}
           onRestore={onRestore}
           onPermanentDelete={onPermanentDelete}
+          onReject={onReject}
+          isFromOther={isFromOther}
           theme={theme}
           showCompleteBanner={allChecked}
           onClose={() => setIsOpen(false)}
@@ -17113,11 +17115,96 @@ class ErrorBoundary extends Component {
             >
               🧹 Vyčistit cache a načíst znovu
             </button>
+            <button
+              onClick={() => {
+                const subject = encodeURIComponent(`[Rodinné úkoly] Chyba: ${errorMsg.slice(0, 80)}`);
+                const buildVer = (typeof APP_VERSION !== "undefined") ? APP_VERSION : "neznámá";
+                const userAgent = (typeof navigator !== "undefined") ? navigator.userAgent : "neznámý";
+                const url = (typeof window !== "undefined") ? window.location.href : "neznámá";
+                const fullBody =
+`Ahoj Michale,
+
+V appce mi vyskočila chyba.
+
+═══ DETAIL CHYBY ═══
+${errorMsg}
+
+═══ STACK ═══
+${stack || "(žádný stack)"}
+
+═══ COMPONENT STACK ═══
+${componentStack || "(žádný)"}
+
+═══ KONTEXT ═══
+Verze: v${buildVer}
+URL: ${url}
+Čas: ${new Date().toLocaleString("cs-CZ")}
+User-Agent: ${userAgent}
+
+═══ CO JSEM DĚLAL ═══
+(napiš stručně co se stalo před chybou)
+
+
+`;
+                const body = encodeURIComponent(fullBody);
+                window.location.href = `mailto:belohlav.michal@gmail.com?subject=${subject}&body=${body}`;
+              }}
+              style={{
+                padding: "10px 16px",
+                background: "#fef3c7",
+                color: "#92400e",
+                border: "1px solid #fbbf24",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              📧 Odeslat hlášení Michalovi
+            </button>
+            <button
+              onClick={() => {
+                const buildVer = (typeof APP_VERSION !== "undefined") ? APP_VERSION : "neznámá";
+                const userAgent = (typeof navigator !== "undefined") ? navigator.userAgent : "neznámý";
+                const url = (typeof window !== "undefined") ? window.location.href : "neznámá";
+                const text =
+`[Rodinné úkoly] Chyba ${new Date().toISOString()}
+v${buildVer} | ${url}
+UA: ${userAgent}
+
+${errorMsg}
+
+STACK:
+${stack || "(žádný)"}
+
+COMPONENT STACK:
+${componentStack || "(žádný)"}`;
+                if (navigator.clipboard) {
+                  navigator.clipboard.writeText(text).then(
+                    () => alert("✅ Detail chyby zkopírován do schránky."),
+                    () => alert("⚠ Nepodařilo se zkopírovat do schránky.")
+                  );
+                } else {
+                  alert("⚠ Schránka není dostupná v tomto prohlížeči.");
+                }
+              }}
+              style={{
+                padding: "8px 16px",
+                background: "transparent",
+                color: "#6b7280",
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              📋 Zkopírovat detail do schránky
+            </button>
           </div>
 
-          <details style={{ fontSize: 12, color: "#6b7280" }}>
+          <details open style={{ fontSize: 12, color: "#6b7280" }}>
             <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
-              Technické detaily (pošli Michalovi)
+              Technické detaily
             </summary>
             <div style={{
               background: "#f9fafb",
