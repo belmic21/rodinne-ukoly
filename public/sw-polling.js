@@ -1,168 +1,85 @@
-/* ═══════════════════════════════════════════════════════
-   SERVICE WORKER — Push notifications + polling fallback
-   ═══════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════
+// SERVICE WORKER — push handler + polling fallback + deeplink podpora
+//
+// Zpracovává push notifikace ze serveru. Klik na notifikaci otevře:
+//   - URL z payload.data.url (deeplink jako /?open=task:123)
+//   - nebo "/" pokud není
+// ════════════════════════════════════════════════════════
 
-const SUPABASE_URL = "__SUPABASE_URL__";
-const SUPABASE_KEY = "__SUPABASE_KEY__";
-const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const SW_VERSION = "v4-deeplinks";
 
-// ─── Push notification handler ───
-self.addEventListener("push", (event) => {
-  let data = { title: "📋 Nový úkol", body: "" };
-
-  try {
-    if (event.data) {
-      const parsed = event.data.json();
-      data = {
-        title: parsed.title || data.title,
-        body: parsed.body || data.body,
-        icon: parsed.icon || "/icon-192.png",
-        badge: parsed.badge || "/icon-192.png",
-        tag: parsed.tag || "task-notification",
-        data: parsed.data || { url: "/" },
-      };
-    }
-  } catch (e) {
-    // If not JSON, use as text
-    if (event.data) {
-      data.body = event.data.text();
-    }
-  }
-
-  event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      icon: data.icon || "/icon-192.png",
-      badge: data.badge || "/icon-192.png",
-      tag: data.tag || "task-notification",
-      renotify: true,
-      vibrate: [200, 100, 200],
-      data: data.data || { url: "/" },
-      actions: [
-        { action: "open", title: "Otevřít" },
-      ],
-    })
-  );
+self.addEventListener("install", (event) => {
+  console.log("[SW]", SW_VERSION, "installing");
+  self.skipWaiting();
 });
 
-// ─── Notification click handler ───
+self.addEventListener("activate", (event) => {
+  console.log("[SW]", SW_VERSION, "activated");
+  event.waitUntil(self.clients.claim());
+});
+
+// ─── Push notifikace ───
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    payload = { title: "Rodinné úkoly", body: event.data.text() };
+  }
+
+  const title = payload.title || "Rodinné úkoly";
+  const options = {
+    body: payload.body || "",
+    icon: payload.icon || "/icon-192.png",
+    badge: payload.badge || "/icon-192.png",
+    tag: payload.tag,
+    data: payload.data || {},
+    requireInteraction: false,
+    vibrate: [100, 50, 100],
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// ─── Klik na notifikaci ───
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
+  // Cílová URL — z payload.data.url (deeplink), default "/"
+  const data = event.notification.data || {};
+  const targetUrl = data.url || "/";
+
+  // Pokud je už otevřené okno appky, fokusneme ho a navigujeme tam.
+  // Jinak otevřeme nové okno.
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      // Najdi okno se stejným origin
       for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && "focus" in client) {
-          return client.focus();
-        }
+        try {
+          const clientUrl = new URL(client.url);
+          const targetUrlAbs = new URL(targetUrl, self.location.origin);
+          if (clientUrl.origin === targetUrlAbs.origin) {
+            // Nasměruj na správnou URL (s deeplink parametrem) a fokus
+            return client.navigate(targetUrlAbs.pathname + targetUrlAbs.search + targetUrlAbs.hash)
+              .then((c) => (c || client).focus())
+              .catch(() => client.focus());
+          }
+        } catch {}
       }
-      if (clients.openWindow) {
-        return clients.openWindow("/");
+      // Žádné okno není otevřené — otevři nové
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
       }
     })
   );
 });
 
-// ─── Polling fallback (for Android + when push unavailable) ───
-
-async function getFromCache(key) {
-  try {
-    const cache = await caches.open("ft-sw-data");
-    const response = await cache.match(new Request(`/__sw_data__/${key}`));
-    if (response) return await response.text();
-    return null;
-  } catch (e) { return null; }
-}
-
-async function setInCache(key, value) {
-  try {
-    const cache = await caches.open("ft-sw-data");
-    await cache.put(new Request(`/__sw_data__/${key}`), new Response(value));
-  } catch (e) {}
-}
-
-async function checkForNewTasks() {
-  try {
-    const userJson = await getFromCache("ft_user");
-    if (!userJson) return;
-    const user = JSON.parse(userJson);
-    if (!user || !user.name) return;
-
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/tasks?status=eq.active&order=created_at.desc&limit=50`,
-      {
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Authorization": `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    if (!response.ok) return;
-    const tasks = await response.json();
-
-    const unreadTasks = tasks.filter(task => {
-      const seenBy = task.seen_by || [];
-      const assignedTo = task.assigned_to || [];
-      return assignedTo.includes(user.name) && task.created_by !== user.name && !seenBy.includes(user.name);
-    });
-
-    if (unreadTasks.length === 0) return;
-
-    const lastCount = parseInt(await getFromCache("ft_last_notified") || "0");
-    if (unreadTasks.length <= lastCount) return;
-
-    const latest = unreadTasks[0];
-    const title = unreadTasks.length === 1
-      ? `📋 Nový úkol od ${latest.created_by}`
-      : `📋 ${unreadTasks.length} nových úkolů`;
-    const body = unreadTasks.length === 1
-      ? latest.title
-      : unreadTasks.slice(0, 3).map(t => t.title).join(", ");
-
-    await self.registration.showNotification(title, {
-      body, icon: "/icon-192.png", badge: "/icon-192.png",
-      tag: "new-tasks", renotify: true, vibrate: [200, 100, 200],
-      data: { url: "/" },
-    });
-
-    await setInCache("ft_last_notified", String(unreadTasks.length));
-  } catch (e) {
-    console.warn("SW poll failed:", e);
-  }
-}
-
-// ─── Message handler (sync user session from app) ───
+// ─── Polling fallback (Brave / iOS bez push) ───
+// Klient v App.jsx posílá ping přes postMessage; SW jen drží registraci aktivní.
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "SET_USER") {
-    setInCache("ft_user", JSON.stringify(event.data.user));
+  if (event.data?.type === "ping") {
+    event.ports[0]?.postMessage({ type: "pong", version: SW_VERSION });
   }
-  if (event.data?.type === "CLEAR_USER") {
-    setInCache("ft_user", "");
-    setInCache("ft_last_notified", "0");
-  }
-  if (event.data?.type === "TASKS_SEEN") {
-    setInCache("ft_last_notified", "0");
-  }
-});
-
-// ─── Lifecycle ───
-let pollTimer = null;
-
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  setTimeout(() => checkForNewTasks(), 30000);
-  pollTimer = setInterval(() => checkForNewTasks(), POLL_INTERVAL);
-}
-
-self.addEventListener("install", () => self.skipWaiting());
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
-  startPolling();
-});
-
-self.addEventListener("fetch", () => {
-  if (!pollTimer) startPolling();
 });
