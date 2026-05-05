@@ -4134,7 +4134,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
    TASK COMMENTS — chat panel shown inside TaskDetail
    ═══════════════════════════════════════════════════════ */
 
-function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, onMarkSeen, onEdit, onDelete, theme }) {
+function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, onMarkSeen, onEdit, onDelete, onReject, theme }) {
   const [input, setInput] = useState("");
 
   // Separate comments from reactions
@@ -4208,7 +4208,8 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
         })}
         {/* Spacer pushes action buttons to the right */}
         <span style={{ flex: 1 }} />
-        {/* Edit + Delete — compact, next to reactions */}
+        {/* Edit + Delete — compact, next to reactions.
+            Reject (❌) NENÍ tady — je v hlavní action liště úkolu, jako velké tlačítko. */}
         {onEdit && task.status !== "deleted" && (
           <button onClick={onEdit} title="Upravit úkol" style={{
             ...buttonStyle(),
@@ -4712,6 +4713,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               onMarkSeen={onMarkCommentsSeen}
               onEdit={() => setIsEditing(true)}
               onDelete={onDelete ? () => onDelete(task.id) : null}
+              onReject={onReject ? () => onReject(task.id) : null}
               theme={theme}
             />
           );
@@ -6253,15 +6255,42 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {task.createdBy &&
              task.createdBy !== currentUser.name &&
              task.assignedTo?.includes(currentUser.name) && (
-              <span title={`Zadal(a) ti: ${task.createdBy}`} style={{
-                fontSize: "10px", fontWeight: 700,
-                color: theme.accent,
-                background: theme.accentSoft,
-                padding: "1px 6px", borderRadius: "10px",
-                border: `1px solid ${theme.accentBorder}`,
-                display: "inline-flex", alignItems: "center", gap: "3px",
-              }}>
-                📥 od {task.createdBy}
+              <span title={`Zadal(a) ti: ${task.createdBy} — klikni pro možnosti`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (task.status === "deleted") return; // v koši není smysl
+                  // Rychlé menu: Odmítnout / Blokovat
+                  const choice = window.prompt(
+                    `Co chceš udělat s úkolem od ${task.createdBy}?\n\n` +
+                    `1 — ❌ Odmítnout úkol (autor uvidí, že jsi odmítl/a)\n` +
+                    `2 — 🔇 Ztlumit ${task.createdBy} (úkoly chodí, notifikace ne)\n` +
+                    `3 — 🚫 Blokovat ${task.createdBy} (nemůže ti zadávat úkoly)\n\n` +
+                    `Napiš 1, 2 nebo 3 (nebo zruš):`
+                  );
+                  if (choice === "1") {
+                    if (onReject && confirm(`Odmítnout úkol "${task.title}"?\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`)) {
+                      onReject(task.id);
+                    }
+                  } else if (choice === "2") {
+                    if (onBlockUser && confirm(`Ztlumit ${task.createdBy}?\n\nÚkoly od něj budeš dál vidět, ale nedostaneš notifikace (push/Telegram/email).`)) {
+                      onBlockUser(task.createdBy, "mute");
+                    }
+                  } else if (choice === "3") {
+                    if (onBlockUser && confirm(`Blokovat ${task.createdBy}?\n\nNebude ti moci zadávat úkoly. Můžeš to kdykoliv zrušit v menu Blokovaní a ztlumení.`)) {
+                      onBlockUser(task.createdBy, "block");
+                    }
+                  }
+                }}
+                style={{
+                  fontSize: "10px", fontWeight: 700,
+                  color: theme.accent,
+                  background: theme.accentSoft,
+                  padding: "2px 8px", borderRadius: "10px",
+                  border: `1px solid ${theme.accentBorder}`,
+                  display: "inline-flex", alignItems: "center", gap: "3px",
+                  cursor: "pointer",
+                }}>
+                📥 od {task.createdBy} ▾
               </span>
             )}
 
