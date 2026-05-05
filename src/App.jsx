@@ -3111,7 +3111,11 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
   );
 
   return (
-    <div style={{ width: "100%", paddingLeft: 16 }}>
+    <div style={{
+      width: "100%", paddingLeft: 16,
+      position: "sticky", top: 0,
+      maxHeight: "calc(100vh - 100px)", overflowY: "auto",
+    }}>
       {/* Reminders widget */}
       <Widget>
         <WidgetHeader
@@ -6732,6 +6736,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             setIsTypingPersist(true);
             if (onTypingChange) onTypingChange(true);
           }
+          // Klik na Podrobnosti zavře všechny popovery (priorita = co user vidí)
+          setOpenSegment(null);
         }} title={showFull ? "Skrýt podrobnosti" : "Podrobnosti"} style={{
           ...buttonStyle(), width: "32px", height: "32px",
           background: showFull ? theme.accent : theme.inputBg,
@@ -6925,23 +6931,25 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
 
         // Helper button
         const IconButton = ({ active, color, children, onClick, segmentKey, title, isOpen }) => {
-          // Otevřený popover má prioritu — viditelný outline silnější než active
-          // Pokud popover otevřený A není ještě "active" (vybraná hodnota) → outline ring
-          // Pokud i active i isOpen → highlight remains active styling
-          const showOpen = isOpen && !active;
+          // Priorita: otevřený popover = plný highlight (priorita = co user vidí).
+          // Vybraná hodnota (bez open) = pohasnutý styling (jen ikona barevná, klidnější bg).
+          // Žádné z toho = neutrální.
+          const showOpen = !!isOpen;
+          const showActive = !!active && !isOpen;
           return (
           <div style={{ position: "relative", flex: 1 }}>
             <button type="button" onClick={onClick}
               title={title}
               style={{
                 width: "100%", height: "35px",
-                background: active ? `${color}15` : showOpen ? `${color}08` : theme.inputBg,
-                color: active ? color : showOpen ? color : theme.textMid,
-                border: `1.5px solid ${active ? color : showOpen ? color : theme.inputBorder}`,
+                background: showOpen ? `${color}20` : showActive ? theme.inputBg : theme.inputBg,
+                color: showOpen ? color : showActive ? color : theme.textMid,
+                opacity: showActive ? 0.7 : 1,
+                border: `1.5px solid ${showOpen ? color : showActive ? `${color}40` : theme.inputBorder}`,
                 borderRadius: "10px",
                 fontSize: "16px", fontWeight: 700,
                 cursor: "pointer", fontFamily: FONT,
-                boxShadow: active ? `0 1px 4px ${color}25` : showOpen ? `0 0 0 2px ${color}30` : "none",
+                boxShadow: showOpen ? `0 2px 8px ${color}30` : "none",
                 transition: "all 0.15s",
               }}>
               {children}
@@ -10559,7 +10567,16 @@ function NotificationPanel({ currentUser, onClose, theme }) {
   const statusColor = (val) => val?.startsWith("✅") ? theme.green : theme.red;
 
   return (
-    <div style={{ ...cardStyle(theme), padding: "16px", marginBottom: "14px", animation: "slideUp 0.2s" }}>
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "10vh", paddingLeft: 12, paddingRight: 12,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        ...cardStyle(theme), padding: "16px",
+        width: "100%", maxWidth: 560, maxHeight: "85vh",
+        overflowY: "auto", animation: "slideUp 0.2s",
+      }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <span style={{ fontSize: "14px", fontWeight: 700 }}>🔔 Diagnostika notifikací</span>
         <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "18px" }}>×</button>
@@ -10662,6 +10679,7 @@ function NotificationPanel({ currentUser, onClose, theme }) {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -13274,6 +13292,9 @@ function App() {
     }));
 
     const combined = [...progressCards, ...doneCards].sort((a, b) => b.sortTime - a.sortTime);
+    if (combined.length > 0) {
+      items.push({ type: "section_header_done", key: "section-done", count: combined.length });
+    }
     items.push(...combined);
 
     deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
@@ -14963,11 +14984,43 @@ function App() {
       }}>
       <div>{/* Hlavní sloupec — úkoly */}
 
-        {/* Trash view info banner */}
-        {viewStatus === "trash" && filteredTasks.length > 0 && (
+        {/* Trash view header — prominentní záhlaví s tlačítkem zavřít */}
+        {viewStatus === "trash" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            marginBottom: 10, padding: "12px 14px",
+            background: `${theme.red}10`, border: `1px solid ${theme.red}30`,
+            borderRadius: 10,
+          }}>
+            <span style={{ fontSize: 22 }}>🗑</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: theme.red,
+                textTransform: "uppercase", letterSpacing: "0.5px",
+              }}>
+                Koš
+              </div>
+              <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
+                Smazané položky se trvale odstraní po 30 dnech
+              </div>
+            </div>
+            <button onClick={() => setViewStatus(defaultView)} style={{
+              ...buttonStyle(),
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: theme.bg, color: theme.text,
+              border: `1.5px solid ${theme.cardBorder}`,
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = theme.inputBg; }}
+              onMouseLeave={e => { e.currentTarget.style.background = theme.bg; }}>
+              ✕ Zavřít koš
+            </button>
+          </div>
+        )}
+
+        {/* Trash view info banner — jen pro admin tlačítko Vyprázdnit */}
+        {viewStatus === "trash" && filteredTasks.length > 0 && currentUser?.admin && (
           <div style={{
             margin: "0 0 8px 0",
-            padding: "10px 12px",
+            padding: "8px 12px",
             background: theme.inputBg,
             border: `1px solid ${theme.cardBorder}`,
             borderRadius: 8,
@@ -14977,9 +15030,8 @@ function App() {
             alignItems: "center",
             gap: 10,
             flexWrap: "wrap",
+            justifyContent: "flex-end",
           }}>
-            <span>ℹ️ Úkoly v koši se automaticky smažou po 30 dnech.</span>
-            {currentUser?.admin && (
               <button
                 onClick={() => {
                   const trashed = tasks.filter(t => t.status === "deleted");
@@ -15012,7 +15064,6 @@ function App() {
               >
                 Vyprázdnit koš
               </button>
-            )}
           </div>
         )}
 
@@ -15340,6 +15391,31 @@ function App() {
                         marginLeft: "auto",
                       }}>
                         bez termínu, vytvořené před více než 7 dny
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_header_done") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "20px 0 6px",
+                      padding: "10px 12px",
+                      background: `${theme.green}08`,
+                      border: `1px solid ${theme.green}30`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.green, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>
+                        ✓ Nedávno splněné ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        za posledních 24 h
                       </span>
                     </div>
                   );
