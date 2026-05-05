@@ -122,9 +122,17 @@ function formatFullDate(iso) {
   });
 }
 
+// Zapomenuté = aktivní úkol bez termínu vytvořený PŘED VÍCE NEŽ 30 DNY
 function isForgotten(task) {
   return !isDone(task) && !task.dueDate && !task.showFrom &&
-    (Date.now() - new Date(task.createdAt).getTime()) / 86400000 > 7;
+    (Date.now() - new Date(task.createdAt).getTime()) / 86400000 > 30;
+}
+
+// Starší = aktivní úkol bez termínu vytvořený 7-30 dní zpátky (mezi aktivními a zapomenutými)
+function isStale(task) {
+  if (isDone(task) || task.dueDate || task.showFrom) return false;
+  const ageDays = (Date.now() - new Date(task.createdAt).getTime()) / 86400000;
+  return ageDays > 7 && ageDays <= 30;
 }
 
 function addDays(n) {
@@ -815,6 +823,19 @@ const THEMES = {
 
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,700&display=swap');
+html, body {
+  /* Safe area pro iPhone notch — viewport-fit=cover v index.html doplní funkčnost */
+  -webkit-tap-highlight-color: transparent;
+}
+@supports (padding: env(safe-area-inset-top)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    box-sizing: border-box;
+  }
+}
 @keyframes glow {
   0%, 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.3); }
   50% { box-shadow: 0 0 0 7px rgba(52,211,153,0); }
@@ -1157,6 +1178,61 @@ async function checkDbSchema() {
 /* ═══════════════════════════════════════════════════════
    API (with offline fallback)
    ═══════════════════════════════════════════════════════ */
+
+// ═══════════════════════════════════════════════════════
+//  NOTIFICATION PREFS — push / telegram / email volby
+// ═══════════════════════════════════════════════════════
+
+async function apiLoadNotificationPrefs(userName) {
+  if (!userName) return null;
+  try {
+    const { data, error } = await supabase
+      .from("user_notification_prefs")
+      .select("*")
+      .eq("user_name", userName)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiLoadNotificationPrefs", e);
+    return null;
+  }
+}
+
+async function apiUpsertNotificationPrefs(userName, patch) {
+  if (!userName) return null;
+  try {
+    // Upsert — pokud neexistuje, vytvoří. Pokud existuje, updatne.
+    const { data, error } = await supabase
+      .from("user_notification_prefs")
+      .upsert({
+        user_name: userName,
+        ...patch,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_name" })
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiUpsertNotificationPrefs", e, { userName, patch });
+    return null;
+  }
+}
+
+// Vygeneruje 6-místný kód a uloží ho do prefs s 10min expirací.
+// Užije se pro Telegram pairing — user pošle bot kód, bot si najde user_name přes kód.
+async function apiGenerateTelegramPairingCode(userName) {
+  if (!userName) return null;
+  const code = String(Math.floor(100000 + Math.random() * 900000)); // 100000-999999
+  const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const result = await apiUpsertNotificationPrefs(userName, {
+    telegram_pairing_code: code,
+    telegram_pairing_expires: expires,
+  });
+  if (!result) return null;
+  return code;
+}
 
 async function apiLoadUsers() {
   try {
@@ -10360,6 +10436,321 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
   );
 }
 
+/* ═══════════════════════════════════════════════════════
+   NOTIFICATION PREFS — modal pro nastavení Push / Telegram / Email
+   3 kanály doručování. User si volí jeden nebo více.
+   ═══════════════════════════════════════════════════════ */
+
+function NotificationPrefs({ currentUser, onClose, theme }) {
+  useEscapeKey(onClose);
+
+  const TELEGRAM_BOT = "ukoly21_bot"; // username bota (bez @)
+
+  const [prefs, setPrefs] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [pairingCode, setPairingCode] = useState(null);
+  const [pairingTimer, setPairingTimer] = useState(0);
+  const [emailInput, setEmailInput] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Initial load
+  useEffect(() => {
+    (async () => {
+      const p = await apiLoadNotificationPrefs(currentUser.name);
+      setPrefs(p);
+      setEmailInput(p?.email || "");
+      setLoading(false);
+    })();
+  }, [currentUser.name]);
+
+  // Polling pro Telegram pairing — když user zobrazil kód, čekáme až bot odpoví.
+  // Server zruší pairing_code když ho user pošle bot, a nastaví telegram_chat_id.
+  useEffect(() => {
+    if (!pairingCode) return;
+    const interval = setInterval(async () => {
+      const p = await apiLoadNotificationPrefs(currentUser.name);
+      if (p?.telegram_chat_id) {
+        // Spárováno!
+        setPrefs(p);
+        setPairingCode(null);
+        clearInterval(interval);
+      }
+      setPairingTimer(t => Math.max(0, t - 5));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [pairingCode, currentUser.name]);
+
+  const togglePush = async () => {
+    setSaving(true);
+    const next = !(prefs?.push_enabled ?? true);
+    const updated = await apiUpsertNotificationPrefs(currentUser.name, { push_enabled: next });
+    if (updated) setPrefs(updated);
+    setSaving(false);
+  };
+
+  const startTelegramPairing = async () => {
+    setSaving(true);
+    const code = await apiGenerateTelegramPairingCode(currentUser.name);
+    if (code) {
+      setPairingCode(code);
+      setPairingTimer(600); // 10 min
+    }
+    setSaving(false);
+  };
+
+  const unpairTelegram = async () => {
+    if (!confirm("Opravdu odpojit Telegram?")) return;
+    setSaving(true);
+    const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+      telegram_chat_id: null,
+      telegram_pairing_code: null,
+      telegram_pairing_expires: null,
+    });
+    if (updated) setPrefs(updated);
+    setSaving(false);
+  };
+
+  const saveEmail = async () => {
+    setSaving(true);
+    const email = emailInput.trim();
+    const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+      email: email || null,
+      email_enabled: !!email,
+    });
+    if (updated) setPrefs(updated);
+    setSaving(false);
+  };
+
+  const toggleEmail = async () => {
+    if (!prefs?.email) return;
+    setSaving(true);
+    const next = !prefs?.email_enabled;
+    const updated = await apiUpsertNotificationPrefs(currentUser.name, { email_enabled: next });
+    if (updated) setPrefs(updated);
+    setSaving(false);
+  };
+
+  const removeEmail = async () => {
+    if (!confirm("Odstranit email a vypnout email notifikace?")) return;
+    setSaving(true);
+    const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+      email: null, email_enabled: false,
+    });
+    if (updated) {
+      setPrefs(updated);
+      setEmailInput("");
+    }
+    setSaving(false);
+  };
+
+  const SectionRow = ({ icon, title, status, statusColor, children }) => (
+    <div style={{
+      ...cardStyle(theme), padding: "14px",
+      marginBottom: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 22 }}>{icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{title}</div>
+          <div style={{ fontSize: 11, color: statusColor || theme.textSub, marginTop: 2 }}>
+            {status}
+          </div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div onClick={onClose} style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+        zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+        paddingTop: "10vh",
+      }}>
+        <div style={{ ...cardStyle(theme), padding: 20, color: theme.textMid }}>Načítám…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "8vh", paddingLeft: 12, paddingRight: 12,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: theme.bg, borderRadius: 12, padding: 18,
+        width: "100%", maxWidth: 520, maxHeight: "85vh",
+        overflowY: "auto", border: `1px solid ${theme.cardBorder}`,
+        animation: "slideUp 0.2s",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, flex: 1 }}>📢 Doručování notifikací</span>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            cursor: "pointer", fontSize: 20, padding: 0,
+          }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: theme.textMid, marginBottom: 14, lineHeight: 1.5 }}>
+          Vyber jak chceš dostávat notifikace o nových úkolech, komentářích a připomínkách.
+          Můžeš zvolit více kanálů zaráz.
+        </div>
+
+        {/* PUSH */}
+        <SectionRow
+          icon="🔔"
+          title="Push (browser)"
+          status={prefs?.push_enabled !== false ? "Aktivní — okamžité notifikace přes browser" : "Vypnuto"}
+          statusColor={prefs?.push_enabled !== false ? theme.green : theme.textSub}
+        >
+          <button onClick={togglePush} disabled={saving} style={{
+            ...buttonStyle(),
+            padding: "8px 14px", fontSize: 12, fontWeight: 700,
+            background: prefs?.push_enabled !== false ? `${theme.red}10` : `${theme.green}10`,
+            color: prefs?.push_enabled !== false ? theme.red : theme.green,
+            border: `1px solid ${prefs?.push_enabled !== false ? theme.red : theme.green}40`,
+          }}>
+            {prefs?.push_enabled !== false ? "Vypnout" : "Zapnout"}
+          </button>
+          <div style={{ fontSize: 10, color: theme.textSub, marginTop: 8, lineHeight: 1.5 }}>
+            ⚠️ iPhone vyžaduje appku přidanou na plochu (Sdílet → Přidat na plochu)
+            a otevřenou jako PWA. Pokud nefungují, zkus Telegram nebo email.
+          </div>
+        </SectionRow>
+
+        {/* TELEGRAM */}
+        <SectionRow
+          icon="📱"
+          title="Telegram"
+          status={prefs?.telegram_chat_id
+            ? "✅ Spárováno — notifikace jdou do Telegramu"
+            : "Nepřipojeno"}
+          statusColor={prefs?.telegram_chat_id ? theme.green : theme.textSub}
+        >
+          {prefs?.telegram_chat_id ? (
+            <button onClick={unpairTelegram} disabled={saving} style={{
+              ...buttonStyle(),
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: `${theme.red}10`, color: theme.red,
+              border: `1px solid ${theme.red}40`,
+            }}>
+              Odpojit Telegram
+            </button>
+          ) : pairingCode ? (
+            <div style={{
+              padding: "12px",
+              background: `${theme.accent}10`, border: `1px solid ${theme.accent}40`,
+              borderRadius: 8,
+            }}>
+              <div style={{ fontSize: 12, color: theme.text, marginBottom: 8, lineHeight: 1.5 }}>
+                <strong>1.</strong> Otevři bota: <a
+                  href={`https://t.me/${TELEGRAM_BOT}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ color: theme.accent, fontWeight: 700, textDecoration: "underline" }}
+                >@{TELEGRAM_BOT}</a>
+              </div>
+              <div style={{ fontSize: 12, color: theme.text, marginBottom: 8, lineHeight: 1.5 }}>
+                <strong>2.</strong> V botovi pošli zprávu: <code style={{
+                  background: theme.inputBg, padding: "3px 8px", borderRadius: 4,
+                  fontFamily: "monospace", fontSize: 14, fontWeight: 700,
+                  color: theme.accent, letterSpacing: "1px",
+                }}>{pairingCode}</code>
+              </div>
+              <div style={{ fontSize: 11, color: theme.textMid, marginTop: 8 }}>
+                ⏳ Kód vyprší za {Math.floor(pairingTimer / 60)}:{String(pairingTimer % 60).padStart(2, "0")}
+                · ✓ Po odeslání kódu se tato karta automaticky obnoví
+              </div>
+            </div>
+          ) : (
+            <button onClick={startTelegramPairing} disabled={saving} style={{
+              ...buttonStyle(),
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: `${theme.accent}10`, color: theme.accent,
+              border: `1px solid ${theme.accent}40`,
+            }}>
+              📱 Připojit Telegram
+            </button>
+          )}
+          <div style={{ fontSize: 10, color: theme.textSub, marginTop: 8, lineHeight: 1.5 }}>
+            Telegram funguje vždy — i když máš appku zavřenou. Doporučeno pro iPhone uživatele.
+          </div>
+        </SectionRow>
+
+        {/* EMAIL */}
+        <SectionRow
+          icon="✉️"
+          title="Email"
+          status={prefs?.email
+            ? (prefs?.email_enabled
+              ? `✅ Aktivní — ${prefs.email}`
+              : `⏸ Vypnuto — ${prefs.email}`)
+            : "Není nastaven"}
+          statusColor={prefs?.email && prefs?.email_enabled ? theme.green : theme.textSub}
+        >
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              type="email"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              placeholder="tvuj@email.cz"
+              style={{
+                flex: 1, minWidth: 180,
+                padding: "8px 10px", fontSize: 12,
+                background: theme.inputBg, color: theme.text,
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: 6, fontFamily: FONT,
+              }}
+            />
+            <button onClick={saveEmail} disabled={saving || !emailInput.trim()} style={{
+              ...buttonStyle(),
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: theme.accent, color: "#fff", border: "none",
+              opacity: saving || !emailInput.trim() ? 0.5 : 1,
+            }}>
+              Uložit
+            </button>
+          </div>
+          {prefs?.email && (
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              <button onClick={toggleEmail} disabled={saving} style={{
+                ...buttonStyle(),
+                padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                background: prefs?.email_enabled ? `${theme.red}10` : `${theme.green}10`,
+                color: prefs?.email_enabled ? theme.red : theme.green,
+                border: `1px solid ${prefs?.email_enabled ? theme.red : theme.green}40`,
+              }}>
+                {prefs?.email_enabled ? "Vypnout" : "Zapnout"} email notifikace
+              </button>
+              <button onClick={removeEmail} disabled={saving} style={{
+                ...buttonStyle(),
+                padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`,
+              }}>
+                Odstranit
+              </button>
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: theme.textSub, marginTop: 8, lineHeight: 1.5 }}>
+            Email se hodí pokud nechceš push ani Telegram — funguje vždy a všude.
+          </div>
+        </SectionRow>
+
+        <div style={{
+          marginTop: 14, padding: "10px 12px",
+          background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 8, fontSize: 11, color: theme.textMid, lineHeight: 1.6,
+        }}>
+          💡 <strong>Tip:</strong> Vyber jeden hlavní a jeden záložní kanál. Když push nedorazí
+          (slabý signál, iPhone bez PWA), Telegram nebo email tě doručí spolehlivě.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NotificationPanel({ currentUser, onClose, theme }) {
   useEscapeKey(onClose);
   const [permission, setPermission] = useState(
@@ -11599,6 +11990,7 @@ function App() {
   });
   const [showAdmin, setShowAdmin] = useState(false);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [showNotificationPrefs, setShowNotificationPrefs] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
@@ -12315,7 +12707,7 @@ function App() {
         showReminderSheet || showQuickReminder || showNotesSheet ||
         editingNote !== null || showStatsSheet || showSearchSheet ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
-        showAdmin || updatesPanelOpen;
+        showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel;
       if (anyModalOpen) return;
       // Není modal — pokud nejsem v defaultView, přepni
       if (viewStatus !== defaultView) {
@@ -13231,21 +13623,26 @@ function App() {
           ungrouped.push(...tasks);
         }
       });
-      // Vyčlenit zapomenuté úkoly (>7 dní bez termínu) z bigGroups i ungrouped — půjdou do vlastní sekce dole
-      const forgottenTasks = [];
-      const filterForgotten = (arr) => arr.filter(t => {
+      // Vyčlenit starší (7-30 d) a zapomenuté (>30 d) úkoly z bigGroups i ungrouped — půjdou do vlastních sekcí dole
+      const staleSectionTasks = []; // 7-30 dní bez termínu
+      const forgottenTasks = []; // >30 dní bez termínu
+      const filterAged = (arr) => arr.filter(t => {
         if (isForgotten(t)) {
           forgottenTasks.push(t);
           return false;
         }
+        if (isStale(t)) {
+          staleSectionTasks.push(t);
+          return false;
+        }
         return true;
       });
-      bigGroups.forEach(g => { g.tasks = filterForgotten(g.tasks); });
-      const ungroupedFiltered = filterForgotten(ungrouped);
+      bigGroups.forEach(g => { g.tasks = filterAged(g.tasks); });
+      const ungroupedFiltered = filterAged(ungrouped);
 
       // Render bigGroups (sekce + jejich úkoly), pak ungrouped
       bigGroups.forEach(({ listId, tasks }) => {
-        if (tasks.length === 0) return; // všechny byly zapomenuté → vynechej sekci
+        if (tasks.length === 0) return; // všechny byly přeřazené → vynechej sekci
         const list = (customLists || []).find(l => l.id === listId);
         if (list) {
           items.push({
@@ -13259,7 +13656,13 @@ function App() {
       });
       ungroupedFiltered.forEach(task => items.push({ type: "task", task, key: task.id }));
 
-      // Sekce zapomenuté — jen aktivní úkoly bez termínu vytvořené před >7 dny
+      // Sekce starší — 7-30 dní, bez termínu
+      if (staleSectionTasks.length > 0) {
+        items.push({ type: "section_header_aged", key: "section-aged", count: staleSectionTasks.length });
+        staleSectionTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+      }
+
+      // Sekce zapomenuté — >30 dní, bez termínu
       if (forgottenTasks.length > 0) {
         items.push({ type: "section_header_forgotten", key: "section-forgotten", count: forgottenTasks.length });
         forgottenTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
@@ -13542,6 +13945,7 @@ function App() {
     <div style={{
       // Layout: flex column = top část (header+input+filter) FIXED, bottom část scrollable.
       // Tím dosáhneme, že se scrolují jen úkoly, zbytek zůstává nehnutý.
+      // Safe area inset pro iPhone notch je v body padding (GLOBAL_CSS).
       height: "100vh", background: theme.bg, fontFamily: FONT,
       color: theme.text, WebkitFontSmoothing: "antialiased",
       display: "flex", flexDirection: "column",
@@ -13566,13 +13970,14 @@ function App() {
               background: theme.accentSoft,
               border: `1px solid ${theme.accentBorder}`,
               borderRadius: "6px",
-              padding: "3px 10px",
+              padding: windowWidth < 720 ? "3px 7px" : "3px 10px",
               color: theme.accent,
               cursor: "pointer",
-              fontSize: "12px", fontWeight: 700,
+              fontSize: windowWidth < 720 ? "14px" : "12px",
+              fontWeight: 700,
               display: "inline-flex", alignItems: "center", gap: "4px",
             }}>
-            🎯 Fokus
+            🎯{windowWidth >= 720 && <span> Fokus</span>}
           </button>
           {!online && (
             <span style={{
@@ -13600,18 +14005,20 @@ function App() {
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔍
           </button>
-          {/* Stats ikona */}
-          <button onClick={() => setShowStatsSheet(true)}
-            title="Statistiky"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            📊
-          </button>
+          {/* Stats ikona — jen na PC/tablet, na mobilu je v menu */}
+          {windowWidth >= 720 && (
+            <button onClick={() => setShowStatsSheet(true)}
+              title="Statistiky"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              📊
+            </button>
+          )}
           {/* Reminders ikona — připomínky */}
           <button onClick={async () => {
             setShowReminderSheet(true);
@@ -13647,41 +14054,42 @@ function App() {
               );
             })()}
           </button>
-          {/* Trash ikona — přepne na koš (smazané úkoly) */}
-          <button onClick={() => setViewStatus("trash")}
-            title="Koš"
-            style={{
-              background: viewStatus === "trash" ? theme.inputBg : "none",
-              border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px", position: "relative",
-            }}
-            onMouseEnter={e => { if (viewStatus !== "trash") e.currentTarget.style.background = theme.inputBg; }}
-            onMouseLeave={e => { if (viewStatus !== "trash") e.currentTarget.style.background = "none"; }}>
-            🗑
-            {(() => {
-              // Počet úkolů v koši (jen viditelných pro currentUser)
-              const userNameLc = currentUser.name.toLowerCase();
-              const trashCount = tasks.filter(t => {
-                if (t.status !== "deleted") return false;
-                if (currentUser.admin) return true;
-                const createdByLc = (t.createdBy || "").toLowerCase();
-                const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
-                return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
-              }).length;
-              if (trashCount === 0) return null;
-              return (
-                <span style={{
-                  position: "absolute", top: 2, right: 2,
-                  background: theme.textSub, color: "#fff",
-                  borderRadius: "50%", minWidth: 14, height: 14,
-                  fontSize: 9, fontWeight: 700,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  padding: "0 3px",
-                }}>{trashCount}</span>
-              );
-            })()}
-          </button>
+          {/* Trash ikona — jen na PC/tablet, na mobilu je v menu */}
+          {windowWidth >= 720 && (
+            <button onClick={() => setViewStatus("trash")}
+              title="Koš"
+              style={{
+                background: viewStatus === "trash" ? theme.inputBg : "none",
+                border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px", position: "relative",
+              }}
+              onMouseEnter={e => { if (viewStatus !== "trash") e.currentTarget.style.background = theme.inputBg; }}
+              onMouseLeave={e => { if (viewStatus !== "trash") e.currentTarget.style.background = "none"; }}>
+              🗑
+              {(() => {
+                const userNameLc = currentUser.name.toLowerCase();
+                const trashCount = tasks.filter(t => {
+                  if (t.status !== "deleted") return false;
+                  if (currentUser.admin) return true;
+                  const createdByLc = (t.createdBy || "").toLowerCase();
+                  const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+                  return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+                }).length;
+                if (trashCount === 0) return null;
+                return (
+                  <span style={{
+                    position: "absolute", top: 2, right: 2,
+                    background: theme.textSub, color: "#fff",
+                    borderRadius: "50%", minWidth: 14, height: 14,
+                    fontSize: 9, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    padding: "0 3px",
+                  }}>{trashCount}</span>
+                );
+              })()}
+            </button>
+          )}
           {/* Notes ikona — strukturované poznámky */}
           <button onClick={async () => {
             setShowNotesSheet(true);
@@ -13806,6 +14214,64 @@ function App() {
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <span>☑️</span><span>Hromadný výběr</span>
             </button>
+
+            {/* Mobilní zkratky — na PC tyto ikony jsou v hlavičce */}
+            {windowWidth < 720 && (
+              <>
+                <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+                <button onClick={() => { setShowStatsSheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>📊</span><span>Statistiky</span>
+                </button>
+                <button onClick={() => { setViewStatus("trash"); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>🗑</span><span>Koš</span>
+                  {(() => {
+                    const userNameLc = currentUser.name.toLowerCase();
+                    const trashCount = tasks.filter(t => {
+                      if (t.status !== "deleted") return false;
+                      if (currentUser.admin) return true;
+                      const createdByLc = (t.createdBy || "").toLowerCase();
+                      const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+                      return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+                    }).length;
+                    if (trashCount === 0) return null;
+                    return (
+                      <span style={{
+                        marginLeft: "auto", fontSize: 10, fontWeight: 700,
+                        background: theme.textSub, color: "#fff",
+                        borderRadius: 8, padding: "1px 6px",
+                      }}>{trashCount}</span>
+                    );
+                  })()}
+                </button>
+                <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+              </>
+            )}
+
+            <button onClick={() => { setShowNotificationPrefs(true); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>📢</span><span>Doručování notifikací</span>
+            </button>
+
             <button onClick={() => { setShowNotifPanel(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -13814,7 +14280,7 @@ function App() {
               }}
               onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-              <span>⚙️</span><span>Nastavení notifikací</span>
+              <span>⚙️</span><span>Diagnostika notifikací</span>
             </button>
             {currentUser.admin && (
               <button onClick={() => { setShowAdmin(true); setShowUserMenu(false); }}
@@ -13838,7 +14304,6 @@ function App() {
               { value: "today",       icon: "🎯", label: "Dnes" },
               { value: "active",      icon: "📋", label: "Aktivní" },
               { value: "in_progress", icon: "🔥", label: "Rozpracované" },
-              { value: "all",         icon: "🌐", label: "Vše" },
             ].map(opt => {
               const isSel = defaultView === opt.value;
               return (
@@ -14003,6 +14468,14 @@ function App() {
           <NotificationPanel
             currentUser={currentUser}
             onClose={() => setShowNotifPanel(false)}
+            theme={theme}
+          />
+        )}
+
+        {showNotificationPrefs && (
+          <NotificationPrefs
+            currentUser={currentUser}
+            onClose={() => setShowNotificationPrefs(false)}
             theme={theme}
           />
         )}
@@ -15390,7 +15863,32 @@ function App() {
                         fontSize: "10px", color: theme.textMid, fontWeight: 500,
                         marginLeft: "auto",
                       }}>
-                        bez termínu, vytvořené před více než 7 dny
+                        bez termínu, vytvořené před více než 30 dny
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_header_aged") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "14px 0 6px",
+                      padding: "8px 12px",
+                      background: `${theme.textMid}10`,
+                      border: `1px dashed ${theme.textMid}50`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.textMid, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.3px",
+                      }}>
+                        🕰 Starší ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textSub, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        bez termínu, vytvořené před 7 až 30 dny
                       </span>
                     </div>
                   );
