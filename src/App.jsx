@@ -1223,6 +1223,149 @@ async function apiGenerateTelegramPairingCode(userName) {
   return code;
 }
 
+// ═══════════════════════════════════════════════════════
+//  REJECT TASK + BLOCK LIST — odmítání cizích úkolů, spam protekce
+// ═══════════════════════════════════════════════════════
+
+// Odmítnout cizí úkol — z mého assignedTo se odeberu, do rejected_by se přidá záznam.
+// Autor uvidí "Pavla odmítla 15:42" v UI. Pokud nikdo nezůstává v assignedTo, úkol
+// se přesune do koše (status = "deleted").
+async function apiRejectTask(taskId, rejecterName) {
+  if (!taskId || !rejecterName) return null;
+  try {
+    const { data: task, error: loadErr } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("id", taskId)
+      .maybeSingle();
+    if (loadErr) throw loadErr;
+    if (!task) return null;
+
+    const oldAssigned = Array.isArray(task.assigned_to) ? task.assigned_to : [];
+    const newAssigned = oldAssigned.filter(n => n !== rejecterName);
+
+    const oldRejected = Array.isArray(task.rejected_by) ? task.rejected_by : [];
+    const alreadyRejected = oldRejected.some(r => r?.user === rejecterName);
+    const newRejected = alreadyRejected ? oldRejected : [
+      ...oldRejected,
+      { user: rejecterName, at: new Date().toISOString() },
+    ];
+
+    const patch = {
+      assigned_to: newAssigned,
+      rejected_by: newRejected,
+    };
+    if (newAssigned.length === 0) {
+      patch.status = "deleted";
+      patch.deleted_at = new Date().toISOString();
+    }
+
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update(patch)
+      .eq("id", taskId);
+    if (updErr) throw updErr;
+
+    return { rejecterName, allRejected: newAssigned.length === 0 };
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiRejectTask", e, { taskId, rejecterName });
+    return null;
+  }
+}
+
+// Vrátit úkol — undo reject (vrátí mě do assignedTo, odebere z rejected_by)
+async function apiUnrejectTask(taskId, rejecterName) {
+  if (!taskId || !rejecterName) return null;
+  try {
+    const { data: task, error: loadErr } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("id", taskId)
+      .maybeSingle();
+    if (loadErr) throw loadErr;
+    if (!task) return null;
+
+    const oldAssigned = Array.isArray(task.assigned_to) ? task.assigned_to : [];
+    const newAssigned = oldAssigned.includes(rejecterName) ? oldAssigned : [...oldAssigned, rejecterName];
+
+    const oldRejected = Array.isArray(task.rejected_by) ? task.rejected_by : [];
+    const newRejected = oldRejected.filter(r => r?.user !== rejecterName);
+
+    const patch = {
+      assigned_to: newAssigned,
+      rejected_by: newRejected,
+    };
+    // Pokud byl úkol kvůli "všichni odmítli" v koši a teď se někdo vrací, vrať ze stavu deleted
+    if (task.status === "deleted" && newAssigned.length > 0) {
+      patch.status = "todo";
+      patch.deleted_at = null;
+    }
+
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update(patch)
+      .eq("id", taskId);
+    if (updErr) throw updErr;
+
+    return { rejecterName };
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiUnrejectTask", e, { taskId, rejecterName });
+    return null;
+  }
+}
+
+// Block list — kdo koho blokuje (mode = "block")
+async function apiLoadBlocks() {
+  try {
+    const { data, error } = await supabase
+      .from("user_blocks")
+      .select("*")
+      .order("created_at");
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiLoadBlocks", e);
+    return [];
+  }
+}
+
+async function apiAddBlock(blockerName, blockedName, mode = "block") {
+  if (!blockerName || !blockedName) return null;
+  if (blockerName === blockedName) return null;
+  try {
+    const { data, error } = await supabase
+      .from("user_blocks")
+      .upsert({
+        blocker_name: blockerName,
+        blocked_name: blockedName,
+        mode,
+      }, { onConflict: "blocker_name,blocked_name" })
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiAddBlock", e, { blockerName, blockedName, mode });
+    return null;
+  }
+}
+
+async function apiRemoveBlock(blockerName, blockedName) {
+  if (!blockerName || !blockedName) return false;
+  try {
+    const { error } = await supabase
+      .from("user_blocks")
+      .delete()
+      .eq("blocker_name", blockerName)
+      .eq("blocked_name", blockedName);
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiRemoveBlock", e, { blockerName, blockedName });
+    return false;
+  }
+}
+
 async function apiLoadUsers() {
   try {
     const { data, error } = await supabase.from("users").select("*").order("created_at");
@@ -1245,6 +1388,9 @@ async function apiLoadTasks() {
       const t = dbToTask(row);
       // Granulární sdílení — propagovat z DB sloupce shared_with
       if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
+      // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
+      if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
+      else t.rejectedBy = [];
       return t;
     });
     cacheSet(CACHE_TASKS, serverTasks);
@@ -1259,13 +1405,20 @@ async function apiCreateUser(user) {
   try {
     const { error } = await supabase.from("users").insert({ name: user.name, pin: user.pin, is_admin: user.admin });
     if (error) throw error;
+    return { ok: true };
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiCreateUser offline, queued");
       addToOfflineQueue({ type: "create_user", user });
-    } else {
-      logServerError("apiCreateUser", e, user);
+      return { ok: true, queued: true };
     }
+    // Unique constraint violation (jméno už existuje)
+    const msg = (e?.message || "").toLowerCase();
+    if (msg.includes("duplicate") || msg.includes("unique") || e?.code === "23505") {
+      return { ok: false, reason: "duplicate", message: `Uživatel "${user.name}" už existuje. Vyber unikátní jméno.` };
+    }
+    logServerError("apiCreateUser", e, user);
+    return { ok: false, reason: "error", message: e?.message || "Nepodařilo se přidat uživatele." };
   }
 }
 
@@ -5070,6 +5223,19 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             </>
           )}
           <ActionButton label="⏰ Odlož" onClick={() => commitImmediate("showFrom", addDays(7))} theme={theme} subtle />
+          {/* Odmítnout — jen u úkolů od jiných uživatelů. Mně se úkol smaže do koše,
+              autor uvidí "Pavla odmítla 15:42". */}
+          {isFromOther && onReject && (
+            <ActionButton
+              label="❌ Odmítnout"
+              onClick={() => {
+                if (confirm(`Odmítnout úkol "${task.title}"?\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`)) {
+                  onReject(task.id);
+                }
+              }}
+              theme={theme} subtle
+            />
+          )}
           {onDelete && <ActionButton label="🗑 Smazat" onClick={() => onDelete(task.id)} theme={theme} subtle />}
         </div>
       )}
@@ -5524,7 +5690,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -5681,6 +5847,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const priorityTheme = theme.priority[priority.id];
   const isMine = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const canAct = isMine || currentUser.admin;
+  // Úkol od jiného → můžu ho odmítnout (jsem v assignedTo, ale nejsem autor)
+  const isFromOther = task.createdBy && task.createdBy !== currentUser.name &&
+    Array.isArray(task.assignedTo) && task.assignedTo.includes(currentUser.name);
   // Admin manipuluje s cizím úkolem → potřebujeme potvrzení
   const actAsProxy = !isMine && currentUser.admin;
   // Jméno koho zastupujeme (pro confirm popup)
@@ -6093,6 +6262,24 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 display: "inline-flex", alignItems: "center", gap: "3px",
               }}>
                 📥 od {task.createdBy}
+              </span>
+            )}
+
+            {/* Rejected_by chip — pokud někdo úkol odmítl, viditelné PRO autora.
+                Ostatní (kromě těch, kdo odmítl) to nevidí — chrání soukromí.
+                Klik = unreject (vrátí osobu do assignedTo). */}
+            {Array.isArray(task.rejectedBy) && task.rejectedBy.length > 0 &&
+             (task.createdBy === currentUser.name || currentUser.admin) && (
+              <span title="Kdo odmítl tento úkol" style={{
+                fontSize: "10px", fontWeight: 700,
+                color: theme.red,
+                background: `${theme.red}10`,
+                padding: "1px 6px", borderRadius: "10px",
+                border: `1px solid ${theme.red}40`,
+                display: "inline-flex", alignItems: "center", gap: "3px",
+              }}>
+                ❌ {task.rejectedBy.map(r => r.user).join(", ")} odmítl
+                {task.rejectedBy.length === 1 ? (task.rejectedBy[0].user.endsWith("a") ? "a" : "") : "i"}
               </span>
             )}
 
@@ -10430,6 +10617,174 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
    3 kanály doručování. User si volí jeden nebo více.
    ═══════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════
+   BLOCK LIST PANEL — správa blokovaných a ztlumených uživatelů
+   Modal v UserMenu. Block = nelze vytvořit úkol pro mě.
+   Mute = úkoly chodí, ale notifikace ne.
+   ═══════════════════════════════════════════════════════ */
+function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClose, theme }) {
+  useEscapeKey(onClose);
+
+  // Filtruj jen blocks pro currentUser jako blocker
+  const myBlocks = (blocks || []).filter(b => b.blocker_name === currentUser.name);
+  const blockedNames = new Set(myBlocks.map(b => b.blocked_name));
+
+  // Ostatní uživatelé (kromě mě) které ještě nemám v block listu
+  const candidates = (users || [])
+    .filter(u => u.name !== currentUser.name && !blockedNames.has(u.name));
+
+  const [selectedToBlock, setSelectedToBlock] = useState("");
+  const [mode, setMode] = useState("block");
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "10vh", paddingLeft: 12, paddingRight: 12,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: theme.bg, borderRadius: 12, padding: 18,
+        width: "100%", maxWidth: 520, maxHeight: "85vh",
+        overflowY: "auto", border: `1px solid ${theme.cardBorder}`,
+        animation: "slideUp 0.2s",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, flex: 1 }}>🚫 Blokovaní a ztlumení</span>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            cursor: "pointer", fontSize: 20, padding: 0,
+          }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: theme.textMid, marginBottom: 16, lineHeight: 1.5 }}>
+          <strong>Blokovat</strong> = uživatel ti nemůže vytvořit úkol. Pokud to zkusí,
+          dostane upozornění.<br />
+          <strong>Ztlumit</strong> = úkoly od něj chodí normálně, ale notifikace
+          (push/Telegram/email) ne. Uživatel o tom neví.
+        </div>
+
+        {/* Existující bloky */}
+        {myBlocks.length === 0 ? (
+          <div style={{
+            padding: 16, textAlign: "center", color: theme.textSub,
+            background: theme.inputBg, borderRadius: 8, fontSize: 12,
+            marginBottom: 16,
+          }}>
+            Zatím nikoho neblokuješ ani neztlumuješ.
+          </div>
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            {myBlocks.map(b => (
+              <div key={b.blocked_name} style={{
+                ...cardStyle(theme), padding: "10px 12px",
+                marginBottom: 8,
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
+                <span style={{ fontSize: 18 }}>
+                  {b.mode === "block" ? "🚫" : "🔇"}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>
+                    {b.blocked_name}
+                  </div>
+                  <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
+                    {b.mode === "block" ? "Blokovaný — nemůže ti vytvořit úkol" : "Ztlumený — úkoly chodí, notifikace ne"}
+                  </div>
+                </div>
+                {b.mode === "block" ? (
+                  <button onClick={() => onBlock(b.blocked_name, "mute")} title="Změnit na Ztlumit"
+                    style={{
+                      ...buttonStyle(),
+                      padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                      background: "transparent", color: theme.textMid,
+                      border: `1px solid ${theme.cardBorder}`,
+                    }}>
+                    🔇
+                  </button>
+                ) : (
+                  <button onClick={() => onBlock(b.blocked_name, "block")} title="Změnit na Blokovat"
+                    style={{
+                      ...buttonStyle(),
+                      padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                      background: "transparent", color: theme.textMid,
+                      border: `1px solid ${theme.cardBorder}`,
+                    }}>
+                    🚫
+                  </button>
+                )}
+                <button onClick={() => onUnblock(b.blocked_name)} title="Zrušit"
+                  style={{
+                    ...buttonStyle(),
+                    padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                    background: `${theme.green}10`, color: theme.green,
+                    border: `1px solid ${theme.green}40`,
+                  }}>
+                  ✓ Zrušit
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Přidat nový block */}
+        {candidates.length > 0 && (
+          <div style={{ ...cardStyle(theme), padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: theme.text, marginBottom: 10 }}>
+              Přidat omezení
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <select
+                value={selectedToBlock}
+                onChange={(e) => setSelectedToBlock(e.target.value)}
+                style={{
+                  flex: 1, minWidth: 120,
+                  padding: "8px 10px", fontSize: 12,
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 6, fontFamily: FONT,
+                }}>
+                <option value="">— Vyber uživatele —</option>
+                {candidates.map(u => (
+                  <option key={u.name} value={u.name}>{u.name}</option>
+                ))}
+              </select>
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                style={{
+                  width: 120,
+                  padding: "8px 10px", fontSize: 12,
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 6, fontFamily: FONT,
+                }}>
+                <option value="block">🚫 Blokovat</option>
+                <option value="mute">🔇 Ztlumit</option>
+              </select>
+              <button
+                disabled={!selectedToBlock}
+                onClick={() => {
+                  if (!selectedToBlock) return;
+                  onBlock(selectedToBlock, mode);
+                  setSelectedToBlock("");
+                  setMode("block");
+                }}
+                style={{
+                  ...buttonStyle(),
+                  padding: "8px 14px", fontSize: 12, fontWeight: 700,
+                  background: theme.accent, color: "#fff", border: "none",
+                  opacity: selectedToBlock ? 1 : 0.5,
+                }}>
+                Přidat
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NotificationPrefs({ currentUser, onClose, theme }) {
   useEscapeKey(onClose);
 
@@ -11287,9 +11642,18 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
           onChange={e => { if (/^\d{0,4}$/.test(e.target.value)) setPin(e.target.value); }}
           type="tel" inputMode="numeric" maxLength={4}
           style={{ ...inputStyle(theme), width: "70px", textAlign: "center", letterSpacing: "4px" }} />
-        <button onClick={() => {
-          if (name.trim() && pin.length === 4 && !users.find(u => u.name === name.trim())) {
-            onAdd({ name: name.trim(), pin, admin: false });
+        <button onClick={async () => {
+          const trimmedName = name.trim();
+          if (!trimmedName || pin.length !== 4) return;
+          // Case-insensitive duplicate check (klient strana — DB má UNIQUE constraint na name).
+          const exists = users.find(u => (u.name || "").toLowerCase() === trimmedName.toLowerCase());
+          if (exists) {
+            alert(`Uživatel "${exists.name}" už existuje. Vyber unikátní jméno.`);
+            return;
+          }
+          const result = await onAdd({ name: trimmedName, pin, admin: false });
+          // Reset jen po úspěchu (onAdd vrací true/false z apiCreateUser výsledku)
+          if (result !== false) {
             setName(""); setPin("");
           }
         }} style={{
@@ -11838,6 +12202,7 @@ function App() {
   const [tasks, setTasks] = useState([]);
   const [customLists, setCustomLists] = useState([]);
   const [reminders, setReminders] = useState([]); // aktivní (ne-dismissed) připomínky
+  const [blocks, setBlocks] = useState([]); // [{blocker_name, blocked_name, mode}]
   const [activeReminder, setActiveReminder] = useState(null); // aktuálně vyvolaná notifikace (pro toast)
   const [showReminderSheet, setShowReminderSheet] = useState(false); // dropdown / sheet s přehledem
   const [showQuickReminder, setShowQuickReminder] = useState(false); // quick add modal
@@ -11983,6 +12348,7 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showNotificationPrefs, setShowNotificationPrefs] = useState(false);
+  const [showBlockList, setShowBlockList] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
@@ -12198,6 +12564,12 @@ function App() {
       } catch (e) {
         console.warn("Notes load failed:", e);
       }
+      try {
+        const allBlocks = await apiLoadBlocks();
+        setBlocks(allBlocks);
+      } catch (e) {
+        console.warn("Blocks load failed:", e);
+      }
     })();
   }, [currentUser?.name]);
 
@@ -12257,6 +12629,9 @@ function App() {
           if (payload.eventType === "INSERT") {
             if (!payload.new?.id) return;
             const newTask = dbToTask(payload.new);
+            if (Array.isArray(payload.new.shared_with)) newTask.sharedWith = payload.new.shared_with;
+            if (Array.isArray(payload.new.rejected_by)) newTask.rejectedBy = payload.new.rejected_by;
+            else newTask.rejectedBy = [];
             setTasks(prev => prev.find(t => t.id === newTask.id) ? prev : [newTask, ...prev]);
           } else if (payload.eventType === "UPDATE") {
             if (!payload.new?.id) return;
@@ -12265,6 +12640,9 @@ function App() {
             const lastEdit = localEditsRef.current[payload.new.id] || 0;
             if (Date.now() - lastEdit < 1500) return;
             const updatedTask = dbToTask(payload.new);
+            if (Array.isArray(payload.new.shared_with)) updatedTask.sharedWith = payload.new.shared_with;
+            if (Array.isArray(payload.new.rejected_by)) updatedTask.rejectedBy = payload.new.rejected_by;
+            else updatedTask.rejectedBy = [];
             setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
           } else if (payload.eventType === "DELETE") {
             if (!payload.old?.id) return;
@@ -12699,7 +13077,7 @@ function App() {
         showReminderSheet || showQuickReminder || showNotesSheet ||
         editingNote !== null || showStatsSheet || showSearchSheet ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
-        showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel;
+        showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel || showBlockList;
       if (anyModalOpen) return;
       // Není modal — pokud nejsem v defaultView, přepni
       if (viewStatus !== defaultView) {
@@ -12769,17 +13147,39 @@ function App() {
   }, []);
 
   const addTask = useCallback(async (task) => {
-    setTasks(prev => [task, ...prev]);
-    await apiCreateTask(task);
+    // Block protection — odfiltruj uživatele kteří MĚ blokují (createdBy je v jejich blocklistu).
+    // Pokud někdo blokuje currentUser, jeho jméno NESMÍ být v assignedTo.
+    let filteredTask = task;
+    if (Array.isArray(task.assignedTo) && task.assignedTo.length > 0 && task.createdBy) {
+      const blockedMe = (blocks || [])
+        .filter(b => b.blocked_name === task.createdBy && b.mode === "block")
+        .map(b => b.blocker_name);
+      if (blockedMe.length > 0) {
+        const filteredAssigned = task.assignedTo.filter(n => !blockedMe.includes(n));
+        if (filteredAssigned.length !== task.assignedTo.length) {
+          // Některý recipient mě blokuje
+          const blockedNames = task.assignedTo.filter(n => blockedMe.includes(n)).join(", ");
+          alert(`⚠️ Tito uživatelé tě blokují: ${blockedNames}. Úkol pro ně nebude vytvořen.`);
+          if (filteredAssigned.length === 0) {
+            // Všichni mě blokují — nevytvářej úkol vůbec
+            return;
+          }
+          filteredTask = { ...task, assignedTo: filteredAssigned };
+        }
+      }
+    }
+
+    setTasks(prev => [filteredTask, ...prev]);
+    await apiCreateTask(filteredTask);
     setPendingCount(getOfflineQueue().length);
     // Označ úkol jako "právě přidaný" — bude v sekci ✨ Právě přidáno po 5 minut
-    setRecentlyAdded(prev => ({ ...prev, [task.id]: Date.now() }));
-    if (task.assignTo !== "self") {
-      notify(`📋 Nový od ${task.createdBy}`, task.title);
+    setRecentlyAdded(prev => ({ ...prev, [filteredTask.id]: Date.now() }));
+    if (filteredTask.assignTo !== "self") {
+      notify(`📋 Nový od ${filteredTask.createdBy}`, filteredTask.title);
       // Trigger push notification to other users
-      triggerPushNotification(task);
+      triggerPushNotification(filteredTask);
     }
-  }, []);
+  }, [blocks]);
 
   const changeStatus = useCallback((taskId, action) => {
     // Find task name for the snackbar message
@@ -13212,6 +13612,83 @@ function App() {
       return { ...task, status: "active", deletedAt: null };
     }));
   }, [withUndo]);
+
+  // Odmítnout cizí úkol — z assignedTo se odeberu, autor uvidí "X odmítl".
+  // Pokud nikdo nezbude v assignedTo, úkol se přesune do koše (status="deleted").
+  const rejectTask = useCallback(async (taskId) => {
+    if (!currentUser?.name) return;
+    // Optimistic update — rovnou odebrat ze svého assignedTo
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const newAssigned = (t.assignedTo || []).filter(n => n !== currentUser.name);
+      const oldRejected = Array.isArray(t.rejectedBy) ? t.rejectedBy : [];
+      const newRejected = oldRejected.some(r => r?.user === currentUser.name)
+        ? oldRejected
+        : [...oldRejected, { user: currentUser.name, at: new Date().toISOString() }];
+      return {
+        ...t,
+        assignedTo: newAssigned,
+        rejectedBy: newRejected,
+        status: newAssigned.length === 0 ? "deleted" : t.status,
+        deletedAt: newAssigned.length === 0 ? new Date().toISOString() : t.deletedAt,
+      };
+    }));
+    // Server update
+    const result = await apiRejectTask(taskId, currentUser.name);
+    if (!result) {
+      // Rollback při chybě
+      const fresh = await apiLoadTasks();
+      setTasks(fresh);
+      alert("Nepodařilo se odmítnout úkol. Zkus to znovu.");
+    }
+  }, [currentUser?.name]);
+
+  // Vrátit odmítnutý úkol — admin nebo daný user může vrátit svůj reject
+  const unrejectTask = useCallback(async (taskId, userName) => {
+    const targetName = userName || currentUser?.name;
+    if (!targetName) return;
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      const newAssigned = (t.assignedTo || []).includes(targetName)
+        ? t.assignedTo
+        : [...(t.assignedTo || []), targetName];
+      const newRejected = (t.rejectedBy || []).filter(r => r?.user !== targetName);
+      return {
+        ...t,
+        assignedTo: newAssigned,
+        rejectedBy: newRejected,
+        status: t.status === "deleted" && newAssigned.length > 0 ? "todo" : t.status,
+        deletedAt: t.status === "deleted" && newAssigned.length > 0 ? null : t.deletedAt,
+      };
+    }));
+    const result = await apiUnrejectTask(taskId, targetName);
+    if (!result) {
+      const fresh = await apiLoadTasks();
+      setTasks(fresh);
+    }
+  }, [currentUser?.name]);
+
+  // Blokovat uživatele — nebude moci pro mě vytvářet úkoly
+  const blockUser = useCallback(async (blockedUserName, mode = "block") => {
+    if (!currentUser?.name) return;
+    if (blockedUserName === currentUser.name) return;
+    const result = await apiAddBlock(currentUser.name, blockedUserName, mode);
+    if (result) {
+      setBlocks(prev => {
+        const existing = prev.find(b => b.blocker_name === currentUser.name && b.blocked_name === blockedUserName);
+        if (existing) return prev.map(b => b === existing ? result : b);
+        return [...prev, result];
+      });
+    }
+  }, [currentUser?.name]);
+
+  const unblockUser = useCallback(async (blockedUserName) => {
+    if (!currentUser?.name) return;
+    const ok = await apiRemoveBlock(currentUser.name, blockedUserName);
+    if (ok) {
+      setBlocks(prev => prev.filter(b => !(b.blocker_name === currentUser.name && b.blocked_name === blockedUserName)));
+    }
+  }, [currentUser?.name]);
 
   // ── Comments ──
 
@@ -14330,6 +14807,26 @@ function App() {
               <span>📢</span><span>Doručování notifikací</span>
             </button>
 
+            <button onClick={() => { setShowBlockList(true); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>🚫</span><span>Blokovaní a ztlumení</span>
+              {(() => {
+                const count = (blocks || []).filter(b => b.blocker_name === currentUser.name).length;
+                if (!count) return null;
+                return <span style={{
+                  marginLeft: "auto", fontSize: 10, fontWeight: 700,
+                  background: theme.textSub, color: "#fff",
+                  borderRadius: 8, padding: "1px 6px",
+                }}>{count}</span>;
+              })()}
+            </button>
+
             <button onClick={() => { setShowNotifPanel(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -14425,7 +14922,14 @@ function App() {
             tasks={tasks}
             comments={comments}
             currentUser={currentUser}
-            onAdd={async u => apiCreateUser(u)}
+            onAdd={async u => {
+              const result = await apiCreateUser(u);
+              if (!result?.ok && result?.message) {
+                alert(result.message);
+                return false;
+              }
+              return true;
+            }}
             onRemove={async (name, options) => {
               // options = { action: "transfer_me" | "transfer_other" | "delete", transferTo: string|null }
               const { action, transferTo } = options || { action: "transfer_me", transferTo: currentUser.name };
@@ -14534,6 +15038,18 @@ function App() {
           <NotificationPrefs
             currentUser={currentUser}
             onClose={() => setShowNotificationPrefs(false)}
+            theme={theme}
+          />
+        )}
+
+        {showBlockList && (
+          <BlockListPanel
+            currentUser={currentUser}
+            users={users}
+            blocks={blocks}
+            onBlock={blockUser}
+            onUnblock={unblockUser}
+            onClose={() => setShowBlockList(false)}
             theme={theme}
           />
         )}
@@ -16100,6 +16616,10 @@ function App() {
                         onDelete={deleteTask}
                         onRestore={restoreTask}
                         onPermanentDelete={permanentlyDeleteTask}
+                        onReject={rejectTask}
+                        onUnreject={unrejectTask}
+                        onBlockUser={blockUser}
+                        blocks={blocks}
                         theme={theme}
                         comments={comments.filter(c => c.taskId === task.id)}
                         onAddComment={addComment}
