@@ -5886,7 +5886,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -6486,6 +6486,25 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 }}>
                 📥 od {task.createdBy} ▾
               </span>
+            )}
+
+            {/* ✓ Přečteno tlačítko — jen v 🆕 Nové sekci. Klik = označí přečteno
+                a úkol se zařadí do své normální kategorie. */}
+            {isNewSection && onMarkSeen && (
+              <button onClick={(e) => {
+                e.stopPropagation();
+                onMarkSeen(task.id);
+              }} title="Označit jako přečteno — úkol se zařadí do své kategorie" style={{
+                fontSize: "10px", fontWeight: 700,
+                color: theme.green,
+                background: `${theme.green}15`,
+                padding: "2px 8px", borderRadius: "10px",
+                border: `1px solid ${theme.green}50`,
+                display: "inline-flex", alignItems: "center", gap: "3px",
+                cursor: "pointer", fontFamily: FONT,
+              }}>
+                ✓ Přečteno
+              </button>
             )}
 
             {/* Rejected_by chip — varování že někdo úkol odmítl.
@@ -11560,6 +11579,63 @@ function NotificationPanel({ currentUser, onClose, theme }) {
         <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "18px" }}>×</button>
       </div>
 
+      {/* iOS PWA hint — detekce iPhone/iPad bez PWA režimu */}
+      {(() => {
+        const ua = navigator.userAgent || "";
+        const isIOS = /iPhone|iPad|iPod/i.test(ua);
+        // iOS PWA detection: standalone mode flag
+        const isPWA = window.matchMedia?.("(display-mode: standalone)").matches ||
+                      window.navigator.standalone === true;
+        if (!isIOS) return null;
+        if (isPWA && permission === "granted") return null; // všechno OK, žádný hint
+        return (
+          <div style={{
+            background: `${theme.orange || "#f59e0b"}10`,
+            border: `2px solid ${theme.orange || "#f59e0b"}60`,
+            borderRadius: "10px", padding: "14px", marginBottom: "12px",
+          }}>
+            <div style={{
+              fontSize: "13px", fontWeight: 800, color: theme.orange || "#f59e0b",
+              marginBottom: 8, display: "flex", alignItems: "center", gap: 6,
+            }}>
+              📱 iPhone — návod pro spolehlivé notifikace
+            </div>
+            {!isPWA && (
+              <div style={{ fontSize: 12, color: theme.text, lineHeight: 1.6, marginBottom: 10 }}>
+                <strong>1. Přidej appku na plochu</strong> (jen v Safari):
+                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                  <li>Klepni na ikonu <strong>Sdílet</strong> (čtvereček se šipkou ↑) dole uprostřed</li>
+                  <li>Posuň dolů a vyber <strong>"Přidat na plochu"</strong> (Add to Home Screen)</li>
+                  <li>Potvrď <strong>Přidat</strong></li>
+                </ul>
+                <div style={{
+                  marginTop: 8, padding: "8px 10px",
+                  background: `${theme.red}15`, border: `1px solid ${theme.red}40`,
+                  borderRadius: 6, fontSize: 11, color: theme.red,
+                }}>
+                  ⚠ <strong>Toto okno musí být v aplikaci na ploše</strong>, ne v Safari! Zavři Safari, otevři appku z plochy a vrať se sem.
+                </div>
+              </div>
+            )}
+            {isPWA && permission !== "granted" && (
+              <div style={{ fontSize: 12, color: theme.text, lineHeight: 1.6, marginBottom: 10 }}>
+                <strong>2. Povol notifikace</strong>:
+                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                  <li>Klikni níže na <strong>"Povolit notifikace"</strong></li>
+                  <li>iOS se zeptá → klepni <strong>Povolit</strong></li>
+                </ul>
+              </div>
+            )}
+            <div style={{
+              fontSize: 11, color: theme.textMid, lineHeight: 1.5, marginTop: 8,
+              borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 8,
+            }}>
+              💡 <strong>Tip:</strong> Pokud notifikace stále nefungují, použij <strong>Telegram bot</strong> nebo <strong>email</strong> v sekci 📢 Doručování notifikací — fungují vždy.
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Status */}
       <div style={{
         background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
@@ -14339,8 +14415,9 @@ function App() {
       t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name
     );
     else if (filter === "for_me") result = result.filter(t =>
-      t.assignedTo?.includes(currentUser.name) &&
-      t.createdBy !== currentUser.name
+      // "Pro mě" = vše assigned na mě, ať od kohokoliv (osobní + přijaté).
+      // Nezahrnuje úkoly co jsem zadal jiným (Petrovi).
+      t.assignedTo?.includes(currentUser.name)
     );
     else if (filter.startsWith("person:")) {
       const personName = filter.replace("person:", "");
@@ -14461,17 +14538,32 @@ function App() {
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
   const renderItems = useMemo(() => {
-    if (viewStatus !== "active" && viewStatus !== "today") {
+    if (viewStatus !== "active" && viewStatus !== "today" && viewStatus !== "all") {
       return filteredTasks.map(task => ({ type: "task", task, key: task.id }));
     }
 
     const items = [];
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
+    // 60 minut: úkoly nepřečtené starší než 60 min se zařadí do svých kategorií,
+    // i když ještě jsou unread. Takže 🆕 sekce ukazuje jen "čerstvé" nepřečtené.
+    const newTaskCutoff = Date.now() - 60 * 60 * 1000;
 
     const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
     const doneTasks = filteredTasks.filter(t => isDone(t));
     const deletedTasks = filteredTasks.filter(t => isDeleted(t));
     const rejectedTasks = filteredTasks.filter(t => isRejected(t));
+
+    // ═══ 🆕 Nové úkoly (nepřečtené, čerstvé < 60 min, od jiných uživatelů) ═══
+    // Zobrazí se nahoře v každém view dokud je user nepřečte (otevře detail)
+    // nebo dokud nejsou starší než 60 min — pak se zařadí do své kategorie.
+    const newTasksList = activeTasks.filter(t => {
+      if (!t.createdBy || t.createdBy === currentUser.name) return false; // jen od jiných
+      if (t.seenBy?.includes(currentUser.name)) return false; // už přečteno
+      // Čerstvé < 60 min od vytvoření
+      const createdMs = new Date(t.createdAt).getTime();
+      return createdMs > newTaskCutoff;
+    }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const newTaskIds = new Set(newTasksList.map(t => t.id));
 
     // ═══ Recently added (last 5 min) ═══
     // Úkoly z mapy `recentlyAdded` (přidané v této session) → na vrchol s fade efektem.
@@ -14479,7 +14571,7 @@ function App() {
     const now = Date.now();
     const fiveMinMs = 5 * 60 * 1000;
     const recentList = activeTasks
-      .filter(t => recentlyAdded[t.id] !== undefined)
+      .filter(t => recentlyAdded[t.id] !== undefined && !newTaskIds.has(t.id))
       .sort((a, b) => (recentlyAdded[b.id] || 0) - (recentlyAdded[a.id] || 0));
 
     const recentIds = new Set(recentList.map(t => t.id));
@@ -14487,12 +14579,21 @@ function App() {
     // ═══ Dlouho rozpracované (>24h) ═══
     // Úkoly v in_progress déle než 24h jdou na vrchol jako varovná sekce.
     const staleList = activeTasks
-      .filter(t => !recentIds.has(t.id))
+      .filter(t => !recentIds.has(t.id) && !newTaskIds.has(t.id))
       .filter(t => t.status === "in_progress" && t.inProgressAt && inProgressIntensity(t.inProgressAt) >= 1)
       .sort((a, b) => new Date(a.inProgressAt) - new Date(b.inProgressAt)); // nejstarší první
     const staleIds = new Set(staleList.map(t => t.id));
 
-    const remainingActive = activeTasks.filter(t => !recentIds.has(t.id) && !staleIds.has(t.id));
+    const remainingActive = activeTasks.filter(t => !recentIds.has(t.id) && !staleIds.has(t.id) && !newTaskIds.has(t.id));
+
+    // 🆕 Nové úkoly — úplně nahoře, viditelné dokud user nepřečte nebo neuplyne 60 min
+    if (newTasksList.length > 0) {
+      items.push({ type: "section_header_new", key: "section-new", count: newTasksList.length });
+      newTasksList.forEach(task => {
+        items.push({ type: "task", task, key: task.id, isNewSection: true });
+      });
+      items.push({ type: "section_divider", key: "section-divider-new" });
+    }
 
     if (recentList.length > 0) {
       items.push({ type: "section_header_recent", key: "section-recent", count: recentList.length });
@@ -14740,7 +14841,7 @@ function App() {
       // Scope filter — skip if counting scopes
       if (!skip.includes("scope")) {
         if (filter === "my" && !t.assignedTo?.includes(currentUser.name)) return false;
-        else if (filter === "for_me" && !(t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name)) return false;
+        else if (filter === "for_me" && !t.assignedTo?.includes(currentUser.name)) return false;
         else if (filter.startsWith("person:")) {
           const personName = filter.replace("person:", "");
           if (!t.assignedTo?.includes(personName)) return false;
@@ -16796,6 +16897,34 @@ function App() {
               let passedUnread = false;
 
               return visibleItems.map(item => {
+                // Section header: "🆕 Nové od druhých" — nepřečtené nové úkoly od jiných uživatelů.
+                // Zůstává viditelné dokud user neotevře detail (= přečte) nebo neuplyne 60 min.
+                if (item.type === "section_header_new") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "4px 0 8px",
+                      padding: "10px 14px",
+                      background: `${theme.accent}15`,
+                      border: `2px solid ${theme.accent}`,
+                      borderRadius: "10px",
+                      display: "flex", alignItems: "center", gap: "8px",
+                      boxShadow: `0 2px 8px ${theme.accent}30`,
+                    }}>
+                      <span style={{
+                        fontSize: "12px", color: theme.accent, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>
+                        🆕 Nové od druhých — přečti ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        otevři detail = přečteno
+                      </span>
+                    </div>
+                  );
+                }
                 // Section header: "Právě přidáno"
                 if (item.type === "section_header_recent") {
                   return (
@@ -17043,14 +17172,13 @@ function App() {
                   task.createdBy !== currentUser.name &&
                   !isDone(task) && !isDeleted(task);
 
-                // "🆕 NOVÉ OD DRUHÝCH" separator — first unread task (todo view)
-                const showUnreadSep = hasUnread && isUnread && !shownUnreadSep && (viewStatus === "today" || viewStatus === "active");
+                // STARÁ LOGIKA: "🆕 NOVÉ OD DRUHÝCH" inline separator pro první unread task.
+                // NAHRAZENO: section_header_new (vykreslí se nad celou sekcí 🆕 Nové).
+                // Zachováno jako fallback pro úkoly STARŠÍ než 60 min, které jsou pořád unread —
+                // ty se zobrazují v normálních sekcích, ale chceme i inline separator.
+                const showUnreadSep = false; // zakázáno — section_header_new se postará
+                const showNormalSep = false;
                 if (showUnreadSep) shownUnreadSep = true;
-
-                // After last unread, show normal section header
-                const showNormalSep = hasUnread && !isUnread && !passedUnread &&
-                  item.type === "task" && !isDone(task) && !isDeleted(task) &&
-                  (viewStatus === "today" || viewStatus === "active");
                 if (showNormalSep) passedUnread = true;
 
                 // Show "Dnes hotovo" separator when we encounter first done task OR first progress item
@@ -17167,6 +17295,7 @@ function App() {
                         recentlyAdded={item.recentlyAdded === true}
                         fadeProgress={item.fadeProgress || 0}
                         isToday={item.isToday === true}
+                        isNewSection={item.isNewSection === true}
                         customLists={customLists}
                         onStartFocus={(taskId) => {
                           setFocusInitialTask(taskId);
