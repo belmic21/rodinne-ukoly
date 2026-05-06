@@ -82,6 +82,7 @@ const getPriority = (id) => PRIORITIES.find(p => p.id === id) || PRIORITIES[1];
 const getCategory = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[8];
 const isDone = (task) => task.status === "done";
 const isDeleted = (task) => task.status === "deleted";
+const isRejected = (task) => task.status === "rejected";
 
 // 2-letter label for assignee picker — "Michal" → "Mi", "Peťulka" → "Pe"
 // Strips diacritics so label is always ASCII-friendly.
@@ -1230,7 +1231,11 @@ async function apiGenerateTelegramPairingCode(userName) {
 // Odmítnout cizí úkol — z mého assignedTo se odeberu, do rejected_by se přidá záznam.
 // Autor uvidí "Pavla odmítla 15:42" v UI. Pokud nikdo nezůstává v assignedTo, úkol
 // se přesune do koše (status = "deleted").
-async function apiRejectTask(taskId, rejecterName) {
+async function apiRejectTask(taskId, rejecterName, options = {}) {
+  // options.endRecurrence = true → ukončit opakování (recDays = 0).
+  // Pokud false (default) a úkol je opakovaný: úkol "splníme" jako tento výskyt
+  //   (status=done, processRecurring spustí další výskyt) ale s rejected_by markerem.
+  // Když není opakovaný, pak: zmizí mě z assignedTo, pokud je prázdný → status=rejected.
   if (!taskId || !rejecterName) return null;
   try {
     const { data: task, error: loadErr } = await supabase
@@ -1241,6 +1246,30 @@ async function apiRejectTask(taskId, rejecterName) {
     if (loadErr) throw loadErr;
     if (!task) return null;
 
+    const isRecurring = (task.rec_days || 0) > 0;
+    const endRecurrence = !!options.endRecurrence;
+
+    // Opakovaný úkol + chce skip jen tento výskyt → použijeme "done" trick s flagem.
+    // processRecurring vytvoří další výskyt, ale rejected_by si zachová info.
+    if (isRecurring && !endRecurrence) {
+      const oldRejected = Array.isArray(task.rejected_by) ? task.rejected_by : [];
+      const newRejected = oldRejected.some(r => r?.user === rejecterName)
+        ? oldRejected
+        : [...oldRejected, { user: rejecterName, at: new Date().toISOString(), skipOccurrence: true }];
+
+      // Označit jako "done" pro tento výskyt — processRecurring vytvoří nový výskyt
+      const patch = {
+        status: "done",
+        completed_at: new Date().toISOString(),
+        completed_by_user: rejecterName,
+        rejected_by: newRejected,
+      };
+      const { error: updErr } = await supabase.from("tasks").update(patch).eq("id", taskId);
+      if (updErr) throw updErr;
+      return { rejecterName, recurringSkipped: true };
+    }
+
+    // Standardní reject (nebo "ukončit opakování"):
     const oldAssigned = Array.isArray(task.assigned_to) ? task.assigned_to : [];
     const newAssigned = oldAssigned.filter(n => n !== rejecterName);
 
@@ -1256,8 +1285,11 @@ async function apiRejectTask(taskId, rejecterName) {
       rejected_by: newRejected,
     };
     if (newAssigned.length === 0) {
-      patch.status = "deleted";
-      patch.deleted_at = new Date().toISOString();
+      patch.status = "rejected"; // místo "deleted" - autor uvidí v sekci "❌ Odmítnuté"
+      patch.deleted_at = null;
+    }
+    if (endRecurrence && isRecurring) {
+      patch.rec_days = 0; // ukončit opakování
     }
 
     const { error: updErr } = await supabase
@@ -1266,7 +1298,7 @@ async function apiRejectTask(taskId, rejecterName) {
       .eq("id", taskId);
     if (updErr) throw updErr;
 
-    return { rejecterName, allRejected: newAssigned.length === 0 };
+    return { rejecterName, allRejected: newAssigned.length === 0, recurrenceEnded: endRecurrence };
   } catch (e) {
     if (!isNetworkError(e)) logServerError("apiRejectTask", e, { taskId, rejecterName });
     return null;
@@ -1295,8 +1327,8 @@ async function apiUnrejectTask(taskId, rejecterName) {
       assigned_to: newAssigned,
       rejected_by: newRejected,
     };
-    // Pokud byl úkol kvůli "všichni odmítli" v koši a teď se někdo vrací, vrať ze stavu deleted
-    if (task.status === "deleted" && newAssigned.length > 0) {
+    // Pokud byl úkol "rejected" (všichni odmítli) a teď se někdo vrací, vrať na todo
+    if ((task.status === "rejected" || task.status === "deleted") && newAssigned.length > 0) {
       patch.status = "todo";
       patch.deleted_at = null;
     }
@@ -1310,6 +1342,30 @@ async function apiUnrejectTask(taskId, rejecterName) {
     return { rejecterName };
   } catch (e) {
     if (!isNetworkError(e)) logServerError("apiUnrejectTask", e, { taskId, rejecterName });
+    return null;
+  }
+}
+
+// "Znovu zadat" — autor opětovně přidělí úkol uživateli který odmítl (resetuje rejection).
+// Použije se z "Odmítnuté" sekce. Vrátí úkol do "todo" stavu, vyčistí rejected_by.
+async function apiResubmitTask(taskId, originalAssignees = []) {
+  if (!taskId) return null;
+  try {
+    const patch = {
+      status: "todo",
+      assigned_to: originalAssignees,
+      rejected_by: [],
+      deleted_at: null,
+      completed_at: null,
+    };
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update(patch)
+      .eq("id", taskId);
+    if (updErr) throw updErr;
+    return { ok: true };
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("apiResubmitTask", e, { taskId });
     return null;
   }
 }
@@ -1459,6 +1515,8 @@ async function apiCreateTask(task) {
     const dbRow = { ...taskToDb(task) };
     // Granulární sdílení — propsat shared_with field (existuje od migrace)
     if (Array.isArray(task.sharedWith)) dbRow.shared_with = task.sharedWith;
+    // Rejected_by — JSONB pole [{user, at}]
+    if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
     const { error } = await supabase.from("tasks").insert(dbRow);
     if (error) throw error;
   } catch (e) {
@@ -1479,6 +1537,7 @@ async function apiUpdateTask(task) {
   try {
     const dbRow = { ...taskToDb(task) };
     if (Array.isArray(task.sharedWith)) dbRow.shared_with = task.sharedWith;
+    if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
     const { error } = await supabase.from("tasks").update(dbRow).eq("id", task.id);
     if (error) throw error;
   } catch (e) {
@@ -4307,7 +4366,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -5323,6 +5382,45 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
         </div>
       )}
+
+      {/* Rejected status — autor vidí: ❌ kdo odmítl + tlačítka Znovu zadat / Smazat */}
+      {task.status === "rejected" && task.createdBy === currentUser.name && (
+        <div style={{
+          display: "flex", gap: "6px", marginTop: "12px", flexWrap: "wrap",
+          paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
+        }}>
+          {onResubmit && (
+            <button onClick={() => {
+              const rejecters = (task.rejectedBy || []).map(r => r?.user).filter(Boolean);
+              const rejectersText = rejecters.length > 0 ? rejecters.join(", ") : "uživatelé";
+              if (confirm(`Znovu zadat úkol "${task.title}"?\n\nÚkol se vrátí do aktivních a ${rejectersText} ho znovu uvidí.`)) {
+                onResubmit(task.id);
+              }
+            }} style={{
+              ...buttonStyle(),
+              padding: "6px 14px", fontSize: "12px", fontWeight: 600,
+              background: `${theme.accent}15`, color: theme.accent,
+              border: `1px solid ${theme.accent}40`,
+            }}>
+              🔄 Znovu zadat
+            </button>
+          )}
+          {onDelete && (
+            <button onClick={() => {
+              if (confirm(`Trvale smazat odmítnutý úkol "${task.title}"?\n\nPůjde do koše (30 dní), pak zmizí navždy.`)) {
+                onDelete(task.id);
+              }
+            }} style={{
+              ...buttonStyle(),
+              padding: "6px 14px", fontSize: "12px", fontWeight: 600,
+              background: `${theme.red}10`, color: theme.red,
+              border: `1px solid ${theme.red}40`,
+            }}>
+              🗑 Smazat
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -5755,7 +5853,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -6357,23 +6455,37 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               </span>
             )}
 
-            {/* Rejected_by chip — pokud někdo úkol odmítl, viditelné PRO autora.
-                Ostatní (kromě těch, kdo odmítl) to nevidí — chrání soukromí.
-                Klik = unreject (vrátí osobu do assignedTo). */}
-            {Array.isArray(task.rejectedBy) && task.rejectedBy.length > 0 &&
-             (task.createdBy === currentUser.name || currentUser.admin) && (
-              <span title="Kdo odmítl tento úkol" style={{
-                fontSize: "10px", fontWeight: 700,
-                color: theme.red,
-                background: `${theme.red}10`,
-                padding: "1px 6px", borderRadius: "10px",
-                border: `1px solid ${theme.red}40`,
-                display: "inline-flex", alignItems: "center", gap: "3px",
-              }}>
-                ❌ {task.rejectedBy.map(r => r.user).join(", ")} odmítl
-                {task.rejectedBy.length === 1 ? (task.rejectedBy[0].user.endsWith("a") ? "a" : "") : "i"}
-              </span>
-            )}
+            {/* Rejected_by chip — varování že někdo úkol odmítl.
+                Plně odmítnuté (status=rejected): červený chip pro autora (ostatní úkol nevidí).
+                Částečně odmítnuté: žlutý chip pro VŠECHNY (kdo zbývá + autor).
+                Pravidla viditelnosti — neukazujeme to právě tomu, kdo úkol odmítl,
+                protože on už úkol stejně nevidí (vyřazen z assignedTo).  */}
+            {Array.isArray(task.rejectedBy) && task.rejectedBy.length > 0 && (() => {
+              const isFullyRejected = task.status === "rejected";
+              const isAuthor = task.createdBy === currentUser.name;
+              const isAssignee = (task.assignedTo || []).includes(currentUser.name);
+              // Skrýt pokud nejsem ani autor ani v assignedTo
+              if (!isAuthor && !isAssignee && !currentUser.admin) return null;
+
+              const color = isFullyRejected ? theme.red : (theme.orange || "#f59e0b");
+              const namesText = task.rejectedBy.map(r => r.user).join(", ");
+              const suffix = task.rejectedBy.length === 1
+                ? (task.rejectedBy[0].user.endsWith("a") ? "a" : "")
+                : "i";
+
+              return (
+                <span title="Kdo úkol odmítl" style={{
+                  fontSize: "10px", fontWeight: 700,
+                  color,
+                  background: `${color}15`,
+                  padding: "1px 6px", borderRadius: "10px",
+                  border: `1px solid ${color}50`,
+                  display: "inline-flex", alignItems: "center", gap: "3px",
+                }}>
+                  ❌ {namesText} odmítl{suffix}
+                </span>
+              );
+            })()}
 
             {/* Category */}
             {task.category && task.category !== "other" && !task.category.startsWith("list:") && (
@@ -6726,6 +6838,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onRestore={onRestore}
           onPermanentDelete={onPermanentDelete}
           onReject={onReject}
+          onResubmit={onResubmit}
           isFromOther={isFromOther}
           theme={theme}
           showCompleteBanner={allChecked}
@@ -13535,14 +13648,60 @@ function App() {
   }, [bulkSelection, exitBulkMode]);
 
   const deleteTask = useCallback((taskId) => {
-    const taskTitle = tasks.find(t => t.id === taskId)?.title || "";
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const taskTitle = task.title || "";
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
+    const isRecurring = (task.recDays || 0) > 0;
 
-    withUndo(`Smazáno: ${shortTitle}`, taskId, prev => prev.map(task => {
-      if (task.id !== taskId) return task;
-      return { ...task, status: "deleted", deletedAt: new Date().toISOString() };
+    if (isRecurring) {
+      // Dialog: tento výskyt vs. ukončit opakování
+      const choice = window.prompt(
+        `🔁 Opakovaný úkol "${taskTitle}"\n\n` +
+        `Co chceš udělat?\n\n` +
+        `1 — ⏭ Smazat tento výskyt\n` +
+        `    Úkol zmizí teď, ale příští výskyt se znovu objeví.\n\n` +
+        `2 — ⏹ Ukončit opakování + smazat\n` +
+        `    Úkol zmizí a už se nikdy znovu neobjeví. Půjde do koše (30 dní).\n\n` +
+        `Napiš 1 nebo 2 (nebo zruš):`
+      );
+      if (choice === "1") {
+        // Smazat tento výskyt → done (processRecurring vytvoří další)
+        // Pozn: pokud bys chtěl rozlišovat "skutečně splněno" vs "smazáno tento výskyt",
+        // potřeboval bys nový sloupec v DB. Zatím se počítá jako splněné.
+        withUndo(`Vynecháno: ${shortTitle}`, taskId, prev => prev.map(t => {
+          if (t.id !== taskId) return t;
+          return {
+            ...t,
+            status: "done",
+            completedAt: new Date().toISOString(),
+            completedByUser: currentUser?.name,
+          };
+        }));
+        return;
+      } else if (choice === "2") {
+        // Ukončit opakování + smazat do koše
+        withUndo(`Ukončeno opakování: ${shortTitle}`, taskId, prev => prev.map(t => {
+          if (t.id !== taskId) return t;
+          return {
+            ...t,
+            recDays: 0,
+            status: "deleted",
+            deletedAt: new Date().toISOString(),
+          };
+        }));
+        return;
+      } else {
+        return; // cancel
+      }
+    }
+
+    // Neopakovaný — klasický soft delete
+    withUndo(`Smazáno: ${shortTitle}`, taskId, prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      return { ...t, status: "deleted", deletedAt: new Date().toISOString() };
     }));
-  }, [tasks, withUndo]);
+  }, [tasks, withUndo, currentUser?.name]);
 
   // Permanently remove tasks in trash older than 30 days.
   // Používáme ref pro aktuální tasks, aby se interval vytvořil jen jednou
@@ -13711,9 +13870,58 @@ function App() {
   // Pokud nikdo nezbude v assignedTo, úkol se přesune do koše (status="deleted").
   const rejectTask = useCallback(async (taskId) => {
     if (!currentUser?.name) return;
+    // Najdi úkol — pro detekci opakování
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    let endRecurrence = false;
+    const isRecurring = (task.recDays || 0) > 0;
+
+    if (isRecurring) {
+      // Dialog: tento výskyt vs. natrvalo
+      const choice = window.prompt(
+        `🔁 Opakovaný úkol "${task.title}"\n\n` +
+        `Co chceš udělat?\n\n` +
+        `1 — ⏭ Odmítnout tento výskyt\n` +
+        `    Příští výskyt se zase objeví. ${task.createdBy} uvidí, že jsi tento odmítl/a.\n\n` +
+        `2 — ⏹ Odmítnout natrvalo (ukončit opakování)\n` +
+        `    Úkol se už nikdy neobjeví. ${task.createdBy} uvidí, žes ho odmítl/a.\n\n` +
+        `Napiš 1 nebo 2 (nebo zruš):`
+      );
+      if (choice === "1") {
+        endRecurrence = false;
+      } else if (choice === "2") {
+        endRecurrence = true;
+      } else {
+        return; // cancel
+      }
+    } else {
+      // Neopakovaný — jen confirm
+      if (!confirm(`Odmítnout úkol "${task.title}"?\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`)) {
+        return;
+      }
+    }
+
     // Optimistic update — rovnou odebrat ze svého assignedTo
     setTasks(prev => prev.map(t => {
       if (t.id !== taskId) return t;
+
+      // Opakovaný + tento výskyt → done + reset pro další výskyt skrz processRecurring
+      if (isRecurring && !endRecurrence) {
+        const oldRejected = Array.isArray(t.rejectedBy) ? t.rejectedBy : [];
+        const newRejected = oldRejected.some(r => r?.user === currentUser.name)
+          ? oldRejected
+          : [...oldRejected, { user: currentUser.name, at: new Date().toISOString(), skipOccurrence: true }];
+        return {
+          ...t,
+          status: "done",
+          completedAt: new Date().toISOString(),
+          completedByUser: currentUser.name,
+          rejectedBy: newRejected,
+        };
+      }
+
+      // Standardní reject (neopakovaný nebo "natrvalo")
       const newAssigned = (t.assignedTo || []).filter(n => n !== currentUser.name);
       const oldRejected = Array.isArray(t.rejectedBy) ? t.rejectedBy : [];
       const newRejected = oldRejected.some(r => r?.user === currentUser.name)
@@ -13723,19 +13931,21 @@ function App() {
         ...t,
         assignedTo: newAssigned,
         rejectedBy: newRejected,
-        status: newAssigned.length === 0 ? "deleted" : t.status,
-        deletedAt: newAssigned.length === 0 ? new Date().toISOString() : t.deletedAt,
+        // Když nikdo nezbude → status="rejected" (autor uvidí v sekci Odmítnuté)
+        status: newAssigned.length === 0 ? "rejected" : t.status,
+        // Pokud "ukončit opakování", rec_days=0
+        recDays: endRecurrence ? 0 : t.recDays,
+        deletedAt: null, // nemažeme do koše
       };
     }));
-    // Server update
-    const result = await apiRejectTask(taskId, currentUser.name);
+
+    const result = await apiRejectTask(taskId, currentUser.name, { endRecurrence });
     if (!result) {
-      // Rollback při chybě
       const fresh = await apiLoadTasks();
       setTasks(fresh);
       alert("Nepodařilo se odmítnout úkol. Zkus to znovu.");
     }
-  }, [currentUser?.name]);
+  }, [currentUser?.name, tasks]);
 
   // Vrátit odmítnutý úkol — admin nebo daný user může vrátit svůj reject
   const unrejectTask = useCallback(async (taskId, userName) => {
@@ -13761,6 +13971,36 @@ function App() {
       setTasks(fresh);
     }
   }, [currentUser?.name]);
+
+  // Znovu zadat odmítnutý úkol — autor obnoví úkol s původními recipienty
+  // (nebo s těmi co odmítli, aby je donutil k opětovnému rozhodnutí).
+  const resubmitTask = useCallback(async (taskId) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    if (task.createdBy !== currentUser?.name) return;
+    const rejecters = (task.rejectedBy || []).map(r => r?.user).filter(Boolean);
+    // Recipienti = ti kdo odmítli (oni byli původně v assignedTo, teď nejsou)
+    if (rejecters.length === 0) return;
+
+    setTasks(prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      return {
+        ...t,
+        status: "todo",
+        assignedTo: rejecters,
+        rejectedBy: [],
+        deletedAt: null,
+        completedAt: null,
+      };
+    }));
+
+    const result = await apiResubmitTask(taskId, rejecters);
+    if (!result) {
+      const fresh = await apiLoadTasks();
+      setTasks(fresh);
+      alert("Nepodařilo se znovu zadat úkol.");
+    }
+  }, [tasks, currentUser?.name]);
 
   // Blokovat uživatele — nebude moci pro mě vytvářet úkoly
   const blockUser = useCallback(async (blockedUserName, mode = "block") => {
@@ -13945,13 +14185,15 @@ function App() {
     else if (viewStatus === "active") {
       // Aktivní = všechny nesplněné, bez ohledu na termín
       result = result.filter(t => {
-        if (!isDone(t) && !isDeleted(t)) {
+        if (!isDone(t) && !isDeleted(t) && !isRejected(t)) {
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
         // Recently completed/deleted (24h)
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
         if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
+        // Rejected — viditelné jen pro autora úkolu (Pavla zadala, Michal odmítl → Pavla vidí)
+        if (t.status === "rejected" && t.createdBy === currentUser.name) return true;
         return false;
       });
     }
@@ -14097,9 +14339,10 @@ function App() {
     const items = [];
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
 
-    const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t));
+    const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
     const doneTasks = filteredTasks.filter(t => isDone(t));
     const deletedTasks = filteredTasks.filter(t => isDeleted(t));
+    const rejectedTasks = filteredTasks.filter(t => isRejected(t));
 
     // ═══ Recently added (last 5 min) ═══
     // Úkoly z mapy `recentlyAdded` (přidané v této session) → na vrchol s fade efektem.
@@ -14262,6 +14505,12 @@ function App() {
       items.push({ type: "section_header_done", key: "section-done", count: combined.length });
     }
     items.push(...combined);
+
+    // Rejected sekce — pod čarou, jen pokud má autor odmítnuté úkoly
+    if (rejectedTasks.length > 0) {
+      items.push({ type: "section_header_rejected", key: "section-rejected", count: rejectedTasks.length });
+      rejectedTasks.forEach(task => items.push({ type: "task", task, key: task.id, isRejectedSection: true }));
+    }
 
     deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
 
@@ -16586,6 +16835,31 @@ function App() {
                     </div>
                   );
                 }
+                if (item.type === "section_header_rejected") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "20px 0 6px",
+                      padding: "10px 12px",
+                      background: `${theme.red}10`,
+                      border: `1px solid ${theme.red}40`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.red, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>
+                        ❌ Odmítnuté ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        co dál — znovu zadat / smazat
+                      </span>
+                    </div>
+                  );
+                }
                 if (item.type === "section_divider") {
                   return (
                     <div key={item.key} style={{
@@ -16711,6 +16985,7 @@ function App() {
                         onRestore={restoreTask}
                         onPermanentDelete={permanentlyDeleteTask}
                         onReject={rejectTask}
+                        onResubmit={resubmitTask}
                         onUnreject={unrejectTask}
                         onBlockUser={blockUser}
                         blocks={blocks}
