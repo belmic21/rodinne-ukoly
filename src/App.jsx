@@ -627,6 +627,39 @@ async function triggerCompletionNotification(task, completedByUser) {
   });
 }
 
+// Trigger notifikace AUTOROVI úkolu když někdo úkol odmítne.
+// Autor (např. Marťa) dostane push/Telegram/email "❌ Michal odmítl tvůj úkol".
+async function triggerRejectionNotification(task, rejecterName, options = {}) {
+  if (!task.createdBy || task.createdBy === rejecterName) return;
+  const isPermanent = !!options.permanent;
+  const titlePrefix = isPermanent ? "❌ Odmítnut natrvalo" : "❌ Úkol odmítnut";
+  return sendPushNotification({
+    task: { id: task.id, title: `${titlePrefix}: ${task.title} — ${rejecterName}` },
+    assignedTo: [task.createdBy],
+    createdBy: rejecterName,
+    type: "task",
+  });
+}
+
+// Trigger notifikace zúčastněným při smazání úkolu.
+// Pokud někdo (Pavla) smaže úkol který sdílí s ostatními, dostanou notifikaci.
+async function triggerDeletionNotification(task, deletedByUser) {
+  // Recipienti: autor + všichni v assignedTo, kromě toho kdo smazal
+  const recipients = new Set();
+  if (task.createdBy && task.createdBy !== deletedByUser) recipients.add(task.createdBy);
+  (task.assignedTo || []).forEach(name => {
+    if (name && name !== deletedByUser) recipients.add(name);
+  });
+  if (recipients.size === 0) return;
+
+  return sendPushNotification({
+    task: { id: task.id, title: `🗑 ${deletedByUser} smazal úkol: ${task.title}` },
+    assignedTo: Array.from(recipients),
+    createdBy: deletedByUser,
+    type: "task",
+  });
+}
+
 // Trigger push při novém komentáři u úkolu
 async function triggerCommentNotification(task, comment, commentAuthor) {
   // Recipients: autor úkolu + všichni assigned, kromě toho kdo komentoval
@@ -13647,7 +13680,7 @@ function App() {
     exitBulkMode();
   }, [bulkSelection, exitBulkMode]);
 
-  const deleteTask = useCallback((taskId) => {
+  const deleteTask = useCallback(async (taskId) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const taskTitle = task.title || "";
@@ -13660,24 +13693,52 @@ function App() {
         `🔁 Opakovaný úkol "${taskTitle}"\n\n` +
         `Co chceš udělat?\n\n` +
         `1 — ⏭ Smazat tento výskyt\n` +
-        `    Úkol zmizí teď, ale příští výskyt se znovu objeví.\n\n` +
+        `    Tento výskyt půjde do koše (30 dní). Příští výskyt se objeví.\n\n` +
         `2 — ⏹ Ukončit opakování + smazat\n` +
         `    Úkol zmizí a už se nikdy znovu neobjeví. Půjde do koše (30 dní).\n\n` +
         `Napiš 1 nebo 2 (nebo zruš):`
       );
+
       if (choice === "1") {
-        // Smazat tento výskyt → done (processRecurring vytvoří další)
-        // Pozn: pokud bys chtěl rozlišovat "skutečně splněno" vs "smazáno tento výskyt",
-        // potřeboval bys nový sloupec v DB. Zatím se počítá jako splněné.
-        withUndo(`Vynecháno: ${shortTitle}`, taskId, prev => prev.map(t => {
-          if (t.id !== taskId) return t;
-          return {
-            ...t,
-            status: "done",
-            completedAt: new Date().toISOString(),
-            completedByUser: currentUser?.name,
-          };
-        }));
+        // Smazat tento výskyt:
+        // (a) Vytvoříme KOPII úkolu se status="deleted" (jde do koše)
+        // (b) Originál se označí jako done (processRecurring ho oživí příští termín)
+        const copyId = generateId();
+        const now = new Date().toISOString();
+        const copy = {
+          ...task,
+          id: copyId,
+          status: "deleted",
+          deletedAt: now,
+          recDays: 0, // kopie už není opakovaná, je to historický záznam
+          // assignedTo zůstane stejné aby v koši bylo vidět kdo měl úkol řešit
+        };
+        // Originál: označit jako done aby processRecurring oživil příští termín
+        setTasks(prev => {
+          const updated = prev.map(t => {
+            if (t.id !== taskId) return t;
+            return {
+              ...t,
+              status: "done",
+              completedAt: now,
+              completedByUser: currentUser?.name,
+            };
+          });
+          return [copy, ...updated]; // kopie do koše
+        });
+        // DB: vytvoř kopii + update originál
+        await apiCreateTask(copy);
+        await apiUpdateTask({
+          ...task,
+          status: "done",
+          completedAt: now,
+          completedByUser: currentUser?.name,
+        });
+        // Notifikace ostatním (sdílený úkol) — jen pokud byl úkol sdílený
+        if ((task.assignedTo || []).length > 1 ||
+            (task.createdBy && task.createdBy !== currentUser?.name)) {
+          triggerDeletionNotification(task, currentUser?.name);
+        }
         return;
       } else if (choice === "2") {
         // Ukončit opakování + smazat do koše
@@ -13690,6 +13751,11 @@ function App() {
             deletedAt: new Date().toISOString(),
           };
         }));
+        // Notifikace
+        if ((task.assignedTo || []).length > 1 ||
+            (task.createdBy && task.createdBy !== currentUser?.name)) {
+          triggerDeletionNotification(task, currentUser?.name);
+        }
         return;
       } else {
         return; // cancel
@@ -13701,6 +13767,25 @@ function App() {
       if (t.id !== taskId) return t;
       return { ...t, status: "deleted", deletedAt: new Date().toISOString() };
     }));
+    // System comment + notifikace ostatním pokud je úkol sdílený
+    const isSharedTask = (task.assignedTo || []).filter(n => n !== currentUser?.name).length > 0 ||
+                         (task.createdBy && task.createdBy !== currentUser?.name);
+    if (isSharedTask) {
+      const sysComment = {
+        id: generateId(),
+        taskId,
+        checklistItemId: null,
+        author: currentUser?.name || "system",
+        content: `🗑 ${currentUser?.name} smazal/a úkol`,
+        type: "system",
+        reaction: null,
+        seenBy: [currentUser?.name],
+        createdAt: new Date().toISOString(),
+      };
+      setComments(prev => [...prev, sysComment]);
+      apiCreateComment(sysComment);
+      triggerDeletionNotification(task, currentUser?.name);
+    }
   }, [tasks, withUndo, currentUser?.name]);
 
   // Permanently remove tasks in trash older than 30 days.
@@ -13944,6 +14029,35 @@ function App() {
       const fresh = await apiLoadTasks();
       setTasks(fresh);
       alert("Nepodařilo se odmítnout úkol. Zkus to znovu.");
+      return;
+    }
+    // System comment — viditelný pro autora i ostatní v Updates panelu (zvonku).
+    // Marker že odmítnutí proběhlo. Autor uvidí v UpdatesPanel.
+    const rejectionText = isRecurring && !endRecurrence
+      ? `❌ ${currentUser.name} odmítl/a tento výskyt opakovaného úkolu`
+      : (endRecurrence
+          ? `❌ ${currentUser.name} odmítl/a úkol natrvalo (ukončil opakování)`
+          : `❌ ${currentUser.name} odmítl/a úkol`);
+    const sysComment = {
+      id: generateId(),
+      taskId,
+      checklistItemId: null,
+      author: currentUser.name,
+      content: rejectionText,
+      type: "system",
+      reaction: null,
+      seenBy: [currentUser.name], // autor úkolu má prázdné seenBy → uvidí ve zvonku
+      createdAt: new Date().toISOString(),
+    };
+    setComments(prev => [...prev, sysComment]);
+    apiCreateComment(sysComment); // fire-and-forget
+
+    // Notifikace autorovi že byl úkol odmítnut (push + Telegram + email).
+    // Pro opakované úkoly se notifikace posílá jen u "natrvalo" — u "tento výskyt"
+    // by autor dostával notifikaci každý týden, což by ho otravovalo.
+    const sendNotif = !isRecurring || endRecurrence;
+    if (sendNotif) {
+      triggerRejectionNotification(task, currentUser.name, { permanent: endRecurrence });
     }
   }, [currentUser?.name, tasks]);
 
@@ -14208,7 +14322,11 @@ function App() {
     // viewStatus === "all" — neaplikuje status filtr, vrátí všechny úkoly
 
     // Scope filter
-    if (filter === "my") result = result.filter(t => t.assignedTo?.includes(currentUser.name));
+    // "my" = moje úkoly: jsem v assignedTo NEBO jsem autor (důležité pro rejected status,
+    //        kde assignedTo je prázdné, ale autor by měl úkol pořád vidět)
+    if (filter === "my") result = result.filter(t =>
+      t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name
+    );
     else if (filter === "for_me") result = result.filter(t =>
       t.assignedTo?.includes(currentUser.name) &&
       t.createdBy !== currentUser.name
