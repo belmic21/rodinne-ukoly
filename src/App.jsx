@@ -12466,7 +12466,7 @@ function App() {
   // brání opětovnému zobrazení po dismiss.
   const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
-  const [filter, setFilter] = useState("my");
+  const [filter, setFilter] = useState("for_me");
   // Default view — uživatel si může v menu nastavit, který view se zobrazí jako homepage
   // Stored in localStorage as "ft_default_view" (default = "active")
   const [defaultView, setDefaultView] = useState(() => {
@@ -14319,7 +14319,18 @@ function App() {
     }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
-    // viewStatus === "all" — neaplikuje status filtr, vrátí všechny úkoly
+    // viewStatus === "all" — všechny aktivní úkoly + done/deleted z posledních 24h
+    // (rejected viditelné jen pro autora). Smazané > 24h jsou v koši.
+    else if (viewStatus === "all") {
+      // "Vše" = aktivní úkoly (i deferred) + done/deleted/rejected za posledních 24h
+      result = result.filter(t => {
+        if (!isDone(t) && !isDeleted(t) && !isRejected(t)) return true;
+        if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
+        if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
+        if (t.status === "rejected" && t.createdBy === currentUser.name) return true;
+        return false;
+      });
+    }
 
     // Scope filter
     // "my" = moje úkoly: jsem v assignedTo NEBO jsem autor (důležité pro rejected status,
@@ -14502,7 +14513,7 @@ function App() {
     }
 
     // ═══ Seskupování — nejdřív Dnes, pak vlastní seznamy (3+), pak ostatní ═══
-    if (viewStatus === "active") {
+    if (viewStatus === "active" || viewStatus === "all") {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
 
@@ -14630,7 +14641,18 @@ function App() {
       rejectedTasks.forEach(task => items.push({ type: "task", task, key: task.id, isRejectedSection: true }));
     }
 
-    deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+    // Smazané sekce — pod čarou, jen pokud existují smazané úkoly viditelné v tomto view
+    // (v "active" view = smazané za posledních 24h, ve "all" view = všechny smazané)
+    if (deletedTasks.length > 0) {
+      const isAllView = viewStatus === "all";
+      items.push({
+        type: "section_header_deleted",
+        key: "section-deleted",
+        count: deletedTasks.length,
+        isAllView,
+      });
+      deletedTasks.forEach(task => items.push({ type: "task", task, key: task.id }));
+    }
 
     return items;
   }, [filteredTasks, viewStatus, currentUser, recentlyAdded, customLists]);
@@ -16974,6 +16996,33 @@ function App() {
                         marginLeft: "auto",
                       }}>
                         co dál — znovu zadat / smazat
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.type === "section_header_deleted") {
+                  return (
+                    <div key={item.key} style={{
+                      margin: "20px 0 6px",
+                      padding: "10px 12px",
+                      background: `${theme.textMid}10`,
+                      border: `1px dashed ${theme.textMid}50`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{
+                        fontSize: "11px", color: theme.textMid, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>
+                        🗑 Smazané ({item.count})
+                      </span>
+                      <span style={{
+                        fontSize: "10px", color: theme.textSub, fontWeight: 500,
+                        marginLeft: "auto",
+                      }}>
+                        {item.isAllView
+                          ? "v koši — trvale zmizí po 30 dnech"
+                          : "smazané za posledních 24 h"}
                       </span>
                     </div>
                   );
