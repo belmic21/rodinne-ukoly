@@ -12542,7 +12542,7 @@ function App() {
   // brání opětovnému zobrazení po dismiss.
   const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
-  const [filter, setFilter] = useState("for_me");
+  const [filter, setFilter] = useState("my");
   // Default view — uživatel si může v menu nastavit, který view se zobrazí jako homepage
   // Stored in localStorage as "ft_default_view" (default = "active")
   const [defaultView, setDefaultView] = useState(() => {
@@ -14391,7 +14391,15 @@ function App() {
       result = result.filter(t => t.status === "in_progress" && !isDeleted(t));
     }
     else if (viewStatus === "planned") {
-      result = result.filter(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t));
+      // Plánované = úkoly s budoucím showFrom NEBO opakované úkoly (vrátí se v budoucnu)
+      result = result.filter(t => {
+        if (isDone(t) || isDeleted(t) || isRejected(t)) return false;
+        // Showform v budoucnu
+        if (t.showFrom && daysDiff(t.showFrom) > 0) return true;
+        // Opakovaný úkol (recDays > 0) — vždy bude pokračovat v budoucnu
+        if ((t.recDays || 0) > 0) return true;
+        return false;
+      });
     }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
@@ -14408,27 +14416,71 @@ function App() {
       });
     }
 
-    // Scope filter
-    // "my" = moje úkoly: jsem v assignedTo NEBO jsem autor (důležité pro rejected status,
-    //        kde assignedTo je prázdné, ale autor by měl úkol pořád vidět)
+    // Scope filter — finální specifikace:
+    // "my"        = MOJE úkoly (osobní, mnou zadané sobě): createdBy=me AND assignedTo=[me only]
+    // "for_me"    = PRO MĚ od ostatních: assignedTo includes me AND createdBy !== me AND ne sdílené
+    // "person:X"  = úkoly mezi mnou a X — 3 sekce (zadal jsem X / X mi zadal / společné s X)
+    // "assigned"  = ZADANÉ ode mě (jednomu příjemci): createdBy=me AND assignedTo má 1 osobu (ne me)
+    // "shared"    = SPOLEČNÉ (multi-recipient): 2+ assigned (já v tom)
+    // "new"       = NOVÉ za 24h: createdAt > now-24h (sekce stejné jako Vše)
+    // "unread"    = UNREAD: nepřečtené úkoly od jiných
     if (filter === "my") result = result.filter(t =>
-      t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name
+      // Mé osobní = já zadal sobě (možná i odmítnuté = autor zachová)
+      t.createdBy === currentUser.name &&
+      Array.isArray(t.assignedTo) &&
+      t.assignedTo.length === 1 &&
+      t.assignedTo[0] === currentUser.name
     );
     else if (filter === "for_me") result = result.filter(t =>
-      // "Pro mě" = vše assigned na mě, ať od kohokoliv (osobní + přijaté).
-      // Nezahrnuje úkoly co jsem zadal jiným (Petrovi).
-      t.assignedTo?.includes(currentUser.name)
+      // Pro mě = úkol od jiného (přesně 1 recipient = já)
+      t.createdBy && t.createdBy !== currentUser.name &&
+      Array.isArray(t.assignedTo) &&
+      t.assignedTo.length === 1 &&
+      t.assignedTo[0] === currentUser.name
     );
     else if (filter.startsWith("person:")) {
       const personName = filter.replace("person:", "");
-      result = result.filter(t => t.assignedTo?.includes(personName));
+      // Úkoly mezi mnou a X — všechny situace (zadal jsem X, X mi zadal, společné)
+      result = result.filter(t => {
+        const assigned = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        const author = t.createdBy;
+        // Zadal jsem X (může být i víc lidí, ale obsahuje X)
+        if (author === currentUser.name && assigned.includes(personName)) return true;
+        // X zadal mě (může být i víc lidí, ale obsahuje mě)
+        if (author === personName && assigned.includes(currentUser.name)) return true;
+        return false;
+      });
     }
-    else if (filter === "assigned") result = result.filter(t => t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name));
-    else if (filter === "shared") result = result.filter(t => t.assignTo === "both");
+    else if (filter === "assigned") result = result.filter(t => {
+      // Zadané ode mě jednomu příjemci (single recipient kromě sebe)
+      if (t.createdBy !== currentUser.name) return false;
+      const assigned = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      // Vyloučit sebe-zadané (osobní)
+      if (assigned.length === 1 && assigned[0] === currentUser.name) return false;
+      // Pouze single recipient (ne víc lidí)
+      const others = assigned.filter(n => n !== currentUser.name);
+      return others.length === 1;
+    });
+    else if (filter === "shared") result = result.filter(t => {
+      // Společné = úkoly s 2+ recipienty (já v tom, ať jsem autor nebo ne)
+      const assigned = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      if (!assigned.includes(currentUser.name) && t.createdBy !== currentUser.name) return false;
+      const others = assigned.filter(n => n !== currentUser.name);
+      return assigned.length >= 2;
+    });
+    else if (filter === "new") result = result.filter(t => {
+      // Nové za 24h
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const createdMs = new Date(t.createdAt).getTime();
+      if (createdMs <= cutoff) return false;
+      // A musí se mě nějak týkat (autor nebo recipient)
+      const assigned = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      return t.createdBy === currentUser.name || assigned.includes(currentUser.name);
+    });
     else if (filter === "unread") result = result.filter(t =>
       !t.seenBy?.includes(currentUser.name) &&
       t.createdBy !== currentUser.name &&
-      t.assignedTo?.includes(currentUser.name)  // only my own unread
+      t.assignedTo?.includes(currentUser.name)
     );
 
     // Category filter
@@ -14538,6 +14590,104 @@ function App() {
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
   const renderItems = useMemo(() => {
+    // ─── SPECIÁLNÍ SEKCE pro filtery: person:X / for_me / assigned / shared ───
+    // Tyto filtery rozdělují úkoly do logických skupin podle vztahu k uživatelům,
+    // místo standardního Aktivní/Starší/Splněné členění.
+    if (filter.startsWith("person:")) {
+      const personName = filter.replace("person:", "");
+      const items = [];
+      // Jen aktivní úkoly (ne splněné/smazané/odmítnuté)
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      // Sekce 1: Co jsem zadal X (createdBy=me, assigned obsahuje X, NE společné)
+      const sentToPerson = activeOnly.filter(t => {
+        const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        return t.createdBy === currentUser.name && a.includes(personName) && a.length === 1;
+      });
+      // Sekce 2: Co X zadal mě (createdBy=X, assigned obsahuje me, NE společné)
+      const receivedFromPerson = activeOnly.filter(t => {
+        const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        return t.createdBy === personName && a.includes(currentUser.name) && a.length === 1;
+      });
+      // Sekce 3: Společné úkoly (multi-recipient)
+      const sharedWithPerson = activeOnly.filter(t => {
+        const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        if (a.length < 2) return false;
+        // Jeden z nás je autor, oba jsme v assigned
+        if (!a.includes(currentUser.name) || !a.includes(personName)) return false;
+        return t.createdBy === currentUser.name || t.createdBy === personName;
+      });
+      if (sentToPerson.length > 0) {
+        items.push({ type: "section_header_custom", key: "sec-sent",
+          icon: "📤", label: `Zadal jsem ${personName}`, count: sentToPerson.length, color: "accent" });
+        sentToPerson.forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      }
+      if (receivedFromPerson.length > 0) {
+        items.push({ type: "section_header_custom", key: "sec-received",
+          icon: "📥", label: `${personName} zadal mě`, count: receivedFromPerson.length, color: "green" });
+        receivedFromPerson.forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      }
+      if (sharedWithPerson.length > 0) {
+        items.push({ type: "section_header_custom", key: "sec-shared",
+          icon: "👥", label: `Společné s ${personName}`, count: sharedWithPerson.length, color: "orange" });
+        sharedWithPerson.forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      }
+      return items;
+    }
+
+    if (filter === "for_me") {
+      // Pro mě od ostatních — kategorie podle createdBy (autora)
+      const items = [];
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      // Group by author
+      const byAuthor = {};
+      activeOnly.forEach(t => {
+        const author = t.createdBy || "?";
+        if (!byAuthor[author]) byAuthor[author] = [];
+        byAuthor[author].push(t);
+      });
+      // Seřaď autory podle počtu úkolů (descending)
+      const sortedAuthors = Object.keys(byAuthor).sort((a, b) => byAuthor[b].length - byAuthor[a].length);
+      sortedAuthors.forEach(author => {
+        items.push({ type: "section_header_custom", key: `sec-from-${author}`,
+          icon: "📥", label: `Od ${author}`, count: byAuthor[author].length, color: "accent" });
+        byAuthor[author].forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      });
+      return items;
+    }
+
+    if (filter === "assigned") {
+      // Zadané ode mě — kategorie podle příjemce
+      const items = [];
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      const byRecipient = {};
+      activeOnly.forEach(t => {
+        const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        const others = a.filter(n => n !== currentUser.name);
+        const recipient = others[0] || "?";
+        if (!byRecipient[recipient]) byRecipient[recipient] = [];
+        byRecipient[recipient].push(t);
+      });
+      const sortedRecipients = Object.keys(byRecipient).sort((a, b) => byRecipient[b].length - byRecipient[a].length);
+      sortedRecipients.forEach(recipient => {
+        items.push({ type: "section_header_custom", key: `sec-to-${recipient}`,
+          icon: "📤", label: `Pro ${recipient}`, count: byRecipient[recipient].length, color: "accent" });
+        byRecipient[recipient].forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      });
+      return items;
+    }
+
+    if (filter === "shared") {
+      // Společné — sekce podle počtu lidí + možnost filtrovat. Zatím jednoduše seznam.
+      const items = [];
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      if (activeOnly.length > 0) {
+        items.push({ type: "section_header_custom", key: "sec-shared-all",
+          icon: "👥", label: `Společné úkoly`, count: activeOnly.length, color: "orange" });
+        activeOnly.forEach(t => items.push({ type: "task", task: t, key: t.id }));
+      }
+      return items;
+    }
+
     if (viewStatus !== "active" && viewStatus !== "today" && viewStatus !== "all") {
       return filteredTasks.map(task => ({ type: "task", task, key: task.id }));
     }
@@ -14834,20 +14984,47 @@ function App() {
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
         }
         else if (viewStatus === "in_progress" && (t.status !== "in_progress" || isDeleted(t))) return false;
-        else if (viewStatus === "planned" && !(t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t))) return false;
+        else if (viewStatus === "planned" && !(
+          !isDone(t) && !isDeleted(t) &&
+          ((t.showFrom && daysDiff(t.showFrom) > 0) || (t.recDays || 0) > 0)
+        )) return false;
         else if (viewStatus === "done" && t.status !== "done") return false;
         else if (viewStatus === "trash" && t.status !== "deleted") return false;
       }
       // Scope filter — skip if counting scopes
       if (!skip.includes("scope")) {
-        if (filter === "my" && !t.assignedTo?.includes(currentUser.name)) return false;
-        else if (filter === "for_me" && !t.assignedTo?.includes(currentUser.name)) return false;
+        const assigned = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        if (filter === "my") {
+          // Moje = self-created + assigned only sebe
+          if (!(t.createdBy === currentUser.name && assigned.length === 1 && assigned[0] === currentUser.name)) return false;
+        }
+        else if (filter === "for_me") {
+          // Pro mě = od jiného, single recipient = já
+          if (!(t.createdBy && t.createdBy !== currentUser.name &&
+                assigned.length === 1 && assigned[0] === currentUser.name)) return false;
+        }
         else if (filter.startsWith("person:")) {
           const personName = filter.replace("person:", "");
-          if (!t.assignedTo?.includes(personName)) return false;
+          const matchSent = t.createdBy === currentUser.name && assigned.includes(personName);
+          const matchReceived = t.createdBy === personName && assigned.includes(currentUser.name);
+          if (!matchSent && !matchReceived) return false;
         }
-        else if (filter === "assigned" && !(t.createdBy === currentUser.name && !t.assignedTo?.every(a => a === currentUser.name))) return false;
-        else if (filter === "shared" && t.assignTo !== "both") return false;
+        else if (filter === "assigned") {
+          if (t.createdBy !== currentUser.name) return false;
+          if (assigned.length === 1 && assigned[0] === currentUser.name) return false;
+          const others = assigned.filter(n => n !== currentUser.name);
+          if (others.length !== 1) return false;
+        }
+        else if (filter === "shared") {
+          if (!assigned.includes(currentUser.name) && t.createdBy !== currentUser.name) return false;
+          if (assigned.length < 2) return false;
+        }
+        else if (filter === "new") {
+          const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+          const createdMs = new Date(t.createdAt).getTime();
+          if (createdMs <= cutoff) return false;
+          if (t.createdBy !== currentUser.name && !assigned.includes(currentUser.name)) return false;
+        }
         else if (filter === "unread" && !(
           !t.seenBy?.includes(currentUser.name) &&
           t.createdBy !== currentUser.name &&
@@ -14895,25 +15072,51 @@ function App() {
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
+    const isOwnPersonal = (t) => {
+      const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      return t.createdBy === currentUser.name && a.length === 1 && a[0] === currentUser.name;
+    };
+    const isForMeFromOther = (t) => {
+      const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      return t.createdBy && t.createdBy !== currentUser.name && a.length === 1 && a[0] === currentUser.name;
+    };
+    const isAssignedByMe = (t) => {
+      if (t.createdBy !== currentUser.name) return false;
+      const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      if (a.length === 1 && a[0] === currentUser.name) return false;
+      const others = a.filter(n => n !== currentUser.name);
+      return others.length === 1;
+    };
+    const isShared = (t) => {
+      const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+      if (!a.includes(currentUser.name) && t.createdBy !== currentUser.name) return false;
+      return a.length >= 2;
+    };
     return {
-      // Scope counts — bez status filtru
-      // Skip odložené (showFrom > dnes), jinak counter ukazuje "(2)" ale view je prázdné.
-      my: countTasks(t => t.assignedTo?.includes(currentUser.name) && !isDone(t) && !isDeleted(t)
+      // Scope counts — vše bez deferred + bez done/deleted
+      my: countTasks(t => isOwnPersonal(t) && !isDone(t) && !isDeleted(t)
         && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
-      forMe: countTasks(t =>
-        t.assignedTo?.includes(currentUser.name) && t.createdBy !== currentUser.name && !isDone(t) && !isDeleted(t)
-        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred),
-        ["scope", "status"]
-      ),
-      assigned: countTasks(t =>
-        t.createdBy === currentUser.name && !t.assignedTo?.every(x => x === currentUser.name) && !isDone(t) && !isDeleted(t)
-        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred),
-        ["scope", "status"]
-      ),
-      shared: countTasks(t => t.assignTo === "both" && !isDone(t) && !isDeleted(t)
+      forMe: countTasks(t => isForMeFromOther(t) && !isDone(t) && !isDeleted(t)
         && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
-      // "planned" count — status skipped, counts only deferred with all other filters
-      planned: countTasks(t => t.showFrom && daysDiff(t.showFrom) > 0 && !isDone(t) && !isDeleted(t), ["status"]),
+      assigned: countTasks(t => isAssignedByMe(t) && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
+      shared: countTasks(t => isShared(t) && !isDone(t) && !isDeleted(t)
+        && !(t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred), ["scope", "status"]),
+      // "Nové (24h)" count
+      newCount: countTasks(t => {
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const createdMs = new Date(t.createdAt).getTime();
+        if (createdMs <= cutoff) return false;
+        const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        return (t.createdBy === currentUser.name || a.includes(currentUser.name)) && !isDone(t) && !isDeleted(t);
+      }, ["scope", "status"]),
+      // "planned" count — showFrom v budoucnu nebo opakované
+      planned: countTasks(t => {
+        if (isDone(t) || isDeleted(t)) return false;
+        if (t.showFrom && daysDiff(t.showFrom) > 0) return true;
+        if ((t.recDays || 0) > 0) return true;
+        return false;
+      }, ["status"]),
       // "done" count — status skipped
       done: countTasks(t => t.status === "done", ["status"]),
       // "trash" count
@@ -16306,7 +16509,7 @@ function App() {
                     <button type="button" onClick={() => { setFilter("my"); setFilterPopover(null); }}
                       style={optStyle(filter === "my")}>
                       <span style={{ width: "20px", fontSize: "16px" }}>👤</span>
-                      <span style={{ flex: 1 }}>Moje</span>
+                      <span style={{ flex: 1 }}>Moje (osobní)</span>
                       <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.my}</span>
                     </button>
                     <button type="button" onClick={() => { setFilter("for_me"); setFilterPopover(null); }}
@@ -16335,10 +16538,16 @@ function App() {
                       <span style={{ flex: 1 }}>Společné</span>
                       <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.shared}</span>
                     </button>
+                    <button type="button" onClick={() => { setFilter("new"); setFilterPopover(null); }}
+                      style={optStyle(filter === "new")}>
+                      <span style={{ width: "20px", fontSize: "16px" }}>🆕</span>
+                      <span style={{ flex: 1 }}>Nové (24h)</span>
+                      <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{stats.newCount || 0}</span>
+                    </button>
                     <button type="button" onClick={() => { setFilter("unread"); setFilterPopover(null); }}
                       style={optStyle(filter === "unread")}>
                       <span style={{ width: "20px", fontSize: "16px" }}>🔴</span>
-                      <span style={{ flex: 1 }}>Nové</span>
+                      <span style={{ flex: 1 }}>Nepřečtené</span>
                       <span style={{ fontSize: "11px", color: theme.textSub, fontWeight: 500 }}>{unreadCounts[currentUser.name] || 0}</span>
                     </button>
                     <button type="button" onClick={() => { setFilter("all"); setFilterPopover(null); }}
@@ -16897,6 +17106,34 @@ function App() {
               let passedUnread = false;
 
               return visibleItems.map(item => {
+                // Universal section header — používá se pro person/for_me/assigned/shared filtry
+                if (item.type === "section_header_custom") {
+                  const colorMap = {
+                    accent: theme.accent,
+                    green: theme.green,
+                    orange: theme.orange || "#f59e0b",
+                    red: theme.red,
+                  };
+                  const color = colorMap[item.color] || theme.accent;
+                  return (
+                    <div key={item.key} style={{
+                      margin: "16px 0 6px",
+                      padding: "10px 12px",
+                      background: `${color}10`,
+                      border: `1px solid ${color}40`,
+                      borderRadius: "8px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}>
+                      <span style={{ fontSize: "14px" }}>{item.icon}</span>
+                      <span style={{
+                        fontSize: "11px", color, fontWeight: 800,
+                        textTransform: "uppercase", letterSpacing: "0.4px",
+                      }}>
+                        {item.label} ({item.count})
+                      </span>
+                    </div>
+                  );
+                }
                 // Section header: "🆕 Nové od druhých" — nepřečtené nové úkoly od jiných uživatelů.
                 // Zůstává viditelné dokud user neotevře detail (= přečte) nebo neuplyne 60 min.
                 if (item.type === "section_header_new") {
