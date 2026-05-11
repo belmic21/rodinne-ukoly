@@ -5037,18 +5037,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       ❌ Odmítnout
                     </button>
                   )}
-                  {onArchive && (
-                    <button onClick={() => onArchive(task.id)} title="Archivovat — trvalé uložení mimo aktivní seznam" style={{
-                      ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
-                      background: `${theme.accent}10`, color: theme.accent,
-                      border: `1px solid ${theme.accent}30`,
-                      borderRadius: "12px",
-                      display: "inline-flex", alignItems: "center", gap: "4px",
-                    }}>
-                      📂 Archivovat
-                    </button>
-                  )}
                   {onDelete && (
                     <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
                       ...buttonStyle(),
@@ -7080,6 +7068,31 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                   {opt.label}
                 </button>
               ))}
+              {/* Archive section — viditelné jen pro aktivní úkoly */}
+              {onArchive && !taskIsDone && !taskIsDeleted && (
+                <>
+                  <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+                  <button
+                    onClick={() => {
+                      onArchive(task.id);
+                      setSnoozeMenuOpen(false);
+                      setIsOpen(false);
+                    }}
+                    title="Archivovat — trvalé uložení mimo aktivní seznam (nemaže se po 30 dnech)"
+                    style={{
+                      ...buttonStyle(),
+                      padding: "7px 10px", fontSize: "12px",
+                      background: "transparent", color: theme.accent,
+                      border: "none", textAlign: "left",
+                      borderRadius: "6px",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = `${theme.accent}10`}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    📂 Archivovat
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -7570,27 +7583,59 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           }}>
             {showQuickHelp ? "▾" : "▸"} Nápověda zkratek
           </button>
-          {showQuickHelp && (
-            <div style={{
-              fontSize: "11px", color: theme.textMid, lineHeight: 1.5,
-              padding: "6px 10px", marginTop: "4px",
-              background: `${theme.accent}05`,
-              border: `1px solid ${theme.accent}20`,
-              borderRadius: "8px",
-            }}>
-              <div style={{ marginBottom: "4px", fontWeight: 600 }}>Quick-add syntax:</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>@jméno</code> — komu zadávám (např. <code>@Pavla</code>, lze i víc <code>@Petr @Marťa</code>)</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>+u / +urgent</code> — vysoká priorita</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>+m / +medium</code> — střední | <code>+l / +low</code> — nízká</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>#kategorie</code> — kategorie (např. <code>#home</code>, <code>#auto</code>)</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>!datum</code> — termín (<code>!zítra</code>, <code>!pondělí</code>, <code>!za 3 dny</code>, <code>!15.5.</code>)</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>~období</code> — opakování (<code>~den</code>, <code>~tyden</code>, <code>~mesic</code>, <code>~14d</code>)</div>
-              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>*</code> na konci — připnout nahoru</div>
-              <div style={{ marginTop: "5px", fontStyle: "italic", color: theme.textSub }}>
-                Příklad: <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>Vynést koš @Pavla +u !zítra ~tyden</code>
+          {showQuickHelp && (() => {
+            const codeStyle = {
+              background: theme.inputBg,
+              padding: "2px 6px",
+              borderRadius: "4px",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
+              fontSize: "11px",
+              fontWeight: 600,
+              color: theme.accent,
+              whiteSpace: "nowrap",
+            };
+            const rows = [
+              { code: "@jméno", desc: "Komu zadávám", example: "@Pavla" },
+              { code: "+u +urgent", desc: "Vysoká priorita", example: "" },
+              { code: "+m +medium", desc: "Střední priorita", example: "" },
+              { code: "+l +low", desc: "Nízká priorita", example: "" },
+              { code: "#kategorie", desc: "Kategorie / složka", example: "#home, #auto" },
+              { code: "!datum", desc: "Termín", example: "!zítra, !pondělí, !15.5." },
+              { code: "~období", desc: "Opakování", example: "~den, ~tyden, ~mesic, ~14d" },
+              { code: "*", desc: "Připnout nahoru (na konci)", example: "" },
+            ];
+            return (
+              <div style={{
+                padding: "10px 12px", marginTop: "4px",
+                background: `${theme.accent}05`,
+                border: `1px solid ${theme.accent}20`,
+                borderRadius: "8px",
+              }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr auto",
+                  gap: "6px 12px",
+                  fontSize: "11px",
+                  alignItems: "center",
+                }}>
+                  {rows.flatMap((r, i) => [
+                    <code key={`c-${i}`} style={codeStyle}>{r.code}</code>,
+                    <span key={`d-${i}`} style={{ color: theme.text }}>{r.desc}</span>,
+                    <span key={`e-${i}`} style={{ color: theme.textSub, fontFamily: "ui-monospace, monospace", fontSize: "10px" }}>
+                      {r.example}
+                    </span>,
+                  ])}
+                </div>
+                <div style={{
+                  marginTop: "10px", paddingTop: "8px",
+                  borderTop: `1px solid ${theme.accent}20`,
+                  fontSize: "11px", color: theme.textMid, fontStyle: "italic",
+                }}>
+                  Příklad: <code style={codeStyle}>Vynést koš @Pavla +u !zítra ~tyden</code>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -9397,6 +9442,7 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
 function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpenTask, onOpenReminder }) {
   useEscapeKey(onClose);
   const [viewMode, setViewMode] = useState("month"); // "month" | "week"
+  const [statusFilter, setStatusFilter] = useState("active"); // "active" | "done" | "all"
   const [currentDate, setCurrentDate] = useState(() => {
     const d = new Date(); d.setHours(0, 0, 0, 0); return d;
   });
@@ -9419,6 +9465,10 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
       // Mě se musí týkat
       const involves = (t.assignedTo || []).includes(currentUser.name) || t.createdBy === currentUser.name;
       if (!involves) return;
+      // statusFilter: active = jen nehotové, done = jen hotové, all = oboje
+      const taskDone = isDone(t);
+      if (statusFilter === "active" && taskDone) return;
+      if (statusFilter === "done" && !taskDone) return;
 
       // dueDate
       if (t.dueDate) {
@@ -9455,7 +9505,7 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
     });
 
     return { tasks: taskItems, reminders: remItems, recurring: recurringItems };
-  }, [tasks, reminders, currentUser]);
+  }, [tasks, reminders, currentUser, statusFilter]);
 
   // Měsíční mřížka — 6 týdnů (42 dnů)
   const monthGrid = useMemo(() => {
@@ -9555,6 +9605,24 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
           }}>Dnes</button>
         </div>
 
+        {/* Status filter row — co zobrazit v kalendáři */}
+        <div style={{ display: "flex", gap: "4px", marginBottom: "12px", justifyContent: "center" }}>
+          {[
+            { key: "active", label: "📋 Aktivní" },
+            { key: "done", label: "✓ Hotové" },
+            { key: "all", label: "🌐 Vše" },
+          ].map(f => (
+            <button key={f.key} onClick={() => setStatusFilter(f.key)} style={{
+              ...buttonStyle(),
+              padding: "4px 12px", fontSize: "11px", fontWeight: statusFilter === f.key ? 700 : 500,
+              background: statusFilter === f.key ? theme.accent : "transparent",
+              color: statusFilter === f.key ? "#fff" : theme.textMid,
+              border: `1px solid ${statusFilter === f.key ? theme.accent : theme.cardBorder}`,
+              borderRadius: "14px", fontFamily: FONT,
+            }}>{f.label}</button>
+          ))}
+        </div>
+
         {/* Měsíční mřížka */}
         {viewMode === "month" && (
           <div>
@@ -9646,17 +9714,23 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
                     </span>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                    {items.tasks.map((it, j) => (
-                      <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
-                        ...buttonStyle(), padding: "3px 6px", fontSize: "11px",
-                        background: "transparent", color: theme.text,
-                        border: `1px solid ${theme.cardBorder}`,
-                        textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
-                      }}>
-                        <span>{it.type === "showFrom" ? "▶" : "📌"}</span>
-                        <span>{it.task.title}</span>
-                      </button>
-                    ))}
+                    {items.tasks.map((it, j) => {
+                      const taskDone = isDone(it.task);
+                      return (
+                        <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
+                          ...buttonStyle(), padding: "3px 6px", fontSize: "11px",
+                          background: "transparent",
+                          color: taskDone ? theme.textSub : theme.text,
+                          border: `1px solid ${theme.cardBorder}`,
+                          textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                          textDecoration: taskDone ? "line-through" : "none",
+                          opacity: taskDone ? 0.6 : 1,
+                        }}>
+                          <span>{taskDone ? "✓" : (it.type === "showFrom" ? "▶" : "📌")}</span>
+                          <span>{it.task.title}</span>
+                        </button>
+                      );
+                    })}
                     {items.recurring.map((it, j) => (
                       <div key={`r-${j}`} style={{
                         padding: "3px 6px", fontSize: "11px",
@@ -9693,6 +9767,19 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
           }}>
             <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "8px" }}>
               📅 {selectedDate.toLocaleDateString("cs-CZ", { weekday: "long", day: "numeric", month: "long" })}
+              {(() => {
+                const totalDone = selectedItems.tasks.filter(it => isDone(it.task)).length;
+                const totalActive = selectedItems.tasks.length - totalDone;
+                const allCount = selectedItems.tasks.length + selectedItems.reminders.length + selectedItems.recurring.length;
+                if (allCount === 0) return null;
+                return (
+                  <span style={{ marginLeft: "8px", fontSize: "11px", fontWeight: 500, color: theme.textMid }}>
+                    — celkem {allCount}
+                    {totalDone > 0 && totalActive > 0 && `, z toho ${totalDone} hotových`}
+                    {totalDone === selectedItems.tasks.length && selectedItems.tasks.length > 0 && ", vše hotovo"}
+                  </span>
+                );
+              })()}
             </div>
             {selectedItems.tasks.length + selectedItems.reminders.length + selectedItems.recurring.length === 0 ? (
               <div style={{ fontSize: "12px", color: theme.textSub, fontStyle: "italic" }}>
@@ -9700,20 +9787,26 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                {selectedItems.tasks.map((it, j) => (
-                  <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
-                    ...buttonStyle(), padding: "5px 8px", fontSize: "12px",
-                    background: "transparent", color: theme.text,
-                    border: `1px solid ${theme.cardBorder}`,
-                    textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
-                  }}>
-                    <span>{it.type === "showFrom" ? "▶" : "📌"}</span>
-                    <span>{it.task.title}</span>
-                    <span style={{ marginLeft: "auto", fontSize: "10px", color: theme.textSub }}>
-                      {it.type === "showFrom" ? "začíná" : "termín"}
-                    </span>
-                  </button>
-                ))}
+                {selectedItems.tasks.map((it, j) => {
+                  const taskDone = isDone(it.task);
+                  return (
+                    <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
+                      ...buttonStyle(), padding: "5px 8px", fontSize: "12px",
+                      background: "transparent",
+                      color: taskDone ? theme.textSub : theme.text,
+                      border: `1px solid ${theme.cardBorder}`,
+                      textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                      textDecoration: taskDone ? "line-through" : "none",
+                      opacity: taskDone ? 0.6 : 1,
+                    }}>
+                      <span>{taskDone ? "✓" : (it.type === "showFrom" ? "▶" : "📌")}</span>
+                      <span>{it.task.title}</span>
+                      <span style={{ marginLeft: "auto", fontSize: "10px", color: theme.textSub }}>
+                        {taskDone ? "hotovo" : (it.type === "showFrom" ? "začíná" : "termín")}
+                      </span>
+                    </button>
+                  );
+                })}
                 {selectedItems.recurring.map((it, j) => (
                   <div key={`r-${j}`} style={{
                     padding: "5px 8px", fontSize: "12px", color: theme.green,
@@ -11570,10 +11663,323 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
    Mute = úkoly chodí, ale notifikace ne.
    ═══════════════════════════════════════════════════════ */
 // ═══════════════════════════════════════════════════════
-// FOLDER MANAGER PANEL — editace složek (kategorie + lists)
-// Per-user nastavení: skrytí (hidden), pořadí (order),
-// při mazání lists dotaz co s úkoly (smazat / odstranit štítek)
+// FAQ PANEL — Nápověda / FAQ pro nové uživatele
+// Zobrazuje přehled funkcí, klávesových zkratek, statusů, atd.
 // ═══════════════════════════════════════════════════════
+function FaqPanel({ theme, onClose }) {
+  useEscapeKey(onClose);
+  const [activeSection, setActiveSection] = useState("zaklady");
+
+  const codeStyle = {
+    background: theme.inputBg,
+    padding: "2px 6px",
+    borderRadius: "4px",
+    fontFamily: "ui-monospace, monospace",
+    fontSize: "11px",
+    fontWeight: 600,
+    color: theme.accent,
+  };
+  const h3 = { fontSize: "13px", fontWeight: 700, color: theme.text, margin: "14px 0 6px" };
+  const h3First = { ...h3, marginTop: 0 };
+  const para = { fontSize: "12px", color: theme.textMid, lineHeight: 1.6, marginBottom: "8px" };
+  const list = { fontSize: "12px", color: theme.textMid, lineHeight: 1.6, paddingLeft: "20px", marginBottom: "10px" };
+
+  const sections = [
+    { key: "zaklady", icon: "🎯", label: "Začátek" },
+    { key: "quickadd", icon: "⚡", label: "Quick-Add" },
+    { key: "ukoly", icon: "📋", label: "Úkoly" },
+    { key: "kategorie", icon: "📁", label: "Složky" },
+    { key: "sdileni", icon: "🤝", label: "Sdílení" },
+    { key: "notifikace", icon: "🔔", label: "Notifikace" },
+    { key: "kalendar", icon: "📅", label: "Kalendář" },
+    { key: "zkratky", icon: "⌨️", label: "Klávesy" },
+  ];
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 10000, display: "flex",
+      justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "4vh", paddingBottom: "4vh", overflowY: "auto",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.bg, color: theme.text,
+        padding: "20px", borderRadius: "12px",
+        maxWidth: "640px", width: "94%",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+        fontFamily: FONT,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+          <span style={{ fontSize: "17px", fontWeight: 700 }}>❓ Nápověda</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "20px" }}>×</button>
+        </div>
+
+        {/* Section tabs */}
+        <div style={{
+          display: "flex", gap: "4px", marginBottom: "14px",
+          overflowX: "auto", paddingBottom: "4px",
+          borderBottom: `1px solid ${theme.cardBorder}`,
+        }}>
+          {sections.map(s => {
+            const isActive = activeSection === s.key;
+            return (
+              <button key={s.key} onClick={() => setActiveSection(s.key)} style={{
+                ...buttonStyle(),
+                padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                background: isActive ? theme.accent : "transparent",
+                color: isActive ? "#fff" : theme.textMid,
+                border: `1px solid ${isActive ? theme.accent : theme.cardBorder}`,
+                borderRadius: "14px", fontFamily: FONT, flexShrink: 0,
+                whiteSpace: "nowrap",
+              }}>
+                {s.icon} {s.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ maxHeight: "60vh", overflowY: "auto", paddingRight: "8px" }}>
+
+          {activeSection === "zaklady" && (
+            <>
+              <h3 style={h3First}>🎯 Vítej v Rodinných úkolech</h3>
+              <p style={para}>
+                Aplikace pro sdílené úkoly, opakované rutiny, připomínky a poznámky.
+                Funguje pro celou rodinu (či malý tým 2–5 lidí).
+              </p>
+              <h3 style={h3}>Hlavní pojmy</h3>
+              <ul style={list}>
+                <li><strong>Moje (osobní)</strong> — úkoly, které jsi zadal sám sobě</li>
+                <li><strong>Pro mě</strong> — úkoly od ostatních, kde jsi v assignedTo</li>
+                <li><strong>Zadané</strong> — co jsi zadal jiným</li>
+                <li><strong>Společné</strong> — úkoly přiřazené více lidem najednou</li>
+              </ul>
+              <h3 style={h3}>Stavy úkolu</h3>
+              <ul style={list}>
+                <li>⚪ <strong>Aktivní</strong> — k řešení</li>
+                <li>🟡 <strong>Rozpracovaný</strong> — někdo na něm pracuje</li>
+                <li>✅ <strong>Hotový</strong> — splněno</li>
+                <li>❌ <strong>Odmítnutý</strong> — někdo odmítl, autor uvidí v sekci</li>
+                <li>🗑 <strong>V koši</strong> — smazaný, 30 dní pak natrvalo zmizí</li>
+                <li>📂 <strong>Archivovaný</strong> — trvalá historie, nemaže se</li>
+              </ul>
+              <h3 style={h3}>Tip: rychlé zadání</h3>
+              <p style={para}>
+                Napiš úkol s prefixy (<code style={codeStyle}>@</code>, <code style={codeStyle}>+</code>, <code style={codeStyle}>!</code>...)
+                — viz záložka Quick-Add. Ušetří kliky.
+              </p>
+            </>
+          )}
+
+          {activeSection === "quickadd" && (
+            <>
+              <h3 style={h3First}>⚡ Quick-Add syntax</h3>
+              <p style={para}>
+                Místo proklikávání nastav vše rovnou ve vstupu. Tokeny rozpozná barevný chip pod inputem.
+              </p>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr auto",
+                gap: "8px 14px",
+                fontSize: "12px",
+                alignItems: "center",
+                marginBottom: "10px",
+              }}>
+                {[
+                  ["@jméno", "Komu zadávám (lze i víc)", "@Pavla @Petr"],
+                  ["+u, +urgent", "Vysoká priorita", ""],
+                  ["+m, +medium", "Střední priorita", ""],
+                  ["+l, +low", "Nízká priorita", ""],
+                  ["#kategorie", "Kategorie / složka", "#home"],
+                  ["!datum", "Termín splnění", "!zítra, !pondělí, !15.5."],
+                  ["~období", "Opakování", "~den, ~tyden, ~14d"],
+                  ["*", "Připnout nahoru (na konci)", ""],
+                ].flatMap((r, i) => [
+                  <code key={`c-${i}`} style={codeStyle}>{r[0]}</code>,
+                  <span key={`d-${i}`} style={{ color: theme.text }}>{r[1]}</span>,
+                  <span key={`e-${i}`} style={{ color: theme.textSub, fontFamily: "ui-monospace, monospace", fontSize: "11px" }}>{r[2]}</span>,
+                ])}
+              </div>
+              <p style={para}>
+                <strong>Příklad:</strong> <code style={codeStyle}>Vynést koš @Pavla +u !zítra ~tyden</code>
+              </p>
+              <p style={para}>
+                Pokud parser něco nerozezná (např. <code style={codeStyle}>@Neznámec</code>), zůstane v názvu úkolu a označí se červeně.
+              </p>
+            </>
+          )}
+
+          {activeSection === "ukoly" && (
+            <>
+              <h3 style={h3First}>📋 Úkoly — co můžeš</h3>
+              <ul style={list}>
+                <li><strong>Splnit</strong> — klik ⚪ vlevo nahoře (zaškrtnutí)</li>
+                <li><strong>Rozpracovat</strong> — klik žlutý kruh (úkol půjde do "Rozpracované")</li>
+                <li><strong>Editovat</strong> — rozbal úkol → ✏️ Upravit</li>
+                <li><strong>Odložit</strong> — klik ▼ vpravo → Odložit do (1 den, 3 dny, týden, měsíc)</li>
+                <li><strong>Archivovat</strong> — klik ▼ vpravo → 📂 Archivovat (trvalé uložení)</li>
+                <li><strong>Smazat</strong> — rozbal → 🗑 Smazat (30 dní v koši)</li>
+                <li><strong>Odmítnout</strong> — jen u úkolů od ostatních: ❌ Odmítnout (autor uvidí)</li>
+                <li><strong>Komentovat</strong> — rozbal → napiš komentář (notifikuje ostatní)</li>
+                <li><strong>Reakce</strong> — klikni emoji u úkolu/komentáře (👍, ❤️, atd.)</li>
+              </ul>
+              <h3 style={h3}>Opakované úkoly</h3>
+              <p style={para}>
+                Když nastavíš opakování (např. týdně), úkol se po splnění automaticky vrátí. Při smazání nebo odmítnutí ti appka nabídne:
+              </p>
+              <ul style={list}>
+                <li><strong>Tento výskyt</strong> — přeskočit jen tento týden</li>
+                <li><strong>Natrvalo</strong> — ukončit opakování úplně</li>
+              </ul>
+              <h3 style={h3}>Připnutí (pin) ⭐</h3>
+              <p style={para}>
+                Úkol s "<strong>*</strong>" na konci v quick-add jde na vrchol seznamu. Také <code style={codeStyle}>+u</code> dělá totéž (vysoká priorita).
+              </p>
+            </>
+          )}
+
+          {activeSection === "kategorie" && (
+            <>
+              <h3 style={h3First}>📁 Správa složek</h3>
+              <p style={para}>
+                Klepni avatar (vpravo nahoře) → <strong>📁 Správa složek</strong>.
+              </p>
+              <ul style={list}>
+                <li>👁 — skrýt / zobrazit složku</li>
+                <li>↑↓ — posunout (oblíbené nahoru)</li>
+                <li>✏️ — přejmenovat (jen vlastní)</li>
+                <li>🗑 — smazat (jen vlastní, s dotazem co s úkoly)</li>
+              </ul>
+              <p style={para}>
+                Nastavení je <strong>per uživatel</strong>. Co ty skryješ, ostatní stále vidí.
+              </p>
+              <h3 style={h3}>Co se stane s úkoly při mazání složky?</h3>
+              <p style={para}>
+                Apka se zeptá:
+              </p>
+              <ul style={list}>
+                <li><strong>Smazat úkoly i složku</strong> — vše do koše</li>
+                <li><strong>Ponechat úkoly, jen odstranit štítek</strong> — úkoly zůstanou bez kategorie</li>
+              </ul>
+            </>
+          )}
+
+          {activeSection === "sdileni" && (
+            <>
+              <h3 style={h3First}>🤝 Sdílení a notifikace mezi uživateli</h3>
+              <p style={para}>
+                Když zadáš úkol druhému uživateli, ten dostane <strong>notifikaci</strong> (push, Telegram, email — podle jeho nastavení).
+              </p>
+              <h3 style={h3}>Co druhý uvidí</h3>
+              <ul style={list}>
+                <li>Úkol v sekci <strong>🆕 Nové od druhých</strong> nahoře (dokud nepřečte nebo neuplyne 60 min)</li>
+                <li>Notifikaci (push/Telegram/email) podle preferencí</li>
+                <li>Po otevření detailu se úkol označí jako přečtený a zařadí do své kategorie</li>
+              </ul>
+              <h3 style={h3}>Blokování a ztlumení</h3>
+              <p style={para}>
+                Avatar → <strong>🚫 Blokovaní a ztlumení</strong>. Nebo na úkolu klikni "📥 od X ▾" → Blokovat / Ztlumit.
+              </p>
+              <ul style={list}>
+                <li><strong>Ztlumit</strong> — uživatel ti dál může zadávat, ale nedostaneš notifikaci</li>
+                <li><strong>Blokovat</strong> — uživatel ti vůbec nemůže zadávat úkoly</li>
+              </ul>
+            </>
+          )}
+
+          {activeSection === "notifikace" && (
+            <>
+              <h3 style={h3First}>🔔 Notifikace — 3 kanály</h3>
+              <p style={para}>
+                Avatar → <strong>📢 Doručování notifikací</strong>.
+              </p>
+              <ul style={list}>
+                <li><strong>Push</strong> — okamžitě v prohlížeči / PWA</li>
+                <li><strong>Telegram</strong> — přes bot @ukoly21_bot (potřeba spárovat)</li>
+                <li><strong>Email</strong> — formátovaný HTML email s tlačítkem</li>
+              </ul>
+              <p style={para}>
+                <strong>Tip:</strong> Vyber hlavní + záložní kanál. Když push nedorazí (slabý signál, iPhone bez PWA), Telegram/email tě doručí spolehlivě.
+              </p>
+              <h3 style={h3}>iPhone — důležité</h3>
+              <p style={para}>
+                Push na iPhone funguje JEN pokud máš appku na ploše (PWA). Otevři <strong>Sdílet ↑ → Přidat na plochu</strong>.
+              </p>
+              <h3 style={h3}>Pravidelné přehledy (digest)</h3>
+              <p style={para}>
+                V "📢 Doručování notifikací" → 🔔 Pravidelné přehledy:
+              </p>
+              <ul style={list}>
+                <li><strong>Denní</strong> — ráno seznam dnešních úkolů</li>
+                <li><strong>Týdenní</strong> — co tento týden, celková statistika</li>
+                <li><strong>Zapomenuté</strong> — úkoly nedotčené &gt; 7 dní</li>
+              </ul>
+            </>
+          )}
+
+          {activeSection === "kalendar" && (
+            <>
+              <h3 style={h3First}>📅 Kalendář</h3>
+              <p style={para}>
+                Ikona <strong>📅</strong> nahoře nebo z UserMenu. Vidíš úkoly s termínem, plánované (showFrom), opakované a reminders na všech dnech.
+              </p>
+              <h3 style={h3}>Filtry v kalendáři</h3>
+              <ul style={list}>
+                <li><strong>📋 Aktivní</strong> — jen nehotové úkoly (default)</li>
+                <li><strong>✓ Hotové</strong> — splněné úkoly (přeškrtnuté)</li>
+                <li><strong>🌐 Vše</strong> — aktivní i hotové</li>
+              </ul>
+              <h3 style={h3}>Měsíc vs týden</h3>
+              <p style={para}>
+                <strong>Měsíc</strong> = mřížka 6×7 s počty. Klik na den → detail dole.<br />
+                <strong>Týden</strong> = 7 dní pod sebou s detaily.
+              </p>
+            </>
+          )}
+
+          {activeSection === "zkratky" && (
+            <>
+              <h3 style={h3First}>⌨️ Klávesové zkratky</h3>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr",
+                gap: "8px 14px",
+                fontSize: "12px", alignItems: "center",
+              }}>
+                {[
+                  ["Esc", "Zavřít otevřený modal nebo zrušit psaní"],
+                  ["Enter v inputu", "Vytvořit úkol"],
+                  ["Klik na ⚪", "Splnit úkol"],
+                  ["Klik na žlutý kruh", "Rozpracovat úkol"],
+                  ["Klik na úkol", "Otevřít detail (= označit přečtené)"],
+                  ["Dlouhý stisk (mobil)", "Bulk-select módu (poznámky)"],
+                ].flatMap((r, i) => [
+                  <code key={`c-${i}`} style={codeStyle}>{r[0]}</code>,
+                  <span key={`d-${i}`} style={{ color: theme.text }}>{r[1]}</span>,
+                ])}
+              </div>
+              <h3 style={h3}>Diagnostika</h3>
+              <p style={para}>
+                Ikona zvonku 🔔 (vpravo nahoře) — vidíš stav push, Telegram, email, povolení, atd. Užitečné při řešení problémů.
+              </p>
+              <h3 style={h3}>Když něco selže</h3>
+              <p style={para}>
+                Apka má <strong>ErrorBoundary</strong>. Pokud se objeví "Něco se rozbilo":
+              </p>
+              <ul style={list}>
+                <li>🔄 Načíst znovu — obvykle stačí</li>
+                <li>🧹 Vyčistit cache a načíst znovu — pokud první nepomohlo</li>
+                <li>📧 Odeslat hlášení Michalovi — pošle email s technickými detaily</li>
+              </ul>
+            </>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════
 // CUSTOM DIALOG — univerzální modal/bottom-sheet místo window.prompt()
 // Použití přes useCustomDialog hook:
@@ -11691,6 +12097,11 @@ function useCustomDialog() {
   return { dialog, show };
 }
 
+// ═══════════════════════════════════════════════════════
+// FOLDER MANAGER PANEL — editace složek (kategorie + lists)
+// Per-user nastavení: skrytí (hidden), pořadí (order),
+// při mazání lists dotaz co s úkoly (smazat / odstranit štítek)
+// ═══════════════════════════════════════════════════════
 function FolderManagerPanel({
   currentUser, theme, onClose,
   hiddenCategories, setHiddenCategories,
@@ -13983,9 +14394,14 @@ function App() {
   const [showBlockList, setShowBlockList] = useState(false);
   const [showFolderManager, setShowFolderManager] = useState(false);
   const [showCalendarSheet, setShowCalendarSheet] = useState(false);
+  const [showFaqPanel, setShowFaqPanel] = useState(false);
 
   // Custom dialog hook — nahrazuje window.prompt() / window.confirm()
   const customDialog = useCustomDialog();
+
+  // Horizont aktivního pohledu — kolik dní dopředu vidíš v Aktivní view.
+  // Default 7 dní (týden), uloženo per user.
+  const [activeHorizonDays, setActiveHorizonDays] = useState(7);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
@@ -14220,6 +14636,9 @@ function App() {
         setCategoryOrder(Array.isArray(p.category_order) ? p.category_order : []);
         setHiddenLists(Array.isArray(p.hidden_lists) ? p.hidden_lists : []);
         setListOrder(Array.isArray(p.list_order) ? p.list_order : []);
+        if (typeof p.active_horizon_days === "number") {
+          setActiveHorizonDays(p.active_horizon_days);
+        }
       }
     })();
   }, [currentUser?.name]);
@@ -15741,10 +16160,20 @@ function App() {
       });
     }
     else if (viewStatus === "active") {
-      // Aktivní = všechny nesplněné, bez ohledu na termín
+      // Aktivní = nesplněné, respektující horizont N dní dopředu.
+      // - Úkoly s dueDate > horizont jsou skryté (jdou do "Plánované")
+      // - Úkoly bez termínu zůstávají vždy (showFrom respektuje showDeferred)
+      // - Recurring úkoly bez dueDate taky zůstávají (běžné rutiny)
+      const horizonMs = (activeHorizonDays || 7) * 24 * 60 * 60 * 1000;
+      const horizonCutoff = Date.now() + horizonMs;
       result = result.filter(t => {
         if (!isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)) {
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+          // Horizont — úkoly s dueDate dál než N dní jsou v "Plánované"
+          if (t.dueDate) {
+            const dueMs = new Date(t.dueDate).getTime();
+            if (dueMs > horizonCutoff) return false;
+          }
           return true;
         }
         // Recently completed/deleted (24h)
@@ -17108,6 +17537,17 @@ function App() {
               )}
             </button>
 
+            <button onClick={() => { setShowFaqPanel(true); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>❓</span><span>Nápověda</span>
+            </button>
+
             <button onClick={() => { setShowBlockList(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -17181,6 +17621,46 @@ function App() {
                   onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = theme.inputBg; }}
                   onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
                   <span>{opt.icon}</span><span>{opt.label}</span>
+                  {isSel && <span style={{ marginLeft: "auto", fontSize: 10 }}>✓</span>}
+                </button>
+              );
+            })}
+            {/* Horizont aktivního pohledu — kolik dní dopředu vidíš v Aktivní */}
+            <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+            <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+              📅 Horizont v Aktivním pohledu
+            </div>
+            <div style={{ padding: "2px 12px 4px", fontSize: 10, color: theme.textSub, lineHeight: 1.4 }}>
+              Úkoly s termínem dál se schovají do <strong>Plánované</strong>.
+            </div>
+            {[
+              { value: 0,  label: "Jen dnes" },
+              { value: 3,  label: "3 dny dopředu" },
+              { value: 7,  label: "Týden dopředu" },
+              { value: 14, label: "14 dní dopředu" },
+              { value: 30, label: "Měsíc dopředu" },
+              { value: 9999, label: "Vše (bez horizontu)" },
+            ].map(opt => {
+              const isSel = activeHorizonDays === opt.value;
+              return (
+                <button key={opt.value}
+                  onClick={() => {
+                    setActiveHorizonDays(opt.value);
+                    saveCategoryPrefs({ active_horizon_days: opt.value });
+                  }}
+                  style={{
+                    ...buttonStyle(), padding: "6px 12px", fontSize: 12,
+                    background: isSel ? `${theme.accent}15` : "transparent",
+                    color: isSel ? theme.accent : theme.text,
+                    border: "none", textAlign: "left",
+                    display: "flex", alignItems: "center", gap: 8,
+                    fontWeight: isSel ? 700 : 400,
+                  }}
+                  onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = theme.inputBg; }}
+                  onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ width: "20px", fontSize: "14px" }}>📆</span>
+                  <span>{opt.label}</span>
                   {isSel && <span style={{ marginLeft: "auto", fontSize: 10 }}>✓</span>}
                 </button>
               );
@@ -17357,6 +17837,11 @@ function App() {
 
         {/* Custom dialog (nahrazuje window.prompt) */}
         <CustomDialog dialog={customDialog.dialog} theme={theme} />
+
+        {/* FAQ Nápověda */}
+        {showFaqPanel && (
+          <FaqPanel theme={theme} onClose={() => setShowFaqPanel(false)} />
+        )}
 
         {/* Kalendář — měsíční mřížka + týdenní seznam */}
         {showCalendarSheet && (
