@@ -69,6 +69,182 @@ const RECURRENCE_OPTIONS = [
   { value: 90, label: "Čtvrtletí" },
 ];
 
+// ═══════════════════════════════════════════════════════
+// QUICK ADD SYNTAX PARSER
+// Parses tokens v inputu a vrací { title, tokens: [{type, raw, value, ok}] }
+// Tokeny:
+//   @jméno         → assignedTo
+//   +u / +urgent / +high → priority high
+//   +l / +low      → priority low
+//   +m / +medium   → priority medium
+//   #kategorie / #list → category
+//   !zítra / !pondělí / !15.5 / !za 3 dny → dueDate
+//   ~den / ~tyden / ~mesic / ~14d → opakování
+//   *  na konci   → pin (top priority + showFrom=today)
+// Vrací:
+//   { title, assignedTo, priority, category, dueDate, recDays, pin, tokens, hasUnknown }
+//   tokens = array {raw, type, value, ok} pro vizuální preview
+// ═══════════════════════════════════════════════════════
+function parseQuickAdd(input, { users = [], categories = [], customLists = [] } = {}) {
+  if (!input) return { title: "", tokens: [], hasUnknown: false };
+  const tokens = [];
+  let title = input;
+
+  // Helper: extract token regex z titlu
+  const extract = (regex, type, processor) => {
+    let m;
+    while ((m = regex.exec(title)) !== null) {
+      const raw = m[0];
+      const arg = m[1] || m[0];
+      const result = processor(arg, raw);
+      tokens.push({ raw, type, ...result });
+      // Odstranit z titlu
+      title = title.slice(0, m.index) + " " + title.slice(m.index + raw.length);
+      regex.lastIndex = 0; // reset
+    }
+  };
+
+  // @jméno (case-insensitive match na uživatele)
+  const assignedTo = [];
+  extract(/@(\w+)/gi, "assignee", (name) => {
+    const u = users.find(x => x.name.toLowerCase() === name.toLowerCase());
+    if (u) {
+      assignedTo.push(u.name);
+      return { value: u.name, ok: true };
+    }
+    return { value: name, ok: false };
+  });
+
+  // +urgent / +u / +low / +l / +medium / +m / +high / +h
+  let priority = null;
+  extract(/\+(urgent|urgnt|u|high|h|medium|m|low|l)\b/gi, "priority", (p) => {
+    const k = p.toLowerCase();
+    const map = {
+      urgent: "high", urgnt: "high", u: "high", high: "high", h: "high",
+      medium: "medium", m: "medium",
+      low: "low", l: "low",
+    };
+    const val = map[k];
+    if (val) {
+      priority = val;
+      return { value: val, ok: true };
+    }
+    return { value: k, ok: false };
+  });
+
+  // #kategorie / #list
+  let category = null;
+  extract(/#(\w+)/gi, "category", (name) => {
+    const cLower = name.toLowerCase();
+    // Najdi v default kategoriích
+    const cat = categories.find(c => c.id.toLowerCase() === cLower ||
+                                       c.label.toLowerCase() === cLower);
+    if (cat) {
+      category = cat.id;
+      return { value: cat.label, ok: true };
+    }
+    // Najdi v custom lists
+    const list = customLists.find(l => l.name.toLowerCase() === cLower);
+    if (list) {
+      category = `list:${list.id}`;
+      return { value: list.name, ok: true };
+    }
+    return { value: name, ok: false };
+  });
+
+  // !datum
+  let dueDate = null;
+  const parseDateExpr = (expr) => {
+    const e = expr.toLowerCase().trim();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (e === "dnes" || e === "today") return today;
+    if (e === "zitra" || e === "zítra" || e === "tomorrow") {
+      const d = new Date(today); d.setDate(d.getDate() + 1); return d;
+    }
+    if (e === "pozítří" || e === "pozitri") {
+      const d = new Date(today); d.setDate(d.getDate() + 2); return d;
+    }
+    // Days of week (czech)
+    const dayMap = { "po": 1, "pondeli": 1, "pondělí": 1, "ut": 2, "úterý": 2, "utery": 2,
+      "st": 3, "středa": 3, "streda": 3, "ct": 4, "čtvrtek": 4, "ctvrtek": 4,
+      "pa": 5, "pátek": 5, "patek": 5, "so": 6, "sobota": 6, "ne": 0, "nedele": 0, "neděle": 0 };
+    if (dayMap[e] !== undefined) {
+      const target = dayMap[e];
+      const d = new Date(today);
+      const diff = (target - d.getDay() + 7) % 7 || 7;
+      d.setDate(d.getDate() + diff);
+      return d;
+    }
+    // "za N dní" / "za N dnů"
+    const m1 = e.match(/^za\s+(\d+)\s*(d|den|dni|dní|dnu|dnů)?$/);
+    if (m1) {
+      const d = new Date(today); d.setDate(d.getDate() + parseInt(m1[1], 10));
+      return d;
+    }
+    // "DD.MM" nebo "DD.MM.YYYY"
+    const m2 = e.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?$/);
+    if (m2) {
+      const day = parseInt(m2[1], 10), month = parseInt(m2[2], 10) - 1;
+      let year = m2[3] ? parseInt(m2[3], 10) : today.getFullYear();
+      if (year < 100) year += 2000;
+      const d = new Date(year, month, day);
+      // Pokud DD.MM bez roku a datum je v minulosti → příští rok
+      if (!m2[3] && d < today) d.setFullYear(year + 1);
+      if (!isNaN(d)) return d;
+    }
+    return null;
+  };
+  // !za 3 dny (víceslovný — musí matchovat až po další prefix nebo konec)
+  extract(/!([^@+#!~*]+?)(?=\s+[@+#!~*]|$)/g, "due", (expr) => {
+    const d = parseDateExpr(expr.trim());
+    if (d) {
+      dueDate = d.toISOString();
+      return { value: d.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" }), ok: true };
+    }
+    return { value: expr.trim(), ok: false };
+  });
+
+  // ~opakování
+  let recDays = 0;
+  extract(/~(\w+)/gi, "recur", (k) => {
+    const e = k.toLowerCase();
+    const map = {
+      "den": 1, "denne": 1, "denně": 1, "daily": 1,
+      "tyden": 7, "týden": 7, "weekly": 7, "tydenne": 7, "týdně": 7,
+      "14d": 14, "dvojtýdně": 14,
+      "mesic": 30, "měsíc": 30, "monthly": 30, "mesicne": 30, "měsíčně": 30,
+      "kvartal": 90, "kvartál": 90, "ctvrtletne": 90, "čtvrtletně": 90,
+    };
+    // Numeric like "7d" / "14d"
+    const m = e.match(/^(\d+)d?$/);
+    if (m) {
+      recDays = parseInt(m[1], 10);
+      return { value: `každých ${recDays} dní`, ok: true };
+    }
+    if (map[e]) {
+      recDays = map[e];
+      return { value: `každých ${map[e]} dní`, ok: true };
+    }
+    return { value: k, ok: false };
+  });
+
+  // * na konci = pin
+  let pin = false;
+  if (/\s\*\s*$/.test(title) || /^\*$/.test(title.trim())) {
+    pin = true;
+    title = title.replace(/\s\*\s*$/, "").trim();
+    tokens.push({ raw: "*", type: "pin", value: "připíchnout", ok: true });
+  }
+
+  // Vyčistit title (multiple spaces, trim)
+  title = title.replace(/\s+/g, " ").trim();
+
+  const hasUnknown = tokens.some(t => !t.ok);
+  return { title, assignedTo, priority, category, dueDate, recDays, pin, tokens, hasUnknown };
+}
+
+
 const MONTH_LABELS = ["Led","Úno","Bře","Dub","Kvě","Čvn","Čvc","Srp","Zář","Říj","Lis","Pro"];
 
 const FONT = "'DM Sans', system-ui, sans-serif";
@@ -83,6 +259,7 @@ const getCategory = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[8];
 const isDone = (task) => task.status === "done";
 const isDeleted = (task) => task.status === "deleted";
 const isRejected = (task) => task.status === "rejected";
+const isArchived = (task) => task.status === "archived";
 
 // 2-letter label for assignee picker — "Michal" → "Mi", "Peťulka" → "Pe"
 // Strips diacritics so label is always ASCII-friendly.
@@ -1480,6 +1657,8 @@ async function apiLoadTasks() {
       // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
       if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
       else t.rejectedBy = [];
+      // archived_at — pro archiv
+      if (row.archived_at) t.archivedAt = row.archived_at;
       return t;
     });
     cacheSet(CACHE_TASKS, serverTasks);
@@ -1571,6 +1750,8 @@ async function apiUpdateTask(task) {
     const dbRow = { ...taskToDb(task) };
     if (Array.isArray(task.sharedWith)) dbRow.shared_with = task.sharedWith;
     if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
+    // Archived_at — pro archiv (nový sloupec)
+    if (task.archivedAt !== undefined) dbRow.archived_at = task.archivedAt;
     const { error } = await supabase.from("tasks").update(dbRow).eq("id", task.id);
     if (error) throw error;
   } catch (e) {
@@ -4399,7 +4580,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, onArchive, onUnarchive, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -4854,6 +5035,18 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       }}
                     >
                       ❌ Odmítnout
+                    </button>
+                  )}
+                  {onArchive && (
+                    <button onClick={() => onArchive(task.id)} title="Archivovat — trvalé uložení mimo aktivní seznam" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.accent}10`, color: theme.accent,
+                      border: `1px solid ${theme.accent}30`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      📂 Archivovat
                     </button>
                   )}
                   {onDelete && (
@@ -5412,6 +5605,27 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             background: `${theme.green}15`, color: theme.green,
             border: `1px solid ${theme.green}30`,
           }}>↩ Obnovit</button>
+          {onArchive && (
+            <button onClick={() => onArchive(task.id)} style={{
+              ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+              background: `${theme.accent}15`, color: theme.accent,
+              border: `1px solid ${theme.accent}30`,
+            }}>📂 Archivovat</button>
+          )}
+          <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
+        </div>
+      )}
+
+      {/* Archive-view: Vrátit z archivu + Smazat trvale */}
+      {task.status === "archived" && (
+        <div style={{ display: "flex", gap: "6px", marginTop: "12px", flexWrap: "wrap" }}>
+          {onUnarchive && (
+            <button onClick={() => onUnarchive(task.id)} style={{
+              ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
+              background: `${theme.green}15`, color: theme.green,
+              border: `1px solid ${theme.green}30`,
+            }}>↩ Vrátit z archivu</button>
+          )}
           <DeleteButton taskId={task.id} taskTitle={task.title} onDelete={onPermanentDelete} theme={theme} permanent />
         </div>
       )}
@@ -5886,7 +6100,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -6891,6 +7105,8 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onPermanentDelete={onPermanentDelete}
           onReject={onReject}
           onResubmit={onResubmit}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
           isFromOther={isFromOther}
           theme={theme}
           showCompleteBanner={allChecked}
@@ -6925,6 +7141,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const categories = visibleCategories || CATEGORIES;
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
+  // Quick add parsování — analyzuje text na tokens (@, +, #, !, ~)
+  const parsed = useMemo(() => parseQuickAdd(text, {
+    users: users || [],
+    categories: categories || [],
+    customLists: customLists || [],
+  }), [text, users, categories, customLists]);
+  const [showQuickHelp, setShowQuickHelp] = useState(false);
   // Persistent typing mode — zůstává otevřený dokud uživatel explicitně nezavře (×)
   // i když input ztratí focus (klik na ikony popoverů)
   const [isTypingPersist, setIsTypingPersist] = useState(false);
@@ -7067,24 +7290,55 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   };
 
   const createTaskObject = (title) => {
-    const { assignTo, assignedTo } = computeAssignment();
-    // Filter propagace: pokud user explicitně nevybral, použij aktivní filter
-    const effectivePriority = quickPriority || (priorityFilter !== "all" ? priorityFilter : "low");
-    const effectiveCategory = quickCategory
+    // Použij parsed tokens z quick-add syntaxe (pokud existují)
+    // Parser už odstraní tokeny z titlu (parsed.title) a vrátí parsed values.
+    const useParsed = parsed && parsed.title;
+    const finalTitle = useParsed ? parsed.title : title;
+
+    const { assignTo, assignedTo: defaultAssigned } = computeAssignment();
+
+    // Priority: parsed > quickPriority > filter > low
+    const effectivePriority = (useParsed && parsed.priority)
+      || quickPriority
+      || (priorityFilter !== "all" ? priorityFilter : "low");
+
+    // AssignedTo: parsed @ tokens > defaultAssigned (z computeAssignment)
+    const parsedAssigned = (useParsed && parsed.assignedTo && parsed.assignedTo.length > 0)
+      ? parsed.assignedTo
+      : null;
+    const finalAssigned = parsedAssigned || defaultAssigned;
+    const finalAssignTo = parsedAssigned
+      ? (parsedAssigned.length === 1 && parsedAssigned[0] === currentUser.name ? "self" : "other")
+      : assignTo;
+
+    // Category: parsed > quickCategory > filter > autoDetect
+    const effectiveCategory = (useParsed && parsed.category)
+      || quickCategory
       || (categoryFilter !== "all" ? categoryFilter : null)
-      || (category === "other" ? autoDetectCategory(title) : category);
+      || (category === "other" ? autoDetectCategory(finalTitle) : category);
+
+    // DueDate: parsed > inputDueDate
+    const effectiveDueDate = (useParsed && parsed.dueDate) || dueDate || null;
+
+    // recDays: parsed > inputRecurrence
+    const effectiveRecDays = (useParsed && parsed.recDays) || recurrence;
+
+    // Pin: parsed.pin (= priority high + showFrom=today)
+    const effectiveShowFrom = (useParsed && parsed.pin) ? null : (showFrom || null);
+    const pinnedPriority = (useParsed && parsed.pin) ? "high" : effectivePriority;
+
     return {
       id: generateId(),
-      title,
+      title: finalTitle,
       note: note.trim() || null,
       type,
       createdBy: currentUser.name,
-      assignTo,
-      assignedTo,
-      priority: effectivePriority,
-      dueDate: dueDate || null,
-      showFrom: showFrom || null,
-      recDays: recurrence,
+      assignTo: finalAssignTo,
+      assignedTo: finalAssigned,
+      priority: pinnedPriority,
+      dueDate: effectiveDueDate,
+      showFrom: effectiveShowFrom,
+      recDays: effectiveRecDays,
       category: effectiveCategory,
       activeMo: [],
       status: "active",
@@ -7264,6 +7518,81 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           ⚙
         </button>
       </div>
+
+      {/* ═══ QUICK-ADD SYNTAX PREVIEW — barevné chipy pro rozpoznané tokeny ═══ */}
+      {text.trim() && parsed.tokens.length > 0 && (
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: "4px",
+          padding: "4px 10px", marginTop: "2px",
+          fontSize: "11px",
+        }}>
+          {parsed.tokens.map((t, i) => (
+            <span key={i} title={`${t.type}: ${t.value}`} style={{
+              padding: "1px 6px",
+              borderRadius: "8px",
+              background: t.ok ? `${theme.green}15` : `${theme.red}15`,
+              color: t.ok ? theme.green : theme.red,
+              border: `1px solid ${t.ok ? theme.green : theme.red}40`,
+              fontWeight: 600,
+              fontFamily: FONT,
+            }}>
+              {t.ok ? "✓" : "⚠"} {t.raw}
+              {t.ok && t.type === "assignee" && ` → ${t.value}`}
+              {t.ok && t.type === "due" && ` → ${t.value}`}
+              {t.ok && t.type === "recur" && ` → ${t.value}`}
+              {t.ok && t.type === "priority" && ` → ${t.value}`}
+              {t.ok && t.type === "category" && ` → ${t.value}`}
+            </span>
+          ))}
+          {parsed.hasUnknown && (
+            <span style={{
+              padding: "1px 6px", fontSize: "10px",
+              color: theme.textSub,
+            }}>
+              (nerozpoznané tokeny zůstanou v názvu úkolu)
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Nápověda pro quick-add syntax — toggle pod inputem */}
+      {text.trim() && !showFull && (
+        <div style={{ padding: "0 10px", marginTop: "2px" }}>
+          <button onClick={() => setShowQuickHelp(s => !s)} type="button" style={{
+            ...buttonStyle(),
+            background: "transparent",
+            border: "none",
+            color: theme.textSub,
+            fontSize: "10px",
+            padding: "2px 0",
+            cursor: "pointer",
+            fontFamily: FONT,
+          }}>
+            {showQuickHelp ? "▾" : "▸"} Nápověda zkratek
+          </button>
+          {showQuickHelp && (
+            <div style={{
+              fontSize: "11px", color: theme.textMid, lineHeight: 1.5,
+              padding: "6px 10px", marginTop: "4px",
+              background: `${theme.accent}05`,
+              border: `1px solid ${theme.accent}20`,
+              borderRadius: "8px",
+            }}>
+              <div style={{ marginBottom: "4px", fontWeight: 600 }}>Quick-add syntax:</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>@jméno</code> — komu zadávám (např. <code>@Pavla</code>, lze i víc <code>@Petr @Marťa</code>)</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>+u / +urgent</code> — vysoká priorita</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>+m / +medium</code> — střední | <code>+l / +low</code> — nízká</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>#kategorie</code> — kategorie (např. <code>#home</code>, <code>#auto</code>)</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>!datum</code> — termín (<code>!zítra</code>, <code>!pondělí</code>, <code>!za 3 dny</code>, <code>!15.5.</code>)</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>~období</code> — opakování (<code>~den</code>, <code>~tyden</code>, <code>~mesic</code>, <code>~14d</code>)</div>
+              <div><code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>*</code> na konci — připnout nahoru</div>
+              <div style={{ marginTop: "5px", fontStyle: "italic", color: theme.textSub }}>
+                Příklad: <code style={{ background: theme.inputBg, padding: "1px 4px", borderRadius: "3px" }}>Vynést koš @Pavla +u !zítra ~tyden</code>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ═══ PREDICTIONS CHIPS — pod inputem, JEN když uživatel píše ═══ */}
       {(() => {
@@ -9060,6 +9389,363 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
 /* ═══════════════════════════════════════════════════════
    STATS SHEET — full-screen modal s detailními statistikami
    ═══════════════════════════════════════════════════════ */
+
+// ═══════════════════════════════════════════════════════
+// CALENDAR SHEET — kalendářový přehled úkolů, reminderů, opakovaných
+// Měsíční mřížka + týdenní list (přepínač). Klik na den otevře seznam.
+// ═══════════════════════════════════════════════════════
+function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpenTask, onOpenReminder }) {
+  useEscapeKey(onClose);
+  const [viewMode, setViewMode] = useState("month"); // "month" | "week"
+  const [currentDate, setCurrentDate] = useState(() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0); return d;
+  });
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const monthLabels = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+  const dayLabels = ["Po","Út","St","Čt","Pá","So","Ne"];
+
+  // Items na konkrétní den (úkoly s dueDate, reminders, recurring příští výskyt, showFrom)
+  const getItemsForDay = useCallback((date) => {
+    if (!date) return { tasks: [], reminders: [], recurring: [] };
+    const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(date); dayEnd.setHours(23, 59, 59, 999);
+
+    const taskItems = [];
+    const recurringItems = [];
+
+    (tasks || []).forEach(t => {
+      if (isDeleted(t) || isArchived(t)) return;
+      // Mě se musí týkat
+      const involves = (t.assignedTo || []).includes(currentUser.name) || t.createdBy === currentUser.name;
+      if (!involves) return;
+
+      // dueDate
+      if (t.dueDate) {
+        const due = new Date(t.dueDate);
+        if (due >= dayStart && due <= dayEnd) {
+          taskItems.push({ type: "due", task: t });
+        }
+      }
+      // showFrom
+      if (t.showFrom) {
+        const sf = new Date(t.showFrom);
+        if (sf >= dayStart && sf <= dayEnd) {
+          taskItems.push({ type: "showFrom", task: t });
+        }
+      }
+      // recurring — pokud done, příští výskyt = completedAt + recDays
+      if ((t.recDays || 0) > 0) {
+        if (t.status === "done" && t.completedAt) {
+          const next = new Date(t.completedAt);
+          next.setDate(next.getDate() + t.recDays);
+          if (next >= dayStart && next <= dayEnd) {
+            recurringItems.push({ type: "recurring", task: t, occursOn: next });
+          }
+        }
+      }
+    });
+
+    const remItems = (reminders || []).filter(r => {
+      if (r.dismissed_at || r.dismissedAt) return false;
+      const ra = new Date(r.remind_at || r.remindAt);
+      return ra >= dayStart && ra <= dayEnd &&
+        (r.created_by === currentUser.name || r.createdBy === currentUser.name ||
+         (r.shared_with || r.sharedWith || []).includes(currentUser.name));
+    });
+
+    return { tasks: taskItems, reminders: remItems, recurring: recurringItems };
+  }, [tasks, reminders, currentUser]);
+
+  // Měsíční mřížka — 6 týdnů (42 dnů)
+  const monthGrid = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const firstWeekday = (firstDay.getDay() + 6) % 7; // 0=Po
+    const start = new Date(year, month, 1 - firstWeekday);
+    const days = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  }, [currentDate]);
+
+  // Týdenní mřížka — pondělí až neděle obsahující currentDate
+  const weekGrid = useMemo(() => {
+    const d = new Date(currentDate);
+    const wd = (d.getDay() + 6) % 7;
+    const monday = new Date(d); monday.setDate(d.getDate() - wd);
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const dd = new Date(monday); dd.setDate(monday.getDate() + i);
+      days.push(dd);
+    }
+    return days;
+  }, [currentDate]);
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const sameDay = (a, b) => a.toDateString() === b.toDateString();
+  const isCurrentMonth = (d) => d.getMonth() === currentDate.getMonth();
+
+  const navigate = (direction) => {
+    const d = new Date(currentDate);
+    if (viewMode === "month") d.setMonth(d.getMonth() + direction);
+    else d.setDate(d.getDate() + direction * 7);
+    setCurrentDate(d);
+    setSelectedDate(null);
+  };
+
+  const selectedItems = selectedDate ? getItemsForDay(selectedDate) : null;
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 10000, display: "flex",
+      justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "5vh", paddingBottom: "5vh", overflowY: "auto",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.bg, color: theme.text,
+        padding: "16px", borderRadius: "12px",
+        maxWidth: "700px", width: "94%",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+        fontFamily: FONT,
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+          <span style={{ fontSize: "16px", fontWeight: 700 }}>📅 Kalendář</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "20px" }}>×</button>
+        </div>
+
+        {/* View mode + navigation */}
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" }}>
+          <div style={{ display: "flex", gap: "2px", background: theme.inputBg, padding: "2px", borderRadius: "8px" }}>
+            <button onClick={() => setViewMode("month")} style={{
+              padding: "4px 10px", fontSize: "12px", fontWeight: 600,
+              background: viewMode === "month" ? theme.accent : "transparent",
+              color: viewMode === "month" ? "#fff" : theme.textMid,
+              border: "none", borderRadius: "6px", cursor: "pointer", fontFamily: FONT,
+            }}>Měsíc</button>
+            <button onClick={() => setViewMode("week")} style={{
+              padding: "4px 10px", fontSize: "12px", fontWeight: 600,
+              background: viewMode === "week" ? theme.accent : "transparent",
+              color: viewMode === "week" ? "#fff" : theme.textMid,
+              border: "none", borderRadius: "6px", cursor: "pointer", fontFamily: FONT,
+            }}>Týden</button>
+          </div>
+          <button onClick={() => navigate(-1)} style={{
+            ...buttonStyle(), padding: "4px 10px", fontSize: "14px",
+            background: theme.inputBg, color: theme.text, border: `1px solid ${theme.cardBorder}`,
+          }}>‹</button>
+          <span style={{ fontSize: "13px", fontWeight: 700, flex: 1, textAlign: "center" }}>
+            {viewMode === "month"
+              ? `${monthLabels[currentDate.getMonth()]} ${currentDate.getFullYear()}`
+              : `${weekGrid[0].getDate()}. ${monthLabels[weekGrid[0].getMonth()]} – ${weekGrid[6].getDate()}. ${monthLabels[weekGrid[6].getMonth()]}`}
+          </span>
+          <button onClick={() => navigate(1)} style={{
+            ...buttonStyle(), padding: "4px 10px", fontSize: "14px",
+            background: theme.inputBg, color: theme.text, border: `1px solid ${theme.cardBorder}`,
+          }}>›</button>
+          <button onClick={() => { setCurrentDate(new Date()); setSelectedDate(null); }} style={{
+            ...buttonStyle(), padding: "4px 10px", fontSize: "11px", fontWeight: 600,
+            background: theme.accentSoft, color: theme.accent, border: `1px solid ${theme.accentBorder}`,
+          }}>Dnes</button>
+        </div>
+
+        {/* Měsíční mřížka */}
+        {viewMode === "month" && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px", marginBottom: "4px" }}>
+              {dayLabels.map(d => (
+                <div key={d} style={{
+                  fontSize: "10px", fontWeight: 700, color: theme.textSub,
+                  textAlign: "center", padding: "4px",
+                }}>{d}</div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px" }}>
+              {monthGrid.map((day, i) => {
+                const items = getItemsForDay(day);
+                const totalCount = items.tasks.length + items.reminders.length + items.recurring.length;
+                const isToday = sameDay(day, today);
+                const isSelected = selectedDate && sameDay(day, selectedDate);
+                const isOtherMonth = !isCurrentMonth(day);
+                return (
+                  <button key={i} onClick={() => setSelectedDate(day)} style={{
+                    aspectRatio: "1 / 1",
+                    minHeight: "44px",
+                    padding: "4px",
+                    background: isSelected ? theme.accent
+                      : (isToday ? `${theme.accent}20` : (isOtherMonth ? "transparent" : theme.cardBg)),
+                    color: isSelected ? "#fff" : (isOtherMonth ? theme.textSub : theme.text),
+                    border: `1px solid ${isSelected ? theme.accent : (isToday ? theme.accent : theme.cardBorder)}`,
+                    borderRadius: "6px", cursor: "pointer", fontFamily: FONT,
+                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
+                    fontSize: "12px",
+                    opacity: isOtherMonth ? 0.55 : 1,
+                  }}>
+                    <span style={{ fontWeight: isToday ? 800 : 500 }}>{day.getDate()}</span>
+                    {totalCount > 0 && (
+                      <div style={{ display: "flex", gap: "2px", marginTop: "auto", flexWrap: "wrap", justifyContent: "center" }}>
+                        {items.tasks.length > 0 && (
+                          <span style={{
+                            fontSize: "9px", fontWeight: 700,
+                            background: isSelected ? "rgba(255,255,255,0.3)" : `${theme.accent}25`,
+                            color: isSelected ? "#fff" : theme.accent,
+                            padding: "0 3px", borderRadius: "8px", minWidth: "14px",
+                          }}>{items.tasks.length}</span>
+                        )}
+                        {items.reminders.length > 0 && (
+                          <span style={{
+                            fontSize: "9px", fontWeight: 700,
+                            background: isSelected ? "rgba(255,255,255,0.3)" : `${theme.orange || "#f59e0b"}25`,
+                            color: isSelected ? "#fff" : (theme.orange || "#f59e0b"),
+                            padding: "0 3px", borderRadius: "8px", minWidth: "14px",
+                          }}>🔔{items.reminders.length}</span>
+                        )}
+                        {items.recurring.length > 0 && (
+                          <span style={{
+                            fontSize: "9px", fontWeight: 700,
+                            background: isSelected ? "rgba(255,255,255,0.3)" : `${theme.green}25`,
+                            color: isSelected ? "#fff" : theme.green,
+                            padding: "0 3px", borderRadius: "8px", minWidth: "14px",
+                          }}>🔁{items.recurring.length}</span>
+                        )}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Týdenní list */}
+        {viewMode === "week" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {weekGrid.map((day, i) => {
+              const items = getItemsForDay(day);
+              const isToday = sameDay(day, today);
+              return (
+                <div key={i} style={{
+                  padding: "8px 10px",
+                  background: isToday ? `${theme.accent}10` : theme.cardBg,
+                  border: `1px solid ${isToday ? theme.accent : theme.cardBorder}`,
+                  borderRadius: "8px",
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: isToday ? theme.accent : theme.text }}>
+                      {dayLabels[i]} {day.getDate()}.{day.getMonth() + 1}.
+                      {isToday && <span style={{ fontSize: "10px", marginLeft: 8, color: theme.accent }}>(dnes)</span>}
+                    </span>
+                    <span style={{ fontSize: "10px", color: theme.textSub }}>
+                      {items.tasks.length + items.reminders.length + items.recurring.length || "—"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                    {items.tasks.map((it, j) => (
+                      <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
+                        ...buttonStyle(), padding: "3px 6px", fontSize: "11px",
+                        background: "transparent", color: theme.text,
+                        border: `1px solid ${theme.cardBorder}`,
+                        textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                      }}>
+                        <span>{it.type === "showFrom" ? "▶" : "📌"}</span>
+                        <span>{it.task.title}</span>
+                      </button>
+                    ))}
+                    {items.recurring.map((it, j) => (
+                      <div key={`r-${j}`} style={{
+                        padding: "3px 6px", fontSize: "11px",
+                        color: theme.green,
+                        display: "flex", alignItems: "center", gap: "6px",
+                      }}>
+                        🔁 {it.task.title}
+                      </div>
+                    ))}
+                    {items.reminders.map((r, j) => (
+                      <button key={`rem-${j}`} onClick={() => onOpenReminder && onOpenReminder(r)} style={{
+                        ...buttonStyle(), padding: "3px 6px", fontSize: "11px",
+                        background: "transparent", color: theme.orange || "#f59e0b",
+                        border: `1px solid ${theme.orange || "#f59e0b"}40`,
+                        textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                      }}>
+                        🔔 {r.text} ({new Date(r.remind_at || r.remindAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Selected day items (jen v month view) */}
+        {viewMode === "month" && selectedDate && selectedItems && (
+          <div style={{
+            marginTop: "14px", padding: "12px",
+            background: theme.cardBg,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "10px",
+          }}>
+            <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "8px" }}>
+              📅 {selectedDate.toLocaleDateString("cs-CZ", { weekday: "long", day: "numeric", month: "long" })}
+            </div>
+            {selectedItems.tasks.length + selectedItems.reminders.length + selectedItems.recurring.length === 0 ? (
+              <div style={{ fontSize: "12px", color: theme.textSub, fontStyle: "italic" }}>
+                Žádné úkoly ani reminders.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                {selectedItems.tasks.map((it, j) => (
+                  <button key={`t-${j}`} onClick={() => onOpenTask && onOpenTask(it.task)} style={{
+                    ...buttonStyle(), padding: "5px 8px", fontSize: "12px",
+                    background: "transparent", color: theme.text,
+                    border: `1px solid ${theme.cardBorder}`,
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                  }}>
+                    <span>{it.type === "showFrom" ? "▶" : "📌"}</span>
+                    <span>{it.task.title}</span>
+                    <span style={{ marginLeft: "auto", fontSize: "10px", color: theme.textSub }}>
+                      {it.type === "showFrom" ? "začíná" : "termín"}
+                    </span>
+                  </button>
+                ))}
+                {selectedItems.recurring.map((it, j) => (
+                  <div key={`r-${j}`} style={{
+                    padding: "5px 8px", fontSize: "12px", color: theme.green,
+                    display: "flex", alignItems: "center", gap: "6px",
+                    border: `1px solid ${theme.green}30`, borderRadius: "8px",
+                  }}>
+                    🔁 {it.task.title}
+                    <span style={{ marginLeft: "auto", fontSize: "10px", color: theme.textSub }}>opakovaný</span>
+                  </div>
+                ))}
+                {selectedItems.reminders.map((r, j) => (
+                  <button key={`rem-${j}`} onClick={() => onOpenReminder && onOpenReminder(r)} style={{
+                    ...buttonStyle(), padding: "5px 8px", fontSize: "12px",
+                    background: `${theme.orange || "#f59e0b"}10`,
+                    color: theme.orange || "#f59e0b",
+                    border: `1px solid ${theme.orange || "#f59e0b"}40`,
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "6px",
+                  }}>
+                    🔔 {r.text}
+                    <span style={{ marginLeft: "auto", fontSize: "10px" }}>
+                      {new Date(r.remind_at || r.remindAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
   useEscapeKey(onClose);
@@ -10888,6 +11574,123 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
 // Per-user nastavení: skrytí (hidden), pořadí (order),
 // při mazání lists dotaz co s úkoly (smazat / odstranit štítek)
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// CUSTOM DIALOG — univerzální modal/bottom-sheet místo window.prompt()
+// Použití přes useCustomDialog hook:
+//   const dialog = useCustomDialog();
+//   const result = await dialog.show({
+//     title: "Opakovaný úkol",
+//     message: "Co chceš udělat?",
+//     options: [
+//       { key: "1", label: "⏭ Tento výskyt", color: "accent" },
+//       { key: "2", label: "⏹ Ukončit opakování", color: "red" },
+//     ],
+//   });
+//   if (result === "1") { ... }
+// Auto-detekce desktop/mobil: centrovaný popup vs bottom-sheet.
+// ═══════════════════════════════════════════════════════
+function CustomDialog({ dialog, theme }) {
+  useEscapeKey(() => dialog?.resolve(null), !!dialog);
+  if (!dialog) return null;
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const colorMap = {
+    accent: theme.accent,
+    green: theme.green,
+    red: theme.red,
+    orange: theme.orange || "#f59e0b",
+    neutral: theme.textMid,
+  };
+  return (
+    <div onClick={() => dialog.resolve(null)} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+      zIndex: 10500,
+      display: "flex",
+      justifyContent: "center",
+      alignItems: isMobile ? "flex-end" : "center",
+      animation: "fadeIn 0.15s ease-out",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.bg, color: theme.text,
+        padding: isMobile ? "20px 18px 28px" : "22px 24px",
+        borderRadius: isMobile ? "16px 16px 0 0" : "14px",
+        maxWidth: isMobile ? "100%" : "440px",
+        width: isMobile ? "100%" : "92%",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+        fontFamily: FONT,
+        animation: isMobile ? "slideUp 0.2s ease-out" : "scaleIn 0.15s ease-out",
+        maxHeight: "85vh", overflow: "auto",
+      }}>
+        {dialog.title && (
+          <div style={{ fontSize: "16px", fontWeight: 700, marginBottom: dialog.message ? "6px" : "14px" }}>
+            {dialog.title}
+          </div>
+        )}
+        {dialog.message && (
+          <div style={{
+            fontSize: "13px", color: theme.textMid,
+            whiteSpace: "pre-wrap", lineHeight: 1.5,
+            marginBottom: "16px",
+          }}>
+            {dialog.message}
+          </div>
+        )}
+        <div style={{
+          display: "flex", flexDirection: "column", gap: "8px",
+        }}>
+          {(dialog.options || []).map((opt, i) => (
+            <button key={opt.key || i} onClick={() => dialog.resolve(opt.key)} style={{
+              padding: "11px 14px",
+              background: opt.color ? `${colorMap[opt.color] || theme.accent}15` : theme.inputBg,
+              color: opt.color ? (colorMap[opt.color] || theme.accent) : theme.text,
+              border: `1px solid ${opt.color ? `${colorMap[opt.color] || theme.accent}40` : theme.cardBorder}`,
+              borderRadius: "10px",
+              fontSize: "14px", fontWeight: 600,
+              cursor: "pointer", fontFamily: FONT,
+              textAlign: "left",
+              display: "flex", flexDirection: "column", gap: "2px",
+            }}>
+              <span>{opt.label}</span>
+              {opt.description && (
+                <span style={{ fontSize: "11px", fontWeight: 400, opacity: 0.75 }}>
+                  {opt.description}
+                </span>
+              )}
+            </button>
+          ))}
+          {dialog.cancelLabel !== null && (
+            <button onClick={() => dialog.resolve(null)} style={{
+              padding: "8px 14px", marginTop: "4px",
+              background: "transparent",
+              color: theme.textMid,
+              border: `1px solid ${theme.cardBorder}`,
+              borderRadius: "10px",
+              fontSize: "12px", cursor: "pointer", fontFamily: FONT,
+            }}>
+              {dialog.cancelLabel || "Zrušit"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function useCustomDialog() {
+  const [dialog, setDialog] = useState(null);
+  const show = useCallback((opts) => {
+    return new Promise((resolve) => {
+      setDialog({
+        ...opts,
+        resolve: (val) => {
+          setDialog(null);
+          resolve(val);
+        },
+      });
+    });
+  }, []);
+  return { dialog, show };
+}
+
 function FolderManagerPanel({
   currentUser, theme, onClose,
   hiddenCategories, setHiddenCategories,
@@ -11686,6 +12489,179 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
         }}>
           💡 <strong>Tip:</strong> Vyber jeden hlavní a jeden záložní kanál. Když push nedorazí
           (slabý signál, iPhone bez PWA), Telegram nebo email tě doručí spolehlivě.
+        </div>
+
+        {/* ═══ SMART REMINDERS / DIGEST ═══ */}
+        <div style={{
+          marginTop: 18, paddingTop: 14,
+          borderTop: `1px solid ${theme.cardBorder}`,
+        }}>
+          <div style={{
+            fontSize: "13px", fontWeight: 700, marginBottom: "10px",
+            display: "flex", alignItems: "center", gap: "6px",
+          }}>
+            🔔 Pravidelné přehledy (digest)
+          </div>
+          <div style={{ fontSize: "11px", color: theme.textMid, lineHeight: 1.5, marginBottom: "12px" }}>
+            Posílá pravidelné připomínky o úkolech přes všechny tvé povolené kanály.
+          </div>
+
+          {/* Daily digest */}
+          <div style={{
+            padding: "10px 12px", marginBottom: "8px",
+            background: theme.cardBg, border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "8px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "12px", fontWeight: 700 }}>📅 Denní přehled</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!prefs?.daily_digest_enabled} onChange={async () => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    daily_digest_enabled: !prefs?.daily_digest_enabled,
+                  });
+                  if (updated) setPrefs(updated);
+                }} />
+                <span style={{ fontSize: "11px", color: theme.textMid }}>{prefs?.daily_digest_enabled ? "Zapnuto" : "Vypnuto"}</span>
+              </label>
+            </div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "6px" }}>
+              Každé ráno seznam dnešních úkolů a připomínek
+            </div>
+            {prefs?.daily_digest_enabled && (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ fontSize: "11px", color: theme.textMid }}>Čas:</span>
+                <input type="time" value={prefs.daily_digest_time || "07:30"} onChange={async (e) => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    daily_digest_time: e.target.value,
+                  });
+                  if (updated) setPrefs(updated);
+                }} style={{
+                  padding: "3px 6px", fontSize: "11px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "4px", fontFamily: FONT,
+                }} />
+              </div>
+            )}
+          </div>
+
+          {/* Weekly digest */}
+          <div style={{
+            padding: "10px 12px", marginBottom: "8px",
+            background: theme.cardBg, border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "8px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "12px", fontWeight: 700 }}>📊 Týdenní přehled</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!prefs?.weekly_digest_enabled} onChange={async () => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    weekly_digest_enabled: !prefs?.weekly_digest_enabled,
+                  });
+                  if (updated) setPrefs(updated);
+                }} />
+                <span style={{ fontSize: "11px", color: theme.textMid }}>{prefs?.weekly_digest_enabled ? "Zapnuto" : "Vypnuto"}</span>
+              </label>
+            </div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "6px" }}>
+              Co tě tento týden čeká + celková statistika
+            </div>
+            {prefs?.weekly_digest_enabled && (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "11px", color: theme.textMid }}>Den:</span>
+                <select value={prefs.weekly_digest_day || 1} onChange={async (e) => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    weekly_digest_day: parseInt(e.target.value, 10),
+                  });
+                  if (updated) setPrefs(updated);
+                }} style={{
+                  padding: "3px 6px", fontSize: "11px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "4px", fontFamily: FONT,
+                }}>
+                  <option value={1}>Pondělí</option>
+                  <option value={2}>Úterý</option>
+                  <option value={3}>Středa</option>
+                  <option value={4}>Čtvrtek</option>
+                  <option value={5}>Pátek</option>
+                  <option value={6}>Sobota</option>
+                  <option value={7}>Neděle</option>
+                </select>
+                <span style={{ fontSize: "11px", color: theme.textMid }}>v</span>
+                <input type="time" value={prefs.weekly_digest_time || "08:00"} onChange={async (e) => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    weekly_digest_time: e.target.value,
+                  });
+                  if (updated) setPrefs(updated);
+                }} style={{
+                  padding: "3px 6px", fontSize: "11px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "4px", fontFamily: FONT,
+                }} />
+              </div>
+            )}
+          </div>
+
+          {/* Forgotten digest */}
+          <div style={{
+            padding: "10px 12px",
+            background: theme.cardBg, border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "8px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "12px", fontWeight: 700 }}>💤 Zapomenuté úkoly</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!prefs?.forgotten_digest_enabled} onChange={async () => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    forgotten_digest_enabled: !prefs?.forgotten_digest_enabled,
+                  });
+                  if (updated) setPrefs(updated);
+                }} />
+                <span style={{ fontSize: "11px", color: theme.textMid }}>{prefs?.forgotten_digest_enabled ? "Zapnuto" : "Vypnuto"}</span>
+              </label>
+            </div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginBottom: "6px" }}>
+              Připomenutí úkolů, které leží nedotčené déle než týden
+            </div>
+            {prefs?.forgotten_digest_enabled && (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "11px", color: theme.textMid }}>Den:</span>
+                <select value={prefs.forgotten_digest_day || 1} onChange={async (e) => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    forgotten_digest_day: parseInt(e.target.value, 10),
+                  });
+                  if (updated) setPrefs(updated);
+                }} style={{
+                  padding: "3px 6px", fontSize: "11px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "4px", fontFamily: FONT,
+                }}>
+                  <option value={1}>Pondělí</option>
+                  <option value={2}>Úterý</option>
+                  <option value={3}>Středa</option>
+                  <option value={4}>Čtvrtek</option>
+                  <option value={5}>Pátek</option>
+                  <option value={6}>Sobota</option>
+                  <option value={7}>Neděle</option>
+                </select>
+                <span style={{ fontSize: "11px", color: theme.textMid }}>v</span>
+                <input type="time" value={prefs.forgotten_digest_time || "10:00"} onChange={async (e) => {
+                  const updated = await apiUpsertNotificationPrefs(currentUser.name, {
+                    forgotten_digest_time: e.target.value,
+                  });
+                  if (updated) setPrefs(updated);
+                }} style={{
+                  padding: "3px 6px", fontSize: "11px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: "4px", fontFamily: FONT,
+                }} />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -13006,6 +13982,10 @@ function App() {
   const [showNotificationPrefs, setShowNotificationPrefs] = useState(false);
   const [showBlockList, setShowBlockList] = useState(false);
   const [showFolderManager, setShowFolderManager] = useState(false);
+  const [showCalendarSheet, setShowCalendarSheet] = useState(false);
+
+  // Custom dialog hook — nahrazuje window.prompt() / window.confirm()
+  const customDialog = useCustomDialog();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
@@ -14130,15 +15110,16 @@ function App() {
 
     if (isRecurring) {
       // Dialog: tento výskyt vs. ukončit opakování
-      const choice = window.prompt(
-        `🔁 Opakovaný úkol "${taskTitle}"\n\n` +
-        `Co chceš udělat?\n\n` +
-        `1 — ⏭ Smazat tento výskyt\n` +
-        `    Tento výskyt půjde do koše (30 dní). Příští výskyt se objeví.\n\n` +
-        `2 — ⏹ Ukončit opakování + smazat\n` +
-        `    Úkol zmizí a už se nikdy znovu neobjeví. Půjde do koše (30 dní).\n\n` +
-        `Napiš 1 nebo 2 (nebo zruš):`
-      );
+      const choice = await customDialog.show({
+        title: `🔁 Opakovaný úkol "${taskTitle}"`,
+        message: `Co chceš udělat?`,
+        options: [
+          { key: "1", label: "⏭ Smazat tento výskyt", color: "accent",
+            description: "Tento výskyt půjde do koše (30 dní). Příští výskyt se objeví." },
+          { key: "2", label: "⏹ Ukončit opakování + smazat", color: "red",
+            description: "Úkol zmizí a už se nikdy znovu neobjeví. Půjde do koše (30 dní)." },
+        ],
+      });
 
       if (choice === "1") {
         // Smazat tento výskyt:
@@ -14227,7 +15208,7 @@ function App() {
       apiCreateComment(sysComment);
       triggerDeletionNotification(task, currentUser?.name);
     }
-  }, [tasks, withUndo, currentUser?.name]);
+  }, [tasks, withUndo, currentUser?.name, customDialog]);
 
   // Permanently remove tasks in trash older than 30 days.
   // Používáme ref pro aktuální tasks, aby se interval vytvořil jen jednou
@@ -14392,6 +15373,26 @@ function App() {
     }));
   }, [withUndo]);
 
+  // Archivovat úkol — přesun do archivu (trvalé uložení, nemaže se po 30 dnech)
+  const archiveTask = useCallback((taskId) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const taskTitle = task.title || "";
+    const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
+    withUndo(`Archivováno: ${shortTitle}`, taskId, prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      return { ...t, status: "archived", archivedAt: new Date().toISOString() };
+    }));
+  }, [tasks, withUndo]);
+
+  // Vrátit úkol z archivu zpět do aktivních
+  const unarchiveTask = useCallback((taskId) => {
+    withUndo("Vrátit z archivu", taskId, prev => prev.map(t => {
+      if (t.id !== taskId) return t;
+      return { ...t, status: "active", archivedAt: null };
+    }));
+  }, [withUndo]);
+
   // Odmítnout cizí úkol — z assignedTo se odeberu, autor uvidí "X odmítl".
   // Pokud nikdo nezbude v assignedTo, úkol se přesune do koše (status="deleted").
   const rejectTask = useCallback(async (taskId) => {
@@ -14405,27 +15406,29 @@ function App() {
 
     if (isRecurring) {
       // Dialog: tento výskyt vs. natrvalo
-      const choice = window.prompt(
-        `🔁 Opakovaný úkol "${task.title}"\n\n` +
-        `Co chceš udělat?\n\n` +
-        `1 — ⏭ Odmítnout tento výskyt\n` +
-        `    Příští výskyt se zase objeví. ${task.createdBy} uvidí, že jsi tento odmítl/a.\n\n` +
-        `2 — ⏹ Odmítnout natrvalo (ukončit opakování)\n` +
-        `    Úkol se už nikdy neobjeví. ${task.createdBy} uvidí, žes ho odmítl/a.\n\n` +
-        `Napiš 1 nebo 2 (nebo zruš):`
-      );
-      if (choice === "1") {
-        endRecurrence = false;
-      } else if (choice === "2") {
-        endRecurrence = true;
-      } else {
-        return; // cancel
-      }
+      const choice = await customDialog.show({
+        title: `🔁 Opakovaný úkol "${task.title}"`,
+        message: `Co chceš udělat?`,
+        options: [
+          { key: "1", label: "⏭ Odmítnout tento výskyt", color: "accent",
+            description: `Příští výskyt se zase objeví. ${task.createdBy} uvidí, že jsi tento odmítl/a.` },
+          { key: "2", label: "⏹ Odmítnout natrvalo (ukončit opakování)", color: "red",
+            description: `Úkol se už nikdy neobjeví. ${task.createdBy} uvidí, žes ho odmítl/a.` },
+        ],
+      });
+      if (choice === "1") endRecurrence = false;
+      else if (choice === "2") endRecurrence = true;
+      else return; // cancel
     } else {
       // Neopakovaný — jen confirm
-      if (!confirm(`Odmítnout úkol "${task.title}"?\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`)) {
-        return;
-      }
+      const ok = await customDialog.show({
+        title: `❌ Odmítnout úkol`,
+        message: `"${task.title}"\n\n${task.createdBy} uvidí, že jsi úkol odmítl/a.`,
+        options: [
+          { key: "confirm", label: "❌ Odmítnout", color: "red" },
+        ],
+      });
+      if (ok !== "confirm") return;
     }
 
     // Optimistic update — rovnou odebrat ze svého assignedTo
@@ -14500,7 +15503,7 @@ function App() {
     if (sendNotif) {
       triggerRejectionNotification(task, currentUser.name, { permanent: endRecurrence });
     }
-  }, [currentUser?.name, tasks]);
+  }, [currentUser?.name, tasks, customDialog]);
 
   // Vrátit odmítnutý úkol — admin nebo daný user může vrátit svůj reject
   const unrejectTask = useCallback(async (taskId, userName) => {
@@ -14740,7 +15743,7 @@ function App() {
     else if (viewStatus === "active") {
       // Aktivní = všechny nesplněné, bez ohledu na termín
       result = result.filter(t => {
-        if (!isDone(t) && !isDeleted(t) && !isRejected(t)) {
+        if (!isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)) {
           if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
           return true;
         }
@@ -14768,12 +15771,13 @@ function App() {
     }
     else if (viewStatus === "done") result = result.filter(t => t.status === "done");
     else if (viewStatus === "trash") result = result.filter(t => t.status === "deleted");
+    else if (viewStatus === "archive") result = result.filter(t => t.status === "archived");
     // viewStatus === "all" — všechny aktivní úkoly + done/deleted z posledních 24h
     // (rejected viditelné jen pro autora). Smazané > 24h jsou v koši.
     else if (viewStatus === "all") {
       // "Vše" = aktivní úkoly (i deferred) + done/deleted/rejected za posledních 24h
       result = result.filter(t => {
-        if (!isDone(t) && !isDeleted(t) && !isRejected(t)) return true;
+        if (!isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)) return true;
         if (t.status === "done" && t.completedAt && new Date(t.completedAt).getTime() > recentCutoff) return true;
         if (t.status === "deleted" && t.deletedAt && new Date(t.deletedAt).getTime() > recentCutoff) return true;
         if (t.status === "rejected" && t.createdBy === currentUser.name) return true;
@@ -14998,7 +16002,7 @@ function App() {
       const personName = filter.replace("person:", "");
       const items = [];
       // Jen aktivní úkoly (ne splněné/smazané/odmítnuté)
-      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
       // Sekce 1: Co jsem zadal X (createdBy=me, assigned obsahuje X, NE společné)
       const sentToPerson = activeOnly.filter(t => {
         const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
@@ -15038,7 +16042,7 @@ function App() {
     if (filter === "for_me") {
       // Pro mě od ostatních — kategorie podle createdBy (autora)
       const items = [];
-      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
       // Group by author
       const byAuthor = {};
       activeOnly.forEach(t => {
@@ -15059,7 +16063,7 @@ function App() {
     if (filter === "assigned") {
       // Zadané ode mě — kategorie podle příjemce
       const items = [];
-      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
       const byRecipient = {};
       activeOnly.forEach(t => {
         const a = Array.isArray(t.assignedTo) ? t.assignedTo : [];
@@ -15080,7 +16084,7 @@ function App() {
     if (filter === "shared") {
       // Společné — sekce podle počtu lidí + možnost filtrovat. Zatím jednoduše seznam.
       const items = [];
-      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+      const activeOnly = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
       if (activeOnly.length > 0) {
         items.push({ type: "section_header_custom", key: "sec-shared-all",
           icon: "👥", label: `Společné úkoly`, count: activeOnly.length, color: "orange" });
@@ -15099,7 +16103,7 @@ function App() {
     // i když ještě jsou unread. Takže 🆕 sekce ukazuje jen "čerstvé" nepřečtené.
     const newTaskCutoff = Date.now() - 60 * 60 * 1000;
 
-    const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t));
+    const activeTasks = filteredTasks.filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
     const doneTasks = filteredTasks.filter(t => isDone(t));
     const deletedTasks = filteredTasks.filter(t => isDeleted(t));
     const rejectedTasks = filteredTasks.filter(t => isRejected(t));
@@ -15391,6 +16395,7 @@ function App() {
         )) return false;
         else if (viewStatus === "done" && t.status !== "done") return false;
         else if (viewStatus === "trash" && t.status !== "deleted") return false;
+        else if (viewStatus === "archive" && t.status !== "archived") return false;
       }
       // Scope filter — skip if counting scopes
       if (!skip.includes("scope")) {
@@ -15813,6 +16818,56 @@ function App() {
               })()}
             </button>
           )}
+          {/* Calendar ikona — jen na PC/tablet */}
+          {windowWidth >= 720 && (
+            <button onClick={() => setShowCalendarSheet(true)}
+              title="Kalendář"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              📅
+            </button>
+          )}
+          {/* Archive ikona — jen na PC/tablet, na mobilu je v menu */}
+          {windowWidth >= 720 && (
+            <button onClick={() => setViewStatus("archive")}
+              title="Archiv"
+              style={{
+                background: viewStatus === "archive" ? theme.inputBg : "none",
+                border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px", position: "relative",
+              }}
+              onMouseEnter={e => { if (viewStatus !== "archive") e.currentTarget.style.background = theme.inputBg; }}
+              onMouseLeave={e => { if (viewStatus !== "archive") e.currentTarget.style.background = "none"; }}>
+              📂
+              {(() => {
+                const userNameLc = currentUser.name.toLowerCase();
+                const archiveCount = tasks.filter(t => {
+                  if (t.status !== "archived") return false;
+                  if (currentUser.admin) return true;
+                  const createdByLc = (t.createdBy || "").toLowerCase();
+                  const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+                  return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+                }).length;
+                if (archiveCount === 0) return null;
+                return (
+                  <span style={{
+                    position: "absolute", top: 2, right: 2,
+                    background: theme.accent, color: "#fff",
+                    borderRadius: "50%", minWidth: 14, height: 14,
+                    fontSize: 9, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    padding: "0 3px",
+                  }}>{archiveCount}</span>
+                );
+              })()}
+            </button>
+          )}
           {/* Notes ikona — strukturované poznámky */}
           <button onClick={async () => {
             setShowNotesSheet(true);
@@ -15952,6 +17007,16 @@ function App() {
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                   <span>📊</span><span>Statistiky</span>
                 </button>
+                <button onClick={() => { setShowCalendarSheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>📅</span><span>Kalendář</span>
+                </button>
                 <button onClick={() => { setViewStatus("trash"); setShowUserMenu(false); }}
                   style={{
                     ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -15977,6 +17042,34 @@ function App() {
                         background: theme.textSub, color: "#fff",
                         borderRadius: 8, padding: "1px 6px",
                       }}>{trashCount}</span>
+                    );
+                  })()}
+                </button>
+                <button onClick={() => { setViewStatus("archive"); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>📂</span><span>Archiv</span>
+                  {(() => {
+                    const userNameLc = currentUser.name.toLowerCase();
+                    const archiveCount = tasks.filter(t => {
+                      if (t.status !== "archived") return false;
+                      if (currentUser.admin) return true;
+                      const createdByLc = (t.createdBy || "").toLowerCase();
+                      const assignedToLc = (t.assignedTo || []).map(n => (n || "").toLowerCase());
+                      return createdByLc === userNameLc || assignedToLc.includes(userNameLc);
+                    }).length;
+                    if (archiveCount === 0) return null;
+                    return (
+                      <span style={{
+                        marginLeft: "auto", fontSize: 10, fontWeight: 700,
+                        background: theme.accent, color: "#fff",
+                        borderRadius: 8, padding: "1px 6px",
+                      }}>{archiveCount}</span>
                     );
                   })()}
                 </button>
@@ -16259,6 +17352,33 @@ function App() {
             onUnblock={unblockUser}
             onClose={() => setShowBlockList(false)}
             theme={theme}
+          />
+        )}
+
+        {/* Custom dialog (nahrazuje window.prompt) */}
+        <CustomDialog dialog={customDialog.dialog} theme={theme} />
+
+        {/* Kalendář — měsíční mřížka + týdenní seznam */}
+        {showCalendarSheet && (
+          <CalendarSheetV2
+            tasks={tasks}
+            reminders={reminders}
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowCalendarSheet(false)}
+            onOpenTask={(task) => {
+              setShowCalendarSheet(false);
+              setScrollToTaskId(task.id);
+              setHighlightedTaskId(task.id);
+              if (isDone(task)) setViewStatus("done");
+              else if (isDeleted(task)) setViewStatus("trash");
+              else if (isArchived(task)) setViewStatus("archive");
+              else setViewStatus("active");
+            }}
+            onOpenReminder={(reminder) => {
+              setShowCalendarSheet(false);
+              setShowReminderSheet(true);
+            }}
           />
         )}
 
@@ -16730,6 +17850,51 @@ function App() {
           paddingTop: "0px",
           paddingBottom: "4px",
         }}>
+          {/* View chip přepínače — Dnes / Aktivní / Rozpracované / Plánované / Vše */}
+          {!isTypingMode && !["trash", "archive"].includes(viewStatus) && (
+            <div style={{
+              display: "flex", gap: "4px", padding: "4px 6px 6px",
+              overflowX: "auto", whiteSpace: "nowrap",
+              borderBottom: `1px solid ${theme.cardBorder}`,
+              marginBottom: "4px",
+            }}>
+              {[
+                { key: "today", icon: "📅", label: "Dnes", count: stats.today },
+                { key: "active", icon: "📋", label: "Aktivní", count: stats.active },
+                { key: "in_progress", icon: "⚙", label: "Rozpracované", count: stats.in_progress },
+                { key: "planned", icon: "⏰", label: "Plánované", count: stats.planned },
+                { key: "all", icon: "🌐", label: "Vše", count: null },
+              ].map(v => {
+                const isActive = viewStatus === v.key;
+                return (
+                  <button key={v.key} onClick={() => setViewStatus(v.key)} style={{
+                    ...buttonStyle(),
+                    padding: "4px 10px",
+                    fontSize: "12px", fontWeight: isActive ? 700 : 500,
+                    background: isActive ? theme.accent : "transparent",
+                    color: isActive ? "#fff" : theme.textMid,
+                    border: `1px solid ${isActive ? theme.accent : theme.cardBorder}`,
+                    borderRadius: "16px",
+                    display: "inline-flex", alignItems: "center", gap: "4px",
+                    fontFamily: FONT, flexShrink: 0,
+                  }}>
+                    <span>{v.icon}</span>
+                    <span>{v.label}</span>
+                    {v.count !== null && v.count > 0 && (
+                      <span style={{
+                        fontSize: "10px", fontWeight: 700,
+                        background: isActive ? "rgba(255,255,255,0.25)" : `${theme.accent}15`,
+                        color: isActive ? "#fff" : theme.accent,
+                        padding: "0 5px", borderRadius: "8px",
+                        minWidth: "16px", textAlign: "center",
+                      }}>{v.count}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <QuickAddBar
             currentUser={currentUser}
             users={users}
@@ -17993,6 +19158,8 @@ function App() {
                         onPermanentDelete={permanentlyDeleteTask}
                         onReject={rejectTask}
                         onResubmit={resubmitTask}
+                        onArchive={archiveTask}
+                        onUnarchive={unarchiveTask}
                         onUnreject={unrejectTask}
                         onBlockUser={blockUser}
                         blocks={blocks}
