@@ -6920,7 +6920,9 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], visibleCategories = null, onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange }) {
+  // Fallback na CATEGORIES pokud parent neposlal visibleCategories (defensive)
+  const categories = visibleCategories || CATEGORIES;
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
   // Persistent typing mode — zůstává otevřený dokud uživatel explicitně nezavře (×)
@@ -7631,7 +7633,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     <span style={{ flex: 1 }}>Žádný seznam</span>
                   </button>
                   {/* Předdefinované kategorie */}
-                  {CATEGORIES.map(cat => {
+                  {categories.map(cat => {
                     const isSel = quickCategory === cat.id;
                     return (
                       <button key={cat.id} type="button"
@@ -10881,6 +10883,339 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
    Modal v UserMenu. Block = nelze vytvořit úkol pro mě.
    Mute = úkoly chodí, ale notifikace ne.
    ═══════════════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════
+// FOLDER MANAGER PANEL — editace složek (kategorie + lists)
+// Per-user nastavení: skrytí (hidden), pořadí (order),
+// při mazání lists dotaz co s úkoly (smazat / odstranit štítek)
+// ═══════════════════════════════════════════════════════
+function FolderManagerPanel({
+  currentUser, theme, onClose,
+  hiddenCategories, setHiddenCategories,
+  categoryOrder, setCategoryOrder,
+  customLists, hiddenLists, setHiddenLists,
+  listOrder, setListOrder,
+  tasks,
+  onDeleteList, onEditList,
+  saveCategoryPrefs,
+}) {
+  useEscapeKey(onClose);
+
+  // Build ordered + hidden lists pro zobrazení
+  const orderedCategories = useMemo(() => {
+    if (categoryOrder.length === 0) return CATEGORIES;
+    const ordered = [];
+    categoryOrder.forEach(id => {
+      const cat = CATEGORIES.find(c => c.id === id);
+      if (cat) ordered.push(cat);
+    });
+    CATEGORIES.forEach(c => {
+      if (!categoryOrder.includes(c.id)) ordered.push(c);
+    });
+    return ordered;
+  }, [categoryOrder]);
+
+  const userLists = (customLists || []).filter(l =>
+    l.is_shared || l.created_by_user === currentUser.name
+  );
+  const orderedLists = useMemo(() => {
+    if (listOrder.length === 0) return userLists;
+    const ordered = [];
+    listOrder.forEach(id => {
+      const list = userLists.find(l => l.id === id);
+      if (list) ordered.push(list);
+    });
+    userLists.forEach(l => {
+      if (!listOrder.includes(l.id)) ordered.push(l);
+    });
+    return ordered;
+  }, [userLists, listOrder]);
+
+  // Toggle hidden — default kategorie
+  const toggleHiddenCategory = (catId) => {
+    const newHidden = hiddenCategories.includes(catId)
+      ? hiddenCategories.filter(id => id !== catId)
+      : [...hiddenCategories, catId];
+    setHiddenCategories(newHidden);
+    saveCategoryPrefs({ hidden_categories: newHidden });
+  };
+
+  // Toggle hidden — custom list
+  const toggleHiddenList = (listId) => {
+    const newHidden = hiddenLists.includes(listId)
+      ? hiddenLists.filter(id => id !== listId)
+      : [...hiddenLists, listId];
+    setHiddenLists(newHidden);
+    saveCategoryPrefs({ hidden_lists: newHidden });
+  };
+
+  // Move kategorii nahoru/dolů
+  const moveCategoryUp = (catId) => {
+    const idx = orderedCategories.findIndex(c => c.id === catId);
+    if (idx <= 0) return;
+    const newOrder = orderedCategories.map(c => c.id);
+    [newOrder[idx], newOrder[idx - 1]] = [newOrder[idx - 1], newOrder[idx]];
+    setCategoryOrder(newOrder);
+    saveCategoryPrefs({ category_order: newOrder });
+  };
+  const moveCategoryDown = (catId) => {
+    const idx = orderedCategories.findIndex(c => c.id === catId);
+    if (idx < 0 || idx >= orderedCategories.length - 1) return;
+    const newOrder = orderedCategories.map(c => c.id);
+    [newOrder[idx], newOrder[idx + 1]] = [newOrder[idx + 1], newOrder[idx]];
+    setCategoryOrder(newOrder);
+    saveCategoryPrefs({ category_order: newOrder });
+  };
+  const moveListUp = (listId) => {
+    const idx = orderedLists.findIndex(l => l.id === listId);
+    if (idx <= 0) return;
+    const newOrder = orderedLists.map(l => l.id);
+    [newOrder[idx], newOrder[idx - 1]] = [newOrder[idx - 1], newOrder[idx]];
+    setListOrder(newOrder);
+    saveCategoryPrefs({ list_order: newOrder });
+  };
+  const moveListDown = (listId) => {
+    const idx = orderedLists.findIndex(l => l.id === listId);
+    if (idx < 0 || idx >= orderedLists.length - 1) return;
+    const newOrder = orderedLists.map(l => l.id);
+    [newOrder[idx], newOrder[idx + 1]] = [newOrder[idx + 1], newOrder[idx]];
+    setListOrder(newOrder);
+    saveCategoryPrefs({ list_order: newOrder });
+  };
+
+  // Smazat custom list — s dotazem co s úkoly
+  const handleDeleteList = async (list) => {
+    const tasksInList = (tasks || []).filter(t =>
+      Array.isArray(t.lists) ? t.lists.includes(list.id) : t.listId === list.id
+    );
+    const taskCount = tasksInList.length;
+    if (taskCount === 0) {
+      if (confirm(`Smazat složku "${list.name}"?\n\nVe složce nejsou žádné úkoly.`)) {
+        onDeleteList(list.id, "remove_label");
+      }
+      return;
+    }
+    const choice = window.prompt(
+      `🗑 Smazat složku "${list.name}"\n\n` +
+      `Ve složce je ${taskCount} úkol${taskCount === 1 ? "" : taskCount < 5 ? "y" : "ů"}. Co s nimi?\n\n` +
+      `1 — Smazat úkoly i složku (vše do koše)\n` +
+      `2 — Ponechat úkoly, jen odstranit štítek\n\n` +
+      `Napiš 1 nebo 2 (nebo zruš):`
+    );
+    if (choice === "1") {
+      onDeleteList(list.id, "delete_tasks");
+    } else if (choice === "2") {
+      onDeleteList(list.id, "remove_label");
+    }
+  };
+
+  // Spočítat úkoly v kategorii pro statistiky
+  const countInCategory = (catId) => {
+    return (tasks || []).filter(t => t.category === catId && !isDone(t) && !isDeleted(t)).length;
+  };
+  const countInList = (listId) => {
+    return (tasks || []).filter(t => {
+      const lists = Array.isArray(t.lists) ? t.lists : (t.listId ? [t.listId] : []);
+      return lists.includes(listId) && !isDone(t) && !isDeleted(t);
+    }).length;
+  };
+
+  // Reset — vše viditelné v default pořadí
+  const handleReset = () => {
+    if (!confirm("Vrátit všechny složky na výchozí stav?\n\nVšechny složky budou viditelné v původním pořadí.")) return;
+    setHiddenCategories([]);
+    setCategoryOrder([]);
+    setHiddenLists([]);
+    setListOrder([]);
+    saveCategoryPrefs({
+      hidden_categories: [],
+      category_order: [],
+      hidden_lists: [],
+      list_order: [],
+    });
+  };
+
+  const rowStyle = (isHidden) => ({
+    display: "flex", alignItems: "center", gap: "8px",
+    padding: "8px 10px",
+    marginBottom: "4px",
+    borderRadius: "8px",
+    background: isHidden ? `${theme.textMid}10` : theme.cardBg,
+    border: `1px solid ${theme.cardBorder}`,
+    opacity: isHidden ? 0.55 : 1,
+    fontSize: "13px",
+  });
+  const btnStyle = {
+    background: "transparent",
+    border: `1px solid ${theme.cardBorder}`,
+    color: theme.textMid,
+    padding: "3px 6px",
+    fontSize: "11px",
+    cursor: "pointer",
+    borderRadius: "4px",
+    fontFamily: FONT,
+    minWidth: "26px",
+  };
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+      background: "rgba(0,0,0,0.5)",
+      display: "flex", justifyContent: "center", alignItems: "flex-start",
+      paddingTop: "5vh", paddingBottom: "5vh", overflowY: "auto",
+      zIndex: 10000,
+    }} onClick={onClose}>
+      <div style={{
+        background: theme.bg, color: theme.text,
+        padding: "20px", borderRadius: "12px",
+        maxWidth: "560px", width: "92%",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+        fontFamily: FONT,
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+          <span style={{ fontSize: "16px", fontWeight: 700 }}>📁 Správa složek</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "20px" }}>×</button>
+        </div>
+
+        <div style={{
+          fontSize: "12px", color: theme.textMid, lineHeight: 1.5, marginBottom: 14,
+          padding: "8px 10px",
+          background: `${theme.accent}08`,
+          border: `1px solid ${theme.accent}20`,
+          borderRadius: "6px",
+        }}>
+          💡 Skryj nepoužívané složky (👁), posuň oblíbené nahoru (↑↓). Změny jsou jen pro tebe — ostatní uvidí výchozí.
+        </div>
+
+        {/* Default kategorie */}
+        <div style={{ marginBottom: "20px" }}>
+          <div style={{
+            fontSize: "11px", fontWeight: 800, color: theme.textMid,
+            textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+          }}>
+            Výchozí kategorie ({orderedCategories.length - hiddenCategories.length}/{orderedCategories.length})
+          </div>
+          {orderedCategories.map((cat, idx) => {
+            const isHidden = hiddenCategories.includes(cat.id);
+            const count = countInCategory(cat.id);
+            return (
+              <div key={cat.id} style={rowStyle(isHidden)}>
+                <span style={{ fontSize: "16px" }}>{cat.icon}</span>
+                <span style={{ flex: 1, fontWeight: 500 }}>
+                  {cat.label}
+                  {count > 0 && (
+                    <span style={{ color: theme.textSub, marginLeft: 6, fontWeight: 400 }}>
+                      ({count})
+                    </span>
+                  )}
+                </span>
+                <button onClick={() => moveCategoryUp(cat.id)} disabled={idx === 0}
+                  title="Posunout nahoru" style={btnStyle}>↑</button>
+                <button onClick={() => moveCategoryDown(cat.id)} disabled={idx === orderedCategories.length - 1}
+                  title="Posunout dolů" style={btnStyle}>↓</button>
+                <button onClick={() => toggleHiddenCategory(cat.id)}
+                  title={isHidden ? "Zobrazit" : "Skrýt"} style={{
+                    ...btnStyle,
+                    color: isHidden ? theme.textSub : theme.green,
+                    background: isHidden ? "transparent" : `${theme.green}10`,
+                  }}>
+                  {isHidden ? "👁‍🗨" : "👁"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Custom lists */}
+        {orderedLists.length > 0 && (
+          <div style={{ marginBottom: "20px" }}>
+            <div style={{
+              fontSize: "11px", fontWeight: 800, color: theme.textMid,
+              textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
+            }}>
+              Vlastní složky ({orderedLists.length - hiddenLists.length}/{orderedLists.length})
+            </div>
+            {orderedLists.map((list, idx) => {
+              const isHidden = hiddenLists.includes(list.id);
+              const count = countInList(list.id);
+              const isMine = list.created_by_user === currentUser.name;
+              return (
+                <div key={list.id} style={rowStyle(isHidden)}>
+                  <span style={{ fontSize: "16px" }}>{list.icon || "📁"}</span>
+                  <span style={{ flex: 1, fontWeight: 500 }}>
+                    {list.name}
+                    {count > 0 && (
+                      <span style={{ color: theme.textSub, marginLeft: 6, fontWeight: 400 }}>
+                        ({count})
+                      </span>
+                    )}
+                    {list.is_shared && (
+                      <span style={{
+                        marginLeft: 6, fontSize: "9px", padding: "1px 5px",
+                        background: `${theme.accent}15`, color: theme.accent,
+                        borderRadius: "8px", fontWeight: 700,
+                      }}>SDÍLENÁ</span>
+                    )}
+                  </span>
+                  <button onClick={() => moveListUp(list.id)} disabled={idx === 0}
+                    title="Posunout nahoru" style={btnStyle}>↑</button>
+                  <button onClick={() => moveListDown(list.id)} disabled={idx === orderedLists.length - 1}
+                    title="Posunout dolů" style={btnStyle}>↓</button>
+                  <button onClick={() => toggleHiddenList(list.id)}
+                    title={isHidden ? "Zobrazit" : "Skrýt"} style={{
+                      ...btnStyle,
+                      color: isHidden ? theme.textSub : theme.green,
+                      background: isHidden ? "transparent" : `${theme.green}10`,
+                    }}>
+                    {isHidden ? "👁‍🗨" : "👁"}
+                  </button>
+                  {isMine && (
+                    <>
+                      <button onClick={() => onEditList(list)}
+                        title="Upravit (název, ikona)" style={{
+                          ...btnStyle,
+                          color: theme.accent,
+                          background: `${theme.accent}10`,
+                        }}>✏️</button>
+                      <button onClick={() => handleDeleteList(list)}
+                        title="Smazat složku" style={{
+                          ...btnStyle,
+                          color: theme.red,
+                          background: `${theme.red}10`,
+                        }}>🗑</button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Reset button */}
+        <div style={{ display: "flex", gap: "8px", marginTop: "16px", borderTop: `1px solid ${theme.cardBorder}`, paddingTop: "12px" }}>
+          <button onClick={handleReset} style={{
+            padding: "8px 14px", fontSize: "12px",
+            background: "transparent",
+            color: theme.textMid,
+            border: `1px solid ${theme.cardBorder}`,
+            borderRadius: "8px", cursor: "pointer", fontFamily: FONT,
+            flex: 1,
+          }}>
+            🔄 Vrátit výchozí stav
+          </button>
+          <button onClick={onClose} style={{
+            padding: "8px 14px", fontSize: "12px", fontWeight: 600,
+            background: theme.accent, color: "white",
+            border: "none", borderRadius: "8px", cursor: "pointer", fontFamily: FONT,
+            flex: 1,
+          }}>
+            Hotovo
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClose, theme }) {
   useEscapeKey(onClose);
 
@@ -12517,6 +12852,11 @@ function Snackbar({ message, onUndo, visible, theme }) {
 function App() {
   const [tasks, setTasks] = useState([]);
   const [customLists, setCustomLists] = useState([]);
+  // Per-user category & list preferences (hidden + order)
+  const [hiddenCategories, setHiddenCategories] = useState([]); // array of category IDs
+  const [categoryOrder, setCategoryOrder] = useState([]); // sort order pro CATEGORIES
+  const [hiddenLists, setHiddenLists] = useState([]); // array of list IDs
+  const [listOrder, setListOrder] = useState([]); // sort order pro custom lists
   const [reminders, setReminders] = useState([]); // aktivní (ne-dismissed) připomínky
   const [blocks, setBlocks] = useState([]); // [{blocker_name, blocked_name, mode}]
   const [activeReminder, setActiveReminder] = useState(null); // aktuálně vyvolaná notifikace (pro toast)
@@ -12665,6 +13005,7 @@ function App() {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showNotificationPrefs, setShowNotificationPrefs] = useState(false);
   const [showBlockList, setShowBlockList] = useState(false);
+  const [showFolderManager, setShowFolderManager] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
@@ -12887,6 +13228,30 @@ function App() {
         console.warn("Blocks load failed:", e);
       }
     })();
+  }, [currentUser?.name]);
+
+  // Load per-user category & list preferences (hidden + order)
+  useEffect(() => {
+    if (!currentUser?.name) return;
+    (async () => {
+      const p = await apiLoadNotificationPrefs(currentUser.name);
+      if (p) {
+        setHiddenCategories(Array.isArray(p.hidden_categories) ? p.hidden_categories : []);
+        setCategoryOrder(Array.isArray(p.category_order) ? p.category_order : []);
+        setHiddenLists(Array.isArray(p.hidden_lists) ? p.hidden_lists : []);
+        setListOrder(Array.isArray(p.list_order) ? p.list_order : []);
+      }
+    })();
+  }, [currentUser?.name]);
+
+  // Save category prefs do DB při změně
+  const saveCategoryPrefs = useCallback(async (patch) => {
+    if (!currentUser?.name) return;
+    try {
+      await apiUpsertNotificationPrefs(currentUser.name, patch);
+    } catch (e) {
+      console.warn("saveCategoryPrefs failed:", e);
+    }
   }, [currentUser?.name]);
 
   // Sync user session to service worker + save push subscription for user
@@ -14587,6 +14952,42 @@ function App() {
     return result;
   }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, customLists]);
 
+  // Viditelné kategorie pro tohoto uživatele — vyfiltrovat hidden + seřadit
+  const visibleCategories = useMemo(() => {
+    const allCats = CATEGORIES;
+    const filtered = allCats.filter(c => !hiddenCategories.includes(c.id));
+    if (categoryOrder.length === 0) return filtered;
+    // Aplikuj custom order
+    const ordered = [];
+    categoryOrder.forEach(id => {
+      const cat = filtered.find(c => c.id === id);
+      if (cat) ordered.push(cat);
+    });
+    // Přidej kategorie co v orderu nejsou (nové defaulty po updatu)
+    filtered.forEach(c => {
+      if (!categoryOrder.includes(c.id)) ordered.push(c);
+    });
+    return ordered;
+  }, [hiddenCategories, categoryOrder]);
+
+  // Viditelné custom lists pro tohoto uživatele
+  const visibleCustomLists = useMemo(() => {
+    const userVisible = (customLists || []).filter(l =>
+      l.is_shared || l.created_by_user === currentUser?.name
+    );
+    const filtered = userVisible.filter(l => !hiddenLists.includes(l.id));
+    if (listOrder.length === 0) return filtered;
+    const ordered = [];
+    listOrder.forEach(id => {
+      const list = filtered.find(l => l.id === id);
+      if (list) ordered.push(list);
+    });
+    filtered.forEach(l => {
+      if (!listOrder.includes(l.id)) ordered.push(l);
+    });
+    return ordered;
+  }, [customLists, hiddenLists, listOrder, currentUser?.name]);
+
   // Render items — mixed list of task cards + checklist progress cards
   // Only in "active"/"today" views, we show completed checklist items from still-active tasks
   const renderItems = useMemo(() => {
@@ -15594,6 +15995,26 @@ function App() {
               <span>📢</span><span>Doručování notifikací</span>
             </button>
 
+            <button onClick={() => { setShowFolderManager(true); setShowUserMenu(false); }}
+              style={{
+                ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                background: "transparent", color: theme.text, border: "none",
+                textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span>📁</span><span>Správa složek</span>
+              {(hiddenCategories.length + hiddenLists.length) > 0 && (
+                <span style={{
+                  marginLeft: "auto", fontSize: 10, fontWeight: 700,
+                  background: theme.textSub, color: "#fff",
+                  padding: "1px 6px", borderRadius: "10px",
+                }}>
+                  {hiddenCategories.length + hiddenLists.length} skrytých
+                </span>
+              )}
+            </button>
+
             <button onClick={() => { setShowBlockList(true); setShowUserMenu(false); }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
@@ -15838,6 +16259,60 @@ function App() {
             onUnblock={unblockUser}
             onClose={() => setShowBlockList(false)}
             theme={theme}
+          />
+        )}
+
+        {showFolderManager && (
+          <FolderManagerPanel
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowFolderManager(false)}
+            hiddenCategories={hiddenCategories}
+            setHiddenCategories={setHiddenCategories}
+            categoryOrder={categoryOrder}
+            setCategoryOrder={setCategoryOrder}
+            customLists={customLists}
+            hiddenLists={hiddenLists}
+            setHiddenLists={setHiddenLists}
+            listOrder={listOrder}
+            setListOrder={setListOrder}
+            tasks={tasks}
+            saveCategoryPrefs={saveCategoryPrefs}
+            onEditList={(list) => {
+              setEditingList(list);
+              setShowFolderManager(false);
+            }}
+            onDeleteList={async (listId, mode) => {
+              // mode: "delete_tasks" = úkoly i list do koše
+              // mode: "remove_label" = jen list zmizí, úkoly bez kategorie
+              if (mode === "delete_tasks") {
+                // Smazat úkoly co mají kategorii list:${listId}
+                const idsToDelete = tasks
+                  .filter(t => t.category === `list:${listId}`)
+                  .map(t => t.id);
+                for (const id of idsToDelete) {
+                  await supabase.from("tasks")
+                    .update({ status: "deleted", deleted_at: new Date().toISOString() })
+                    .eq("id", id);
+                }
+                setTasks(prev => prev.map(t =>
+                  t.category === `list:${listId}`
+                    ? { ...t, status: "deleted", deletedAt: new Date().toISOString() }
+                    : t
+                ));
+              } else if (mode === "remove_label") {
+                // Odebrat kategorii z úkolů (= "other")
+                await supabase.from("tasks")
+                  .update({ category: "other" })
+                  .eq("category", `list:${listId}`);
+                setTasks(prev => prev.map(t =>
+                  t.category === `list:${listId}` ? { ...t, category: "other" } : t
+                ));
+              }
+              // Smazat samotný list
+              await supabase.from("custom_lists").delete().eq("id", listId);
+              setCustomLists(prev => prev.filter(l => l.id !== listId));
+            }}
           />
         )}
 
@@ -16274,6 +16749,7 @@ function App() {
             tagCounts={tagCounts}
             allTasks={tasks}
             customLists={customLists}
+            visibleCategories={visibleCategories}
             onCreateList={() => setShowCreateList(true)}
             onEditList={(list) => setEditingList(list)}
             dueDateFilter={dueDateFilter}
@@ -16285,8 +16761,7 @@ function App() {
           {/* App-level filter bar — pouze v filter mode (v typing mode má QuickAddBar svůj TypingFilterRow) */}
           {!isTypingMode && (() => {
             // Sdílená proměnná pro ikony i popover (musí být v jednom scope kvůli TDZ)
-            const visibleListsForFilter = (customLists || []).filter(l =>
-              l.is_shared || l.created_by_user === currentUser.name);
+            const visibleListsForFilter = visibleCustomLists;
             return (
           <>
           {/* Kompaktní ikonový filter row.
@@ -16656,8 +17131,8 @@ function App() {
                       <span style={{ width: "20px", fontSize: "16px" }}>📋</span>
                       <span style={{ flex: 1 }}>Všechny</span>
                     </button>
-                    {/* Předdefinované kategorie */}
-                    {CATEGORIES.map(cat => (
+                    {/* Předdefinované kategorie — jen viditelné pro tohoto usera */}
+                    {visibleCategories.map(cat => (
                       <button key={cat.id} type="button"
                         onClick={() => { setCategoryFilter(cat.id); setFilterPopover(null); }}
                         style={optStyle(categoryFilter === cat.id)}>
