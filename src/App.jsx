@@ -3029,6 +3029,7 @@ function noteFromDb(n) {
     pinned: !!n.pinned,
     sharedWith: Array.isArray(n.shared_with) ? n.shared_with : [],
     deletedAt: n.deleted_at || null, // soft delete
+    archivedBy: (n.archived_by && typeof n.archived_by === "object") ? n.archived_by : {}, // per-user archive { "Michal": "ISO", ... }
   };
 }
 function noteToDb(n) {
@@ -3040,9 +3041,70 @@ function noteToDb(n) {
     pinned: !!n.pinned,
     shared_with: Array.isArray(n.sharedWith) ? n.sharedWith : [],
     deleted_at: n.deletedAt || null,
+    archived_by: (n.archivedBy && typeof n.archivedBy === "object") ? n.archivedBy : {},
     updated_at: new Date().toISOString(),
   };
 }
+
+/* ═══════════════════════════════════════════════════════
+   NOTES — ARCHIVACE (per-user)
+   archived_by JSONB { "Michal": "ISO timestamp", ... }
+   ═══════════════════════════════════════════════════════ */
+
+async function apiArchiveNote(noteId, userName) {
+  if (!noteId || !userName) return { ok: false };
+  try {
+    // Načti aktuální archived_by
+    const { data: current, error: loadErr } = await supabase
+      .from("notes")
+      .select("archived_by")
+      .eq("id", noteId)
+      .single();
+    if (loadErr) throw loadErr;
+    const archivedBy = (current?.archived_by && typeof current.archived_by === "object") ? current.archived_by : {};
+    archivedBy[userName] = new Date().toISOString();
+    const { error } = await supabase
+      .from("notes")
+      .update({ archived_by: archivedBy, updated_at: new Date().toISOString() })
+      .eq("id", noteId);
+    if (error) throw error;
+    return { ok: true, archivedBy };
+  } catch (e) {
+    console.error("apiArchiveNote error:", e);
+    return { ok: false, error: e.message };
+  }
+}
+
+async function apiUnarchiveNote(noteId, userName) {
+  if (!noteId || !userName) return { ok: false };
+  try {
+    const { data: current, error: loadErr } = await supabase
+      .from("notes")
+      .select("archived_by")
+      .eq("id", noteId)
+      .single();
+    if (loadErr) throw loadErr;
+    const archivedBy = (current?.archived_by && typeof current.archived_by === "object") ? current.archived_by : {};
+    delete archivedBy[userName];
+    const { error } = await supabase
+      .from("notes")
+      .update({ archived_by: archivedBy, updated_at: new Date().toISOString() })
+      .eq("id", noteId);
+    if (error) throw error;
+    return { ok: true, archivedBy };
+  } catch (e) {
+    console.error("apiUnarchiveNote error:", e);
+    return { ok: false, error: e.message };
+  }
+}
+
+// Helper: je poznámka archivovaná pro tohoto uživatele?
+function isNoteArchivedForUser(note, userName) {
+  if (!note || !userName) return false;
+  const ab = note.archivedBy || {};
+  return !!ab[userName];
+}
+
 
 async function apiLoadNotes(userName) {
   // Načte poznámky:
@@ -5529,32 +5591,169 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
                 }}>
                   {c.content}
                 </div>
+                {/* Přílohy komentáře */}
+                {!isSystem && <CommentAttachmentsInline commentId={c.id} currentUser={currentUser} theme={theme} />}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Input */}
-      <div style={{ display: "flex", gap: "5px" }}>
+     {/* Input + příloha */}
+      <CommentInputWithAttach
+        onSubmit={(text) => onAdd(text)}
+        currentUser={currentUser}
+        task={task}
+        theme={theme}
+      />
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   COMMENT — input s přílohou + zobrazení příloh
+   ═══════════════════════════════════════════════════════ */
+
+function CommentInputWithAttach({ onSubmit, currentUser, task, theme }) {
+  const [input, setInput] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState([]); // přílohy nahrané před odesláním komentáře
+  const fileInputRef = useRef();
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (pendingAttachments.length + files.length > ATTACH_MAX_FILES) {
+      alert(`Max ${ATTACH_MAX_FILES} příloh.`);
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      // entity_id zatím neexistuje (komentář ještě nevznikl), použijeme PLACEHOLDER
+      // Po odeslání ho přepíšeme. Zatím použij dočasné ID a uložíme do state.
+      const tempId = `pending_${uuidShort()}`;
+      const result = await uploadAttachment({
+        file,
+        entityType: "comment",
+        entityId: tempId,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) {
+        setPendingAttachments(prev => [...prev, result.attachment]);
+      } else {
+        alert(`Upload selhal: ${result.error}`);
+      }
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removePending = async (a) => {
+    if (!confirm("Smazat přílohu?")) return;
+    const r = await deleteAttachment(a.id);
+    if (r.ok) {
+      setPendingAttachments(prev => prev.filter(x => x.id !== a.id));
+    }
+  };
+
+  const submit = async () => {
+    const text = input.trim();
+    if (!text && pendingAttachments.length === 0) return;
+    // Odeslat komentář
+    const commentText = text || "(příloha)";
+    const newCommentId = await onSubmit(commentText);
+    // Pokud máme pending přílohy, přemapuj jejich entity_id na skutečné commentId
+    if (newCommentId && pendingAttachments.length > 0) {
+      for (const a of pendingAttachments) {
+        await supabase
+          .from("attachments")
+          .update({ entity_id: String(newCommentId) })
+          .eq("id", a.id);
+      }
+    }
+    setInput("");
+    setPendingAttachments([]);
+  };
+
+  return (
+    <div>
+      {pendingAttachments.length > 0 && (
+        <div style={{ marginBottom: 6 }}>
+          <AttachmentGallery
+            attachments={pendingAttachments}
+            theme={theme}
+            canDelete={true}
+            onDelete={removePending}
+            thumbSize={60}
+          />
+        </div>
+      )}
+      <div style={{ display: "flex", gap: "5px", alignItems: "center" }}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+          multiple
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={handleFiles}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || pendingAttachments.length >= ATTACH_MAX_FILES}
+          title="Přidat přílohu"
+          style={{
+            ...buttonStyle(),
+            background: theme.buttonBg,
+            border: `1px solid ${theme.inputBorder}`,
+            color: theme.text,
+            padding: "7px 9px",
+            fontSize: 14,
+            opacity: uploading ? 0.5 : 1,
+          }}
+        >📷</button>
         <input
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === "Enter" && submit()}
-          placeholder="Napsat komentář..."
+          placeholder={uploading ? "Nahrávám…" : "Napsat komentář..."}
+          disabled={uploading}
           style={{ ...inputStyle(theme), fontSize: "12px", padding: "7px 10px", flex: 1 }}
         />
-        <button onClick={submit} disabled={!input.trim()} style={{
-          ...buttonStyle(), padding: "7px 14px",
-          background: input.trim() ? theme.accent : theme.buttonBg,
-          color: "#fff", fontSize: "13px",
-          opacity: input.trim() ? 1 : 0.4,
-        }}>→</button>
+        <button
+          onClick={submit}
+          disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
+          style={{
+            ...buttonStyle(), padding: "7px 14px",
+            background: (input.trim() || pendingAttachments.length > 0) ? theme.accent : theme.buttonBg,
+            color: "#fff", fontSize: "13px",
+            opacity: (input.trim() || pendingAttachments.length > 0) ? 1 : 0.4,
+          }}
+        >→</button>
       </div>
     </div>
   );
 }
+
+function CommentAttachmentsInline({ commentId, currentUser, theme }) {
+  const { attachments, removeAttachment } = useAttachments("comment", commentId);
+  if (!attachments || attachments.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <AttachmentGallery
+        attachments={attachments}
+        theme={theme}
+        canDelete={true}
+        onDelete={removeAttachment}
+        thumbSize={60}
+      />
+    </div>
+  );
+}
+
+
 
 /* ═══════════════════════════════════════════════════════
    TASK DETAIL (inline edit panel)
@@ -5970,7 +6169,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 task={task}
                 comments={comments.filter(c => c.taskId === task.id && !c.checklistItemId)}
                 currentUser={currentUser}
-                onAdd={(text) => onAddComment && onAddComment(task.id, text, null)}
+                onAdd={async (text) => onAddComment ? await onAddComment(task.id, text, null) : null}
                 onToggleReaction={(emoji) => onToggleReaction && onToggleReaction(task.id, emoji, null)}
                 onMarkSeen={onMarkCommentsSeen}
                 onEdit={null /* skrýt malou ikonu v rohu reakcí — máme dolní akční řádek */}
@@ -16983,8 +17182,11 @@ function App() {
 
   // ── Comments ──
 
-  const addComment = useCallback(async (taskId, content, checklistItemId = null) => {
-    if (!content || !content.trim()) return;
+ 
+
+
+const addComment = useCallback(async (taskId, content, checklistItemId = null) => {
+    if (!content || !content.trim()) return null;
     const comment = {
       id: generateId(),
       taskId,
@@ -17004,7 +17206,10 @@ function App() {
     if (task) {
       triggerCommentNotification(task, comment, currentUser.name);
     }
+    return comment.id;
   }, [currentUser, tasks]);
+
+
 
   const toggleReaction = useCallback(async (taskId, emoji, checklistItemId = null) => {
     // Find existing reaction by current user
