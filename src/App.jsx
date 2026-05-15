@@ -1471,6 +1471,630 @@ async function deleteAttachment(attachmentId) {
   }
 }
 
+
+/* ═══════════════════════════════════════════════════════
+   ATTACHMENT UPLOADER — KOMPONENTA
+   Tlačítko 📷 + multi-file input + inline náhledy
+   Použití:
+     <AttachmentUploader
+       entityType="task" | "comment" | "note" | "scratch_entry"
+       entityId={taskId}
+       currentUser="Michal"
+       theme={theme}
+       compact={true}                  // true = jen ikonka, false = ikonka + text
+       existingCount={3}                // počet už nahraných (pro limit 10)
+       onUploaded={(attachment) => {}}  // callback po každém úspěšném uploadu
+     />
+   ═══════════════════════════════════════════════════════ */
+
+function AttachmentUploader({
+  entityType,
+  entityId,
+  currentUser,
+  theme,
+  compact = true,
+  existingCount = 0,
+  onUploaded,
+  disabled = false,
+}) {
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState([]); // [{name, status, error}]
+
+  const remainingSlots = Math.max(0, ATTACH_MAX_FILES - existingCount);
+  const canUpload = !disabled && !uploading && entityId && remainingSlots > 0;
+
+  const handleFiles = async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+
+    // Limit počtu
+    if (files.length > remainingSlots) {
+      alert(`Můžeš přidat max ${remainingSlots} ${remainingSlots === 1 ? "přílohu" : "příloh"} (limit ${ATTACH_MAX_FILES} celkem).`);
+      return;
+    }
+
+    setUploading(true);
+    const initial = files.map(f => ({
+      name: f.name || "soubor",
+      status: "queued",
+      error: null,
+    }));
+    setProgress(initial);
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      // Update progress: aktuální soubor začíná
+      setProgress(prev => prev.map((p, idx) =>
+        idx === i ? { ...p, status: "uploading" } : p
+      ));
+
+      const result = await uploadAttachment({
+        file,
+        entityType,
+        entityId,
+        uploadedBy: currentUser,
+        onProgress: (msg) => {
+          setProgress(prev => prev.map((p, idx) =>
+            idx === i ? { ...p, status: msg } : p
+          ));
+        },
+      });
+
+      if (result.ok) {
+        setProgress(prev => prev.map((p, idx) =>
+          idx === i ? { ...p, status: "done" } : p
+        ));
+        onUploaded?.(result.attachment);
+      } else {
+        setProgress(prev => prev.map((p, idx) =>
+          idx === i ? { ...p, status: "error", error: result.error } : p
+        ));
+      }
+    }
+
+    // Po 2.5s vyčisti progress (kromě chyb)
+    setTimeout(() => {
+      setProgress(prev => prev.filter(p => p.status === "error"));
+      setUploading(false);
+    }, 2500);
+
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const buttonBg = canUpload ? theme.buttonBg : theme.inputBg;
+  const buttonColor = canUpload ? theme.text : theme.textSub;
+  const buttonCursor = canUpload ? "pointer" : "not-allowed";
+
+  return (
+    <div style={{ display: "inline-block", verticalAlign: "middle" }}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+        multiple
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+      <button
+        type="button"
+        onClick={() => canUpload && fileInputRef.current?.click()}
+        disabled={!canUpload}
+        title={
+          !entityId
+            ? "Nejprve ulož"
+            : remainingSlots === 0
+            ? `Maximum ${ATTACH_MAX_FILES} příloh dosaženo`
+            : uploading
+            ? "Probíhá upload…"
+            : `Přidat přílohu (zbývá ${remainingSlots})`
+        }
+        style={{
+          background: buttonBg,
+          border: `1px solid ${theme.inputBorder}`,
+          borderRadius: 8,
+          color: buttonColor,
+          padding: compact ? "8px 10px" : "8px 12px",
+          fontSize: compact ? 16 : 13,
+          cursor: buttonCursor,
+          fontFamily: FONT,
+          fontWeight: 600,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          opacity: canUpload ? 1 : 0.5,
+        }}
+      >
+        <span>📷</span>
+        {!compact && <span>Příloha</span>}
+        {existingCount > 0 && (
+          <span style={{ fontSize: 11, color: theme.textSub, fontWeight: 500 }}>
+            {existingCount}/{ATTACH_MAX_FILES}
+          </span>
+        )}
+      </button>
+
+      {/* Inline progress indikátor */}
+      {progress.length > 0 && (
+        <div style={{
+          marginTop: 8,
+          padding: "8px 10px",
+          background: theme.inputBg,
+          border: `1px solid ${theme.inputBorder}`,
+          borderRadius: 8,
+          fontSize: 12,
+          fontFamily: FONT,
+          color: theme.text,
+          maxWidth: 400,
+        }}>
+          {progress.map((p, idx) => {
+            const isErr = p.status === "error";
+            const isDone = p.status === "done";
+            const icon = isErr ? "❌" : isDone ? "✅" : "⏳";
+            const color = isErr ? theme.red : isDone ? theme.green : theme.textSub;
+            return (
+              <div key={idx} style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "2px 0",
+                color,
+              }}>
+                <span>{icon}</span>
+                <span style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  flex: 1,
+                  color: theme.text,
+                }}>
+                  {p.name}
+                </span>
+                <span style={{ fontSize: 11, color }}>
+                  {isErr ? p.error : isDone ? "hotovo" : p.status}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   ATTACHMENT THUMB — jeden náhled (auto-load signed URL)
+   ═══════════════════════════════════════════════════════ */
+
+function AttachmentThumb({ attachment, theme, size = 80, onClick, onDelete, canDelete }) {
+  const [url, setUrl] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!attachment?.is_image) return;
+    getSignedUrl(attachment.file_path).then(u => {
+      if (!cancelled) setUrl(u);
+    });
+    return () => { cancelled = true; };
+  }, [attachment?.file_path, attachment?.is_image]);
+
+  const isImage = attachment?.is_image;
+  const fileName = attachment?.file_name || "soubor";
+  const sizeStr = formatBytes(attachment?.size_bytes);
+
+  // Ikona pro non-image
+  const getFileIcon = (mime, name) => {
+    const m = (mime || "").toLowerCase();
+    const n = (name || "").toLowerCase();
+    if (m === "application/pdf" || n.endsWith(".pdf")) return "📄";
+    if (n.endsWith(".doc") || n.endsWith(".docx")) return "📝";
+    if (n.endsWith(".xls") || n.endsWith(".xlsx")) return "📊";
+    if (n.endsWith(".zip") || n.endsWith(".rar")) return "🗜️";
+    if (n.endsWith(".txt")) return "📃";
+    return "📎";
+  };
+
+  const handleDelete = (e) => {
+    e.stopPropagation();
+    if (!canDelete) return;
+    if (confirm(`Smazat přílohu "${fileName}"?`)) {
+      onDelete?.(attachment);
+    }
+  };
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    const dlUrl = await getSignedUrl(attachment.file_path);
+    if (!dlUrl) {
+      alert("Nepodařilo se získat odkaz.");
+      return;
+    }
+    // Otevři v novém okně (signed URL stáhne soubor)
+    const a = document.createElement("a");
+    a.href = dlUrl;
+    a.download = fileName;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        position: "relative",
+        width: size,
+        height: size,
+        background: theme.inputBg,
+        border: `1px solid ${theme.inputBorder}`,
+        borderRadius: 8,
+        overflow: "hidden",
+        cursor: isImage ? "pointer" : "default",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      title={`${fileName} (${sizeStr})`}
+    >
+      {isImage && url && !loadFailed ? (
+        <img
+          src={url}
+          alt={fileName}
+          onError={() => setLoadFailed(true)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      ) : isImage && !url && !loadFailed ? (
+        <div style={{ fontSize: 11, color: theme.textSub, padding: 4 }}>…</div>
+      ) : (
+        <div
+          onClick={handleDownload}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 6,
+            cursor: "pointer",
+            width: "100%",
+            height: "100%",
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: 28, lineHeight: 1 }}>
+            {getFileIcon(attachment.mime_type, fileName)}
+          </div>
+          <div style={{
+            fontSize: 9,
+            color: theme.textSub,
+            textAlign: "center",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            width: "100%",
+            fontFamily: FONT,
+          }}>
+            {fileName.length > 14 ? fileName.slice(0, 11) + "…" : fileName}
+          </div>
+          <div style={{
+            fontSize: 9,
+            color: theme.textDim,
+            fontFamily: FONT,
+          }}>
+            ⬇ {sizeStr}
+          </div>
+        </div>
+      )}
+
+      {canDelete && (
+        <button
+          type="button"
+          onClick={handleDelete}
+          title="Smazat přílohu"
+          style={{
+            position: "absolute",
+            top: 2,
+            right: 2,
+            width: 20,
+            height: 20,
+            background: "rgba(0,0,0,0.65)",
+            color: "#fff",
+            border: "none",
+            borderRadius: "50%",
+            fontSize: 12,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            lineHeight: 1,
+            fontFamily: FONT,
+          }}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   ATTACHMENT GALLERY — grid náhledů
+   Použití:
+     <AttachmentGallery
+       attachments={[...]}
+       theme={theme}
+       canDelete={true}
+       onDelete={(a) => {...}}
+       thumbSize={80}
+     />
+   ═══════════════════════════════════════════════════════ */
+
+function AttachmentGallery({ attachments, theme, canDelete = false, onDelete, thumbSize = 80 }) {
+  const [lightboxIndex, setLightboxIndex] = useState(-1);
+
+  if (!attachments || attachments.length === 0) return null;
+
+  // Pro lightbox filtruj jen obrázky
+  const imageList = attachments.filter(a => a.is_image);
+
+  const openLightbox = (attachment) => {
+    if (!attachment.is_image) return;
+    const idx = imageList.findIndex(a => a.id === attachment.id);
+    if (idx >= 0) setLightboxIndex(idx);
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+      }}>
+        {attachments.map((a) => (
+          <AttachmentThumb
+            key={a.id}
+            attachment={a}
+            theme={theme}
+            size={thumbSize}
+            onClick={() => openLightbox(a)}
+            onDelete={onDelete}
+            canDelete={canDelete}
+          />
+        ))}
+      </div>
+
+      {lightboxIndex >= 0 && (
+        <AttachmentLightbox
+          attachments={imageList}
+          index={lightboxIndex}
+          theme={theme}
+          onClose={() => setLightboxIndex(-1)}
+          onNavigate={(newIdx) => setLightboxIndex(newIdx)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   ATTACHMENT LIGHTBOX — fullscreen prohlížeč
+   ═══════════════════════════════════════════════════════ */
+
+function AttachmentLightbox({ attachments, index, theme, onClose, onNavigate }) {
+  const [url, setUrl] = useState(null);
+  const current = attachments[index];
+
+  useEffect(() => {
+    let cancelled = false;
+    setUrl(null);
+    if (!current) return;
+    getSignedUrl(current.file_path).then(u => {
+      if (!cancelled) setUrl(u);
+    });
+    return () => { cancelled = true; };
+  }, [current?.file_path]);
+
+  // Keyboard navigace
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft" && index > 0) onNavigate(index - 1);
+      else if (e.key === "ArrowRight" && index < attachments.length - 1) onNavigate(index + 1);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [index, attachments.length, onClose, onNavigate]);
+
+  if (!current) return null;
+
+  const hasPrev = index > 0;
+  const hasNext = index < attachments.length - 1;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.92)",
+        zIndex: 300,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      {/* Close */}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          width: 40,
+          height: 40,
+          background: "rgba(255,255,255,0.1)",
+          border: "1px solid rgba(255,255,255,0.2)",
+          borderRadius: "50%",
+          color: "#fff",
+          fontSize: 22,
+          cursor: "pointer",
+          fontFamily: FONT,
+          lineHeight: 1,
+        }}
+      >×</button>
+
+      {/* Info */}
+      <div style={{
+        position: "absolute",
+        top: 12,
+        left: 12,
+        padding: "6px 10px",
+        background: "rgba(0,0,0,0.5)",
+        color: "#fff",
+        fontSize: 12,
+        borderRadius: 6,
+        fontFamily: FONT,
+        maxWidth: "60%",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>
+        {index + 1}/{attachments.length} · {current.file_name}
+      </div>
+
+      {/* Prev */}
+      {hasPrev && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onNavigate(index - 1); }}
+          style={{
+            position: "absolute",
+            left: 12,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 48,
+            height: 48,
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: "50%",
+            color: "#fff",
+            fontSize: 22,
+            cursor: "pointer",
+            fontFamily: FONT,
+          }}
+        >‹</button>
+      )}
+
+      {/* Next */}
+      {hasNext && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onNavigate(index + 1); }}
+          style={{
+            position: "absolute",
+            right: 12,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 48,
+            height: 48,
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: "50%",
+            color: "#fff",
+            fontSize: 22,
+            cursor: "pointer",
+            fontFamily: FONT,
+          }}
+        >›</button>
+      )}
+
+      {/* Image */}
+      <div onClick={(e) => e.stopPropagation()} style={{
+        maxWidth: "95vw",
+        maxHeight: "92vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}>
+        {url ? (
+          <img
+            src={url}
+            alt={current.file_name}
+            style={{
+              maxWidth: "100%",
+              maxHeight: "92vh",
+              objectFit: "contain",
+              borderRadius: 4,
+            }}
+          />
+        ) : (
+          <div style={{ color: "#fff", fontFamily: FONT }}>Načítám…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   useAttachments — React hook pro správu příloh entity
+   Použití uvnitř TaskCard / NoteEditor / atd:
+     const { attachments, refresh, addAttachment, removeAttachment } =
+       useAttachments(entityType, entityId);
+   ═══════════════════════════════════════════════════════ */
+
+function useAttachments(entityType, entityId) {
+  const [attachments, setAttachments] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!entityType || !entityId) {
+      setAttachments([]);
+      return;
+    }
+    setLoading(true);
+    const list = await loadAttachments(entityType, entityId);
+    setAttachments(list);
+    setLoading(false);
+  }, [entityType, entityId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const addAttachment = useCallback((a) => {
+    setAttachments(prev => [...prev, a]);
+  }, []);
+
+  const removeAttachment = useCallback(async (a) => {
+    const result = await deleteAttachment(a.id);
+    if (result.ok) {
+      setAttachments(prev => prev.filter(x => x.id !== a.id));
+      return true;
+    } else {
+      alert(`Smazání selhalo: ${result.error}`);
+      return false;
+    }
+  }, []);
+
+  return { attachments, loading, refresh, addAttachment, removeAttachment };
+}
+
+
+
 /**
  * Načte přílohy pro danou entitu
  */
