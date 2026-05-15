@@ -1199,6 +1199,362 @@ const buttonStyle = () => ({
   cursor: "pointer",
 });
 
+
+/* ═══════════════════════════════════════════════════════
+   ATTACHMENTS — HELPERS
+   Univerzální funkce pro upload příloh (fotky, PDF, soubory)
+   Storage bucket: "attachments" (private)
+   Tabulka: attachments
+   ═══════════════════════════════════════════════════════ */
+
+// Konstanty
+const ATTACH_MAX_FILES = 10;
+const ATTACH_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+const ATTACH_LARGE_THRESHOLD = 5 * 1024 * 1024; // 5 MB → 7 dní mazání
+const ATTACH_SIGNED_URL_TTL = 60 * 60; // 1 hodina
+
+// Cache pro signed URLs (klíč: filePath, hodnota: {url, expiresAt})
+const _signedUrlCache = new Map();
+
+const ATTACH_IMAGE_MIMES = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp",
+  "image/gif", "image/heic", "image/heif"
+]);
+
+function isImageMime(mime) {
+  if (!mime) return false;
+  const m = mime.toLowerCase();
+  return ATTACH_IMAGE_MIMES.has(m) || m.startsWith("image/");
+}
+
+function isHeicFile(file) {
+  if (!file) return false;
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  return type === "image/heic" || type === "image/heif" ||
+         name.endsWith(".heic") || name.endsWith(".heif");
+}
+
+function sanitizeFileName(name) {
+  if (!name) return "file";
+  return name
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 100) || "file";
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Generátor UUID pro Storage path (jednoduchý, browser-safe)
+function uuidShort() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  }
+  return Math.random().toString(36).slice(2, 14);
+}
+
+// Lazy-load browser-image-compression z CDN (pro HEIC z iPhone)
+let _heicLibPromise = null;
+async function loadHeicLib() {
+  if (_heicLibPromise) return _heicLibPromise;
+  _heicLibPromise = new Promise((resolve, reject) => {
+    if (window.imageCompression) { resolve(window.imageCompression); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js";
+    script.onload = () => {
+      if (window.imageCompression) resolve(window.imageCompression);
+      else reject(new Error("imageCompression not on window"));
+    };
+    script.onerror = () => reject(new Error("Failed to load HEIC lib"));
+    document.head.appendChild(script);
+  });
+  return _heicLibPromise;
+}
+
+// Komprese přes Canvas (JPG, PNG, WebP)
+async function compressImageCanvas(file, { maxDim = 800, quality = 0.75 } = {}) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(null);
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = () => resolve(null);
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const ratio = Math.min(maxDim / width, maxDim / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) { resolve(null); return; }
+            const baseName = (file.name || "image").replace(/\.[^.]+$/, "");
+            resolve({ blob, name: `${baseName}.jpg`, type: "image/jpeg" });
+          },
+          "image/jpeg",
+          quality
+        );
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Komprese HEIC přes lazy-load knihovnu
+async function compressHeicViaLib(file, { maxDim = 800, quality = 0.75 } = {}) {
+  try {
+    const imageCompression = await loadHeicLib();
+    const compressed = await imageCompression(file, {
+      maxSizeMB: 0.3,
+      maxWidthOrHeight: maxDim,
+      useWebWorker: true,
+      fileType: "image/jpeg",
+      initialQuality: quality,
+    });
+    const baseName = (file.name || "image").replace(/\.[^.]+$/, "");
+    return { blob: compressed, name: `${baseName}.jpg`, type: "image/jpeg" };
+  } catch (err) {
+    console.warn("[attachments] HEIC compression failed:", err);
+    return null;
+  }
+}
+
+// Univerzální komprese
+async function compressImage(file) {
+  if (isHeicFile(file)) {
+    const r = await compressHeicViaLib(file);
+    if (r) return r;
+    return await compressImageCanvas(file);
+  }
+  return await compressImageCanvas(file);
+}
+
+/**
+ * Hlavní upload pipeline
+ * @returns { ok: true, attachment } | { ok: false, error }
+ */
+async function uploadAttachment({ file, entityType, entityId, uploadedBy, onProgress }) {
+  try {
+    // Validace
+    if (!file) return { ok: false, error: "Soubor chybí" };
+    if (!entityType || !entityId) return { ok: false, error: "Chybí entityType/entityId" };
+    if (file.size > ATTACH_MAX_SIZE) {
+      return { ok: false, error: `Soubor je příliš velký (${formatBytes(file.size)}). Max ${formatBytes(ATTACH_MAX_SIZE)}.` };
+    }
+
+    onProgress?.("Připravuji…");
+
+    // Komprese pokud obrázek
+    let toUpload = file;
+    let uploadName = file.name || "file";
+    let uploadType = file.type || "application/octet-stream";
+    const isImg = isImageMime(file.type) || isHeicFile(file);
+
+    if (isImg) {
+      onProgress?.("Komprimuji…");
+      const compressed = await compressImage(file);
+      if (compressed) {
+        toUpload = compressed.blob;
+        uploadName = compressed.name;
+        uploadType = compressed.type;
+      } else {
+        console.warn("[attachments] Komprese selhala, nahrávám originál:", file.name);
+      }
+    }
+
+    // Storage path: {entityType}/{entityId}/{uuid}_{sanitized_name}
+    const sanitized = sanitizeFileName(uploadName);
+    const storagePath = `${entityType}/${entityId}/${uuidShort()}_${sanitized}`;
+
+    onProgress?.("Nahrávám…");
+
+    // Upload do Storage
+    const { error: uploadError } = await supabase.storage
+      .from("attachments")
+      .upload(storagePath, toUpload, {
+        contentType: uploadType,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error("[attachments] Storage upload error:", uploadError);
+      return { ok: false, error: `Upload selhal: ${uploadError.message}` };
+    }
+
+    // INSERT do tabulky attachments
+    const sizeBytes = toUpload.size || file.size;
+    const { data: insertData, error: insertError } = await supabase
+      .from("attachments")
+      .insert({
+        entity_type: entityType,
+        entity_id: String(entityId),
+        file_path: storagePath,
+        file_name: uploadName,
+        mime_type: uploadType,
+        size_bytes: sizeBytes,
+        is_image: isImg,
+        uploaded_by: uploadedBy || null,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      // Rollback Storage uploadu
+      console.error("[attachments] DB insert error:", insertError);
+      await supabase.storage.from("attachments").remove([storagePath]).catch(() => {});
+      return { ok: false, error: `Záznam selhal: ${insertError.message}` };
+    }
+
+    onProgress?.("Hotovo");
+    return { ok: true, attachment: insertData };
+  } catch (err) {
+    console.error("[attachments] uploadAttachment exception:", err);
+    return { ok: false, error: err.message || "Neznámá chyba" };
+  }
+}
+
+/**
+ * Smaže přílohu (ze Storage + DB)
+ */
+async function deleteAttachment(attachmentId) {
+  try {
+    // Nejprve najdeme file_path
+    const { data: row, error: fetchErr } = await supabase
+      .from("attachments")
+      .select("file_path")
+      .eq("id", attachmentId)
+      .single();
+
+    if (fetchErr || !row) {
+      console.error("[attachments] delete: nenalezeno", fetchErr);
+      return { ok: false, error: "Příloha nenalezena" };
+    }
+
+    // Smaž ze Storage
+    const { error: storageErr } = await supabase.storage
+      .from("attachments")
+      .remove([row.file_path]);
+    if (storageErr) {
+      console.warn("[attachments] Storage delete error (pokračuji):", storageErr);
+    }
+
+    // Smaž z DB
+    const { error: dbErr } = await supabase
+      .from("attachments")
+      .delete()
+      .eq("id", attachmentId);
+
+    if (dbErr) {
+      console.error("[attachments] DB delete error:", dbErr);
+      return { ok: false, error: dbErr.message };
+    }
+
+    // Smaž z cache
+    _signedUrlCache.delete(row.file_path);
+
+    return { ok: true };
+  } catch (err) {
+    console.error("[attachments] deleteAttachment exception:", err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Načte přílohy pro danou entitu
+ */
+async function loadAttachments(entityType, entityId) {
+  try {
+    if (!entityType || !entityId) return [];
+    const { data, error } = await supabase
+      .from("attachments")
+      .select("*")
+      .eq("entity_type", entityType)
+      .eq("entity_id", String(entityId))
+      .order("uploaded_at", { ascending: true });
+
+    if (error) {
+      console.error("[attachments] load error:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[attachments] loadAttachments exception:", err);
+    return [];
+  }
+}
+
+/**
+ * Získá signed URL (s cache, auto-refresh když vyprší za < 5 minut)
+ */
+async function getSignedUrl(filePath) {
+  if (!filePath) return null;
+  const now = Date.now();
+  const cached = _signedUrlCache.get(filePath);
+  // Pokud cache platná a expiruje za víc než 5 minut, použij
+  if (cached && cached.expiresAt - now > 5 * 60 * 1000) {
+    return cached.url;
+  }
+  try {
+    const { data, error } = await supabase.storage
+      .from("attachments")
+      .createSignedUrl(filePath, ATTACH_SIGNED_URL_TTL);
+    if (error || !data?.signedUrl) {
+      console.error("[attachments] signed URL error:", error);
+      return null;
+    }
+    _signedUrlCache.set(filePath, {
+      url: data.signedUrl,
+      expiresAt: now + ATTACH_SIGNED_URL_TTL * 1000,
+    });
+    return data.signedUrl;
+  } catch (err) {
+    console.error("[attachments] getSignedUrl exception:", err);
+    return null;
+  }
+}
+
+/**
+ * Hromadný delete všech příloh entity (volá se při smazání úkolu/poznámky/komentáře)
+ */
+async function deleteAllAttachmentsForEntity(entityType, entityId) {
+  try {
+    const list = await loadAttachments(entityType, entityId);
+    if (list.length === 0) return { ok: true, count: 0 };
+    const paths = list.map(a => a.file_path);
+    const ids = list.map(a => a.id);
+    await supabase.storage.from("attachments").remove(paths).catch(e =>
+      console.warn("[attachments] bulk storage remove warning:", e)
+    );
+    const { error } = await supabase
+      .from("attachments")
+      .delete()
+      .in("id", ids);
+    if (error) {
+      console.error("[attachments] bulk DB delete error:", error);
+      return { ok: false, error: error.message };
+    }
+    paths.forEach(p => _signedUrlCache.delete(p));
+    return { ok: true, count: list.length };
+  } catch (err) {
+    console.error("[attachments] deleteAllAttachmentsForEntity exception:", err);
+    return { ok: false, error: err.message };
+  }
+}
+
+
+
 /* ═══════════════════════════════════════════════════════
    OFFLINE CACHE & QUEUE
    ═══════════════════════════════════════════════════════ */
