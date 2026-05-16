@@ -4975,8 +4975,8 @@ function CopyTaskButton({ task, theme }) {
 function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   const [input, setInput] = useState("");
   const hasEntries = task.scratchPad && task.scratchPad.filter(e => !e.deletedAt).length > 0;
-  // Default expanded — jen pokud existuje obsah (zápisky). Prázdný deník = sbalený.
-  const [expanded, setExpanded] = useState(hasEntries);
+  // Vždy otevřený při rozbalení detailu úkolu — lepší UX pro rychlý zápis
+  const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
 
@@ -6473,38 +6473,73 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
             Array.isArray(task.assignedTo) && task.assignedTo.includes(currentUser.name);
 
           if (isPersonalMonolog) {
-            // Just show the Edit + Delete buttons, no comments/reactions
+            // Osobní monolog: bez komentářů, ale s přílohami, archivací a konverzí na poznámku
             return (
-              <div style={{
-                display: "flex", gap: "4px", marginTop: "12px",
-                paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
-                justifyContent: "flex-end",
-              }}>
-                {task.status !== "deleted" && (
-                  <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
-                    ...buttonStyle(),
-                    padding: "3px 10px", fontSize: "12px",
-                    background: theme.accentSoft, color: theme.accent,
-                    border: `1px solid ${theme.accentBorder}`,
-                    borderRadius: "12px",
-                    display: "inline-flex", alignItems: "center", gap: "3px",
-                  }}>
-                    ✏️ Upravit
-                  </button>
-                )}
-                {onDelete && task.status !== "deleted" && (
-                  <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
-                    ...buttonStyle(),
-                    padding: "3px 10px", fontSize: "12px",
-                    background: `${theme.red}08`, color: theme.red,
-                    border: `1px solid ${theme.red}25`,
-                    borderRadius: "12px",
-                    display: "inline-flex", alignItems: "center", gap: "3px",
-                  }}>
-                    🗑 Smazat
-                  </button>
-                )}
-              </div>
+              <>
+                {/* Galerie příloh úkolu */}
+                <TaskAttachmentsSection task={task} currentUser={currentUser} theme={theme} />
+
+                <div style={{
+                  display: "flex", gap: "6px", marginTop: "12px",
+                  paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
+                  justifyContent: "flex-end", flexWrap: "wrap",
+                }}>
+                  {task.status !== "deleted" && (
+                    <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: theme.accentSoft, color: theme.accent,
+                      border: `1px solid ${theme.accentBorder}`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      ✏️ Upravit
+                    </button>
+                  )}
+                  {/* 📂 Archivovat — jen pro aktivní a hotové úkoly */}
+                  {onArchive && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
+                    <button onClick={() => {
+                      if (confirm(`Archivovat úkol "${task.title}"?\n\nÚkol zmizí ze seznamu, ale zůstane v archivu.`)) {
+                        onArchive(task.id);
+                      }
+                    }} title="Archivovat úkol" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.accent}10`, color: theme.accent,
+                      border: `1px solid ${theme.accent}30`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      📂 Archivovat
+                    </button>
+                  )}
+                  {/* 📓 Převést na poznámku */}
+                  {onConvertTaskToNote && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
+                    <button onClick={() => onConvertTaskToNote(task)} title="Převést úkol na poznámku" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
+                      border: `1px solid ${theme.purple || "#a855f7"}30`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      📓 Na poznámku
+                    </button>
+                  )}
+                  {onDelete && task.status !== "deleted" && (
+                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.red}08`, color: theme.red,
+                      border: `1px solid ${theme.red}25`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      🗑 Smazat
+                    </button>
+                  )}
+                </div>
+              </>
             );
           }
 
