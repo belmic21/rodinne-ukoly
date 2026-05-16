@@ -5091,85 +5091,21 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           {/* Entries */}
           {hasEntries && (
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              
-
-		              {task.scratchPad.filter(e => !e.deletedAt).map(entry => (
-                <div key={entry.id} style={{
-                  padding: "6px 8px",
-                  background: theme.card,
-                  border: `1px solid ${theme.inputBorder}`,
-                  borderRadius: "6px",
-                  fontSize: "12px",
-                  display: "flex", flexDirection: "column", gap: "4px",
-                }}>
-                  <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
-
-
-                  <span style={{
-                    fontSize: "9px", color: theme.textMid, fontWeight: 600,
-                    whiteSpace: "nowrap", marginTop: "2px",
-                  }}>
-                    {formatTimeTrace(entry.createdAt)}
-                    {entry.author !== currentUser.name && ` · ${entry.author}`}
-                    {entry.editedAt && (
-                      <span style={{ color: theme.textDim, fontStyle: "italic" }}> · upraveno</span>
-                    )}
-                  </span>
-                  {editingId === entry.id ? (
-                    <input
-                      type="text"
-                      value={editText}
-                      onChange={e => setEditText(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") saveEdit();
-                        if (e.key === "Escape") cancelEdit();
-                      }}
-                      onBlur={saveEdit}
-                      autoFocus
-                      style={{
-                        flex: 1, padding: "2px 6px", fontSize: "12px",
-                        border: `1px solid ${theme.accent}`,
-                        background: theme.card, color: theme.text,
-                        borderRadius: "4px", outline: "none",
-                      }}
-                    />
-                  ) : (
-                    <span style={{ flex: 1, color: theme.text, lineHeight: 1.3 }}>
-                      {entry.text}
-                    </span>
-                  )}
-                 
-
-
-                  {entry.author === currentUser.name && editingId !== entry.id && (
-                    <>
-                      <ScratchEntryAttachButton entry={entry} currentUser={currentUser} theme={theme} />
-                      <button onClick={() => startEdit(entry)}
-                        title="Upravit"
-                        style={{
-                          background: "none", border: "none",
-                          color: theme.textDim, cursor: "pointer", fontSize: "12px",
-                          padding: "0 3px",
-                        }}>
-                        ✏️
-                      </button>
-                      <button onClick={() => deleteEntry(entry.id)}
-                        title="Smazat"
-                        style={{
-                          background: "none", border: "none",
-                          color: theme.textDim, cursor: "pointer", fontSize: "12px",
-                          padding: "0 3px",
-                        }}>
-                        🗑
-                      </button>
-                    </>
-                  )}
-                  </div>
-                  <ScratchEntryAttachments entryId={entry.id} currentUser={currentUser} theme={theme} />
-                </div>
+              {task.scratchPad.filter(e => !e.deletedAt).map(entry => (
+                <ScratchEntryRow
+                  key={entry.id}
+                  entry={entry}
+                  currentUser={currentUser}
+                  theme={theme}
+                  editingId={editingId}
+                  editText={editText}
+                  setEditText={setEditText}
+                  saveEdit={saveEdit}
+                  cancelEdit={cancelEdit}
+                  startEdit={startEdit}
+                  deleteEntry={deleteEntry}
+                />
               ))}
-
-
             </div>
           )}
         </>
@@ -5184,6 +5120,136 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
    SCRATCH ENTRY — komponenty pro přílohy v deníku
    ═══════════════════════════════════════════════════════ */
 
+function ScratchEntryRow({ entry, currentUser, theme, editingId, editText, setEditText, saveEdit, cancelEdit, startEdit, deleteEntry }) {
+  // SDÍLENÝ STAV — tlačítko 📷 i galerie sdílí jeden useAttachments hook
+  const { attachments, addAttachment, removeAttachment } = useAttachments("scratch_entry", entry.id);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > 5) {
+      alert(`Max 5 příloh na jeden záznam deníku.`);
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      const result = await uploadAttachment({
+        file,
+        entityType: "scratch_entry",
+        entityId: entry.id,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) addAttachment(result.attachment);
+      else alert(`Upload selhal: ${result.error}`);
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  return (
+    <div style={{
+      padding: "6px 8px",
+      background: theme.card,
+      border: `1px solid ${theme.inputBorder}`,
+      borderRadius: "6px",
+      fontSize: "12px",
+      display: "flex", flexDirection: "column", gap: "4px",
+    }}>
+      <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
+        <span style={{
+          fontSize: "9px", color: theme.textMid, fontWeight: 600,
+          whiteSpace: "nowrap", marginTop: "2px",
+        }}>
+          {formatTimeTrace(entry.createdAt)}
+          {entry.author !== currentUser.name && ` · ${entry.author}`}
+          {entry.editedAt && (
+            <span style={{ color: theme.textDim, fontStyle: "italic" }}> · upraveno</span>
+          )}
+        </span>
+        {editingId === entry.id ? (
+          <input
+            type="text"
+            value={editText}
+            onChange={e => setEditText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") saveEdit();
+              if (e.key === "Escape") cancelEdit();
+            }}
+            onBlur={saveEdit}
+            autoFocus
+            style={{
+              flex: 1, padding: "2px 6px", fontSize: "12px",
+              border: `1px solid ${theme.accent}`,
+              background: theme.card, color: theme.text,
+              borderRadius: "4px", outline: "none",
+            }}
+          />
+        ) : (
+          <span style={{ flex: 1, color: theme.text, lineHeight: 1.3 }}>
+            {entry.text}
+          </span>
+        )}
+        {entry.author === currentUser.name && editingId !== entry.id && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+              multiple
+              capture="environment"
+              style={{ display: "none" }}
+              onChange={handleFiles}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title={uploading ? "Nahrávám…" : "Přidat přílohu"}
+              style={{
+                background: "none", border: "none",
+                color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                padding: "0 3px",
+                opacity: uploading ? 0.5 : 1,
+              }}
+            >📷</button>
+            <button onClick={() => startEdit(entry)}
+              title="Upravit"
+              style={{
+                background: "none", border: "none",
+                color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                padding: "0 3px",
+              }}>
+              ✏️
+            </button>
+            <button onClick={() => deleteEntry(entry.id)}
+              title="Smazat"
+              style={{
+                background: "none", border: "none",
+                color: theme.textDim, cursor: "pointer", fontSize: "12px",
+                padding: "0 3px",
+              }}>
+              🗑
+            </button>
+          </>
+        )}
+      </div>
+      {/* Galerie příloh — sdílí stav s tlačítkem 📷 výše */}
+      {attachments.length > 0 && (
+        <AttachmentGallery
+          attachments={attachments}
+          theme={theme}
+          canDelete={true}
+          onDelete={removeAttachment}
+          thumbSize={60}
+        />
+      )}
+    </div>
+  );
+}
+
+// Legacy komponenty (zachovány pro případnou kompatibilitu jinde — nepoužívají se)
 function ScratchEntryAttachButton({ entry, currentUser, theme }) {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -17447,11 +17513,11 @@ function App() {
       message: "Co se má stát s původním úkolem?",
       options: [
         { key: "keep", label: "📌 Ponechat úkol", color: "accent",
-          description: "Vznikne nová poznámka, úkol zůstane." },
+          description: "Vznikne nová poznámka, úkol zůstane (přílohy se zkopírují)." },
         { key: "archive", label: "📂 Archivovat úkol", color: "purple",
-          description: "Vznikne poznámka, úkol půjde do archivu." },
+          description: "Vznikne poznámka, úkol půjde do archivu (přílohy se přesunou)." },
         { key: "delete", label: "🗑 Smazat úkol", color: "red",
-          description: "Vznikne poznámka, úkol půjde do koše (30 dní)." },
+          description: "Vznikne poznámka, úkol půjde do koše (přílohy se přesunou)." },
         { key: "cancel", label: "✖ Zrušit", color: "gray" },
       ],
     });
@@ -17459,9 +17525,29 @@ function App() {
 
     // Sestav obsah poznámky jako HTML
     const taskComments = (commentsRef.current || comments || []).filter(c => c.taskId === task.id && c.type === "comment");
+
+    // Pre-fetch všechny přílohy úkolu (task + scratch_entries + komentáře)
+    // — abychom mohli v HTML zmínit, ke kterému řádku patří
+    let taskAttachments = [];
+    const scratchAttachmentsMap = {}; // { entry.id: [attachment, ...] }
+    const commentAttachmentsMap = {}; // { comment.id: [attachment, ...] }
+    try {
+      taskAttachments = await loadAttachments("task", task.id);
+      for (const e of (task.scratchPad || [])) {
+        scratchAttachmentsMap[e.id] = await loadAttachments("scratch_entry", e.id);
+      }
+      for (const c of taskComments) {
+        commentAttachmentsMap[c.id] = await loadAttachments("comment", c.id);
+      }
+    } catch (e) {
+      console.warn("[convertTaskToNote] Failed to pre-fetch attachments:", e);
+    }
+
+    const fileBadge = (filename) => `<em>📎 ${filename}</em>`;
+
     let html = "";
     if (task.note) {
-      html += `<p>${task.note.replace(/</g, "<").replace(/\n/g, "<br>")}</p>`;
+      html += `<p>${task.note.replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`;
     }
     html += `<h2>📋 Z úkolu</h2>`;
     html += `<p><strong>Zadal:</strong> ${task.createdBy || "—"}<br>`;
@@ -17471,13 +17557,24 @@ function App() {
     if (task.completedAt) html += `<strong>Dokončeno:</strong> ${new Date(task.completedAt).toLocaleString("cs-CZ")}<br>`;
     html += `</p>`;
 
-    // Pracovní deník
+    // Přímé přílohy úkolu — odkaz na galerii
+    if (taskAttachments.length > 0) {
+      html += `<p><strong>Přílohy úkolu:</strong> ${taskAttachments.map(a => fileBadge(a.file_name || "soubor")).join(", ")} <em>(viz Přílohy níže)</em></p>`;
+    }
+
+    // Pracovní deník — chronologicky, s odkazem na přílohy u řádků
     const scratchEntries = (task.scratchPad || []).filter(e => !e.deletedAt);
     if (scratchEntries.length > 0) {
       html += `<h2>📔 Pracovní deník</h2><ul>`;
       for (const e of scratchEntries.slice().reverse()) {
         const ts = e.createdAt ? new Date(e.createdAt).toLocaleString("cs-CZ") : "";
-        html += `<li><em>${ts} · ${e.author || ""}:</em> ${(e.text || "").replace(/</g, "<")}</li>`;
+        const text = (e.text || "").replace(/</g, "&lt;");
+        const attaches = scratchAttachmentsMap[e.id] || [];
+        let attachStr = "";
+        if (attaches.length > 0) {
+          attachStr = ` ${attaches.map(a => fileBadge(a.file_name || "soubor")).join(", ")}`;
+        }
+        html += `<li><em>${ts} · ${e.author || ""}:</em> ${text}${attachStr}</li>`;
       }
       html += `</ul>`;
     }
@@ -17487,9 +17584,23 @@ function App() {
       html += `<h2>💬 Komentáře</h2><ul>`;
       for (const c of taskComments) {
         const ts = c.createdAt ? new Date(c.createdAt).toLocaleString("cs-CZ") : "";
-        html += `<li><strong>${c.author}</strong> <em>(${ts})</em>: ${(c.content || "").replace(/</g, "<")}</li>`;
+        const content = (c.content || "").replace(/</g, "&lt;");
+        const attaches = commentAttachmentsMap[c.id] || [];
+        let attachStr = "";
+        if (attaches.length > 0) {
+          attachStr = ` ${attaches.map(a => fileBadge(a.file_name || "soubor")).join(", ")}`;
+        }
+        html += `<li><strong>${c.author}</strong> <em>(${ts})</em>: ${content}${attachStr}</li>`;
       }
       html += `</ul>`;
+    }
+
+    // Pokud existují přílohy, dej nakonec odkaz na galerii
+    const hasAnyAttachment = taskAttachments.length > 0 ||
+      Object.values(scratchAttachmentsMap).some(arr => arr.length > 0) ||
+      Object.values(commentAttachmentsMap).some(arr => arr.length > 0);
+    if (hasAnyAttachment) {
+      html += `<p><em>Všechny přílohy najdeš dole v sekci Přílohy.</em></p>`;
     }
 
     // Vytvoř poznámku
@@ -17500,36 +17611,65 @@ function App() {
       sharedWith: [],
       pinned: false,
     };
+
+    let createdNote = null;
     try {
       const dbRow = await apiCreateNote(noteData);
-      const newNote = noteFromDb(dbRow);
-      if (newNote) {
-        setNotes(prev => [newNote, ...prev]);
-
-        // Přemapuj přílohy z task na note
-        try {
-          await supabase.from("attachments")
-            .update({ entity_type: "note", entity_id: String(newNote.id) })
-            .eq("entity_type", "task").eq("entity_id", String(task.id));
-          // Přílohy scratch entries → také na note
-          for (const e of (task.scratchPad || [])) {
-            await supabase.from("attachments")
-              .update({ entity_type: "note", entity_id: String(newNote.id) })
-              .eq("entity_type", "scratch_entry").eq("entity_id", String(e.id)).catch(() => {});
-          }
-          // Přílohy komentářů → také na note
-          for (const c of taskComments) {
-            await supabase.from("attachments")
-              .update({ entity_type: "note", entity_id: String(newNote.id) })
-              .eq("entity_type", "comment").eq("entity_id", String(c.id)).catch(() => {});
-          }
-        } catch (e) {
-          console.warn("[convertTaskToNote] Failed to remap attachments:", e);
-        }
+      createdNote = noteFromDb(dbRow);
+      if (!createdNote) {
+        alert("Poznámka se nevytvořila.");
+        return;
       }
+      setNotes(prev => [createdNote, ...prev]);
     } catch (e) {
       alert("Nepodařilo se vytvořit poznámku: " + (e.message || ""));
       return;
+    }
+
+    // Zpracuj přílohy podle volby:
+    // - keep: ZKOPÍRUJ (insert nový attachments řádek s stejným file_path) — fotky zůstanou u úkolu i poznámky
+    // - archive nebo delete: PŘESUŇ (update entity_type/entity_id) — fotky z úkolu zmizí, budou jen u poznámky
+    const allSourceAttachments = [
+      ...taskAttachments,
+      ...Object.values(scratchAttachmentsMap).flat(),
+      ...Object.values(commentAttachmentsMap).flat(),
+    ];
+
+    if (allSourceAttachments.length > 0) {
+      try {
+        if (choice === "keep") {
+          // INSERT — vytvořit nové záznamy attachments s stejným file_path (sdílený soubor v Storage)
+          const rowsToInsert = allSourceAttachments.map(a => ({
+            entity_type: "note",
+            entity_id: String(createdNote.id),
+            file_path: a.file_path,
+            file_name: a.file_name,
+            mime_type: a.mime_type,
+            size_bytes: a.size_bytes,
+            is_image: a.is_image,
+            uploaded_by: a.uploaded_by,
+          }));
+          const { error } = await supabase.from("attachments").insert(rowsToInsert);
+          if (error) console.warn("[convertTaskToNote] insert error:", error);
+        } else {
+          // UPDATE — přesunout existující záznamy
+          await supabase.from("attachments")
+            .update({ entity_type: "note", entity_id: String(createdNote.id) })
+            .eq("entity_type", "task").eq("entity_id", String(task.id));
+          for (const e of (task.scratchPad || [])) {
+            await supabase.from("attachments")
+              .update({ entity_type: "note", entity_id: String(createdNote.id) })
+              .eq("entity_type", "scratch_entry").eq("entity_id", String(e.id));
+          }
+          for (const c of taskComments) {
+            await supabase.from("attachments")
+              .update({ entity_type: "note", entity_id: String(createdNote.id) })
+              .eq("entity_type", "comment").eq("entity_id", String(c.id));
+          }
+        }
+      } catch (e) {
+        console.warn("[convertTaskToNote] Failed to process attachments:", e);
+      }
     }
 
     // Akce s úkolem
@@ -17539,6 +17679,10 @@ function App() {
       archiveTask(task.id);
     }
     // "keep" — nedělat nic
+
+    // Otevři poznámku k editaci
+    setEditingNote(createdNote);
+    setShowNotesSheet(false); // zavři sheet poznámek, pokud je otevřený, aby modal byl jasně viditelný
   }, [currentUser, comments, deleteTask, archiveTask]);
 
   // Odmítnout cizí úkol — z assignedTo se odeberu, autor uvidí "X odmítl".
