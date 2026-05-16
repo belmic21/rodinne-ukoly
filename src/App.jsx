@@ -4979,12 +4979,53 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
   const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
+  // Pending přílohy — nahrané před uložením entry (mají dočasné entity_id)
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploadingPending, setUploadingPending] = useState(false);
+  const newEntryFileRef = useRef(null);
 
-  const addEntry = () => {
-    if (!input.trim()) return;
+  const handleNewEntryFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (pendingAttachments.length + files.length > 5) {
+      alert("Max 5 příloh na jeden záznam deníku.");
+      return;
+    }
+    setUploadingPending(true);
+    for (const file of files) {
+      const tempId = `_pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const result = await uploadAttachment({
+        file,
+        entityType: "scratch_entry",
+        entityId: tempId,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) {
+        setPendingAttachments(prev => [...prev, result.attachment]);
+      } else {
+        alert(`Upload selhal: ${result.error}`);
+      }
+    }
+    setUploadingPending(false);
+    if (newEntryFileRef.current) newEntryFileRef.current.value = "";
+  };
+
+  const removePendingAttachment = async (a) => {
+    if (!confirm("Smazat přílohu?")) return;
+    const r = await deleteAttachment(a.id);
+    if (r.ok) {
+      setPendingAttachments(prev => prev.filter(x => x.id !== a.id));
+    }
+  };
+
+  const addEntry = async () => {
+    const hasText = input.trim().length > 0;
+    const hasPending = pendingAttachments.length > 0;
+    if (!hasText && !hasPending) return;
+    const entryId = "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
     const entry = {
-      id: "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
-      text: input.trim(),
+      id: entryId,
+      text: input.trim() || "(příloha)",
       createdAt: new Date().toISOString(),
       author: currentUser.name,
     };
@@ -4997,6 +5038,21 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
     }
     onUpdate(task.id, updates);
     setInput("");
+
+    // Po vytvoření entry — přemapuj pending přílohy na skutečné entity_id
+    if (hasPending) {
+      try {
+        for (const a of pendingAttachments) {
+          await supabase
+            .from("attachments")
+            .update({ entity_id: entryId })
+            .eq("id", a.id);
+        }
+      } catch (e) {
+        console.warn("[scratch] remap pending attachments error:", e);
+      }
+      setPendingAttachments([]);
+    }
   };
 
   const deleteEntry = (entryId) => {
@@ -5068,8 +5124,8 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
 
       {expanded && (
         <>
-          {/* Input */}
-          <div style={{ display: "flex", gap: "4px", marginBottom: hasEntries ? "8px" : 0 }}>
+          {/* Input + tlačítko pro přílohu pre-uploadu */}
+          <div style={{ display: "flex", gap: "4px", marginBottom: hasEntries || pendingAttachments.length > 0 ? "8px" : 0 }}>
             <input
               type="text"
               placeholder="Co jsem zjistil / potřebuji..."
@@ -5078,15 +5134,53 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
               onKeyDown={e => { if (e.key === "Enter") addEntry(); }}
               style={{ ...inputStyle(theme), fontSize: "12px", padding: "6px 10px", flex: 1 }}
             />
-            <button onClick={addEntry} disabled={!input.trim()} style={{
+            <input
+              ref={newEntryFileRef}
+              type="file"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+              multiple
+              capture="environment"
+              style={{ display: "none" }}
+              onChange={handleNewEntryFiles}
+            />
+            <button
+              type="button"
+              onClick={() => newEntryFileRef.current?.click()}
+              disabled={uploadingPending || pendingAttachments.length >= 5}
+              title={uploadingPending ? "Nahrávám…" : "Přidat přílohu k zápisu"}
+              style={{
+                ...buttonStyle(), padding: "6px 10px", fontSize: "12px",
+                background: theme.buttonBg,
+                color: theme.text,
+                border: `1px solid ${theme.inputBorder}`,
+                opacity: uploadingPending ? 0.5 : 1,
+              }}
+            >📷</button>
+            <button onClick={addEntry} disabled={!input.trim() && pendingAttachments.length === 0} style={{
               ...buttonStyle(), padding: "6px 12px", fontSize: "12px",
-              background: input.trim() ? theme.accent : theme.inputBg,
-              color: input.trim() ? "#fff" : theme.textDim,
+              background: (input.trim() || pendingAttachments.length > 0) ? theme.accent : theme.inputBg,
+              color: (input.trim() || pendingAttachments.length > 0) ? "#fff" : theme.textDim,
               border: "none",
             }}>
               +
             </button>
           </div>
+
+          {/* Pending přílohy (před uložením entry) */}
+          {pendingAttachments.length > 0 && (
+            <div style={{ marginBottom: 8, padding: "6px 8px", background: theme.accentSoft, borderRadius: 6 }}>
+              <div style={{ fontSize: 9, color: theme.textMid, marginBottom: 4, fontWeight: 600 }}>
+                ČEKÁ NA ULOŽENÍ ({pendingAttachments.length}/5)
+              </div>
+              <AttachmentGallery
+                attachments={pendingAttachments}
+                theme={theme}
+                canDelete={true}
+                onDelete={removePendingAttachment}
+                thumbSize={50}
+              />
+            </div>
+          )}
 
           {/* Entries */}
           {hasEntries && (
@@ -7795,6 +7889,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const SWIPE_MAX = 180;      // px — max visible drag
   const taskIsDone = isDone(task);
   const taskIsDeleted = task.status === "deleted";
+  const taskIsArchived = task.status === "archived";
 
   const handleTouchStart = (e) => {
     // Don't swipe if interacting with interactive elements inside card
@@ -8635,7 +8730,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         {/* Right side: quick snooze + chevron */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginTop: "3px", marginLeft: "4px", position: "relative" }}>
           {/* Focus button — jump straight into Focus mode with this task */}
-          {!taskIsDone && !taskIsDeleted && !progressItem && canAct && onStartFocus && (
+          {!taskIsDone && !taskIsDeleted && !taskIsArchived && !progressItem && canAct && onStartFocus && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -8664,7 +8759,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             </button>
           )}
           {/* Quick snooze icon — visible only for active non-deferred tasks */}
-          {!taskIsDone && canAct && (
+          {!taskIsDone && !taskIsArchived && canAct && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -8682,6 +8777,35 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 transition: "all 0.15s",
               }}>
               ⏰
+            </button>
+          )}
+          {/* Vrátit z archivu — viditelné jen pro archivované úkoly */}
+          {taskIsArchived && canAct && onUnarchive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnarchive(task.id);
+              }}
+              title="Vrátit z archivu zpět mezi aktivní"
+              style={{
+                ...buttonStyle(),
+                width: "34px", height: "34px", padding: "0",
+                background: "transparent",
+                color: theme.green || "#10b981", fontSize: "16px",
+                border: `1px solid transparent`,
+                borderRadius: "6px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = `${theme.green || "#10b981"}15`;
+                e.currentTarget.style.borderColor = `${theme.green || "#10b981"}40`;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}>
+              ↩
             </button>
           )}
           <span style={{ fontSize: "10px", color: theme.textDim, marginTop: "5px" }}>
@@ -20845,6 +20969,38 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         alignItems: "start",
       }}>
       <div>{/* Hlavní sloupec — úkoly */}
+
+        {/* Archive view header — prominentní záhlaví s tlačítkem zavřít */}
+        {viewStatus === "archive" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            marginBottom: 10, padding: "12px 14px",
+            background: `${theme.accent}10`, border: `1px solid ${theme.accent}30`,
+            borderRadius: 10,
+          }}>
+            <span style={{ fontSize: 22 }}>📂</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: theme.accent,
+                textTransform: "uppercase", letterSpacing: "0.5px",
+              }}>
+                Archiv
+              </div>
+              <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
+                Archivované úkoly. Můžeš je vrátit zpět nebo smazat trvale.
+              </div>
+            </div>
+            <button onClick={() => setViewStatus(defaultView)} style={{
+              ...buttonStyle(),
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: theme.bg, color: theme.text,
+              border: `1.5px solid ${theme.cardBorder}`,
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = theme.inputBg; }}
+              onMouseLeave={e => { e.currentTarget.style.background = theme.bg; }}>
+              ✕ Zavřít archiv
+            </button>
+          </div>
+        )}
 
         {/* Trash view header — prominentní záhlaví s tlačítkem zavřít */}
         {viewStatus === "trash" && (
