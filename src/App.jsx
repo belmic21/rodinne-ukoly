@@ -2801,8 +2801,15 @@ async function apiUpdateComment(comment) {
   }
 }
 
+
 async function apiDeleteComment(commentId) {
   try {
+    // Auto-mazání příloh komentáře (pokud existují)
+    try {
+      await deleteAllAttachmentsForEntity("comment", commentId);
+    } catch (e) {
+      console.warn("[apiDeleteComment] Failed to delete attachments:", e);
+    }
     const { error } = await supabase.from("task_comments").delete().eq("id", commentId);
     if (error) throw error;
     const cached = cacheGet(CACHE_COMMENTS) || [];
@@ -2815,6 +2822,8 @@ async function apiDeleteComment(commentId) {
     }
   }
 }
+
+
 
 /* ═══════════════════════════════════════════════════════
    REMINDERS API — krátké tichá připomínky bez úkolového flow.
@@ -3029,7 +3038,7 @@ function noteFromDb(n) {
     pinned: !!n.pinned,
     sharedWith: Array.isArray(n.shared_with) ? n.shared_with : [],
     deletedAt: n.deleted_at || null, // soft delete
-    archivedBy: (n.archived_by && typeof n.archived_by === "object") ? n.archived_by : {}, // per-user archive { "Michal": "ISO", ... }
+    archivedBy: (n.archived_by && typeof n.archived_by === "object") ? n.archived_by : {},
   };
 }
 function noteToDb(n) {
@@ -3045,6 +3054,7 @@ function noteToDb(n) {
     updated_at: new Date().toISOString(),
   };
 }
+
 
 /* ═══════════════════════════════════════════════════════
    NOTES — ARCHIVACE (per-user)
@@ -3210,26 +3220,21 @@ async function apiDeleteNote(id) {
   }
 }
 
+
+
 // Hard delete — trvalé odstranění z DB (z koše)
 async function apiHardDeleteNote(id) {
   try {
+    // Auto-mazání příloh poznámky
+    try {
+      await deleteAllAttachmentsForEntity("note", id);
+    } catch (e) {
+      console.warn("[apiHardDeleteNote] Failed to delete attachments:", e);
+    }
     const { error } = await supabase.from("notes").delete().eq("id", id);
     if (error) throw error;
   } catch (e) {
     logServerError("apiHardDeleteNote", e, { id });
-  }
-}
-
-// Restore — obnov ze koše
-async function apiRestoreNote(id) {
-  try {
-    const { error } = await supabase
-      .from("notes")
-      .update({ deleted_at: null })
-      .eq("id", id);
-    if (error) throw error;
-  } catch (e) {
-    logServerError("apiRestoreNote", e, { id });
   }
 }
 
@@ -4021,7 +4026,7 @@ function TipTapToolbar({ editor, theme }) {
    Title + TipTap editor + sdílení/pin + akce (smazat / vytvořit úkol).
    ═══════════════════════════════════════════════════════ */
 
-function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, onClose, onConvertToTask }) {
+function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, onClose, onConvertToTask, onArchive, onUnarchive }) {
   const isNew = !note?.id;
   const [title, setTitle] = useState(note?.title || "");
   // sharedWith: array — pokud existující note má isShared=true ale prázdný sharedWith, považujeme za "*" (legacy)
@@ -4177,6 +4182,8 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
     onClose();
   };
 
+
+
   const handleConvert = () => {
     if (!editor) return;
     if (!confirm("Vytvořit úkol z této poznámky?")) return;
@@ -4187,6 +4194,28 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
     });
     onClose();
   };
+
+
+  const handleArchive = async () => {
+    const id = savedNoteRef.current?.id || note?.id;
+    if (!id) {
+      alert("Nejprve poznámku ulož.");
+      return;
+    }
+    if (!confirm("Archivovat tuto poznámku?\n\nZmizí ze seznamu, ale můžeš ji najít v archivu.")) return;
+    if (onArchive) await onArchive(id);
+    onClose();
+  };
+
+  const handleUnarchive = async () => {
+    const id = savedNoteRef.current?.id || note?.id;
+    if (!id) return;
+    if (onUnarchive) await onUnarchive(id);
+    onClose();
+  };
+
+  const isArchived = isNoteArchivedForUser(savedNoteRef.current || note, currentUser?.name);
+
 
   // Enter v title input → uložit a zavřít
   const handleTitleKeyDown = (e) => {
@@ -4258,6 +4287,16 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
           </div>
         )}
 
+        {/* Přílohy poznámky */}
+        {!isNew && savedNoteRef.current?.id && (
+          <div style={{
+            padding: "8px 14px", borderTop: `1px solid ${theme.cardBorder}`,
+            background: theme.inputBg, flexShrink: 0,
+          }}>
+            <NoteAttachmentsSection noteId={savedNoteRef.current.id} currentUser={currentUser} theme={theme} />
+          </div>
+        )}
+
         <div style={{
           padding: "10px 14px", borderTop: `1px solid ${theme.cardBorder}`,
           display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8,
@@ -4288,6 +4327,24 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
             }}>📋 Vytvořit úkol</button>
           )}
 
+
+          {!isNew && (
+            isArchived ? (
+              <button onClick={handleUnarchive} title="Vrátit z archivu" style={{
+                ...buttonStyle(), padding: "6px 10px", fontSize: 12,
+                background: `${theme.green}15`, color: theme.green,
+                border: `1px solid ${theme.green}40`, fontWeight: 600,
+              }}>↩ Z archivu</button>
+            ) : (
+              <button onClick={handleArchive} title="Archivovat poznámku (jen ty ji neuvidíš)" style={{
+                ...buttonStyle(), padding: "6px 10px", fontSize: 12,
+                background: `${theme.accent}10`, color: theme.accent,
+                border: `1px solid ${theme.accent}30`, fontWeight: 600,
+              }}>📂 Archivovat</button>
+            )
+          )}
+
+
           {canEdit && !isNew && (
             <button onClick={handleDelete} title="Smazat poznámku" style={{
               ...buttonStyle(), padding: "6px 10px", fontSize: 12,
@@ -4307,6 +4364,82 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
   );
 }
 
+
+function NoteAttachmentsSection({ noteId, currentUser, theme }) {
+  const { attachments, addAttachment, removeAttachment } = useAttachments("note", noteId);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > 5) {
+      alert("Max 5 příloh na poznámku.");
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      const result = await uploadAttachment({
+        file,
+        entityType: "note",
+        entityId: noteId,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) addAttachment(result.attachment);
+      else alert(`Upload selhal: ${result.error}`);
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  return (
+    <div>
+      <div style={{
+        fontSize: 10, color: theme.textMid, fontWeight: 700,
+        marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.3px",
+        display: "flex", alignItems: "center", gap: 8,
+      }}>
+        <span>📎 Přílohy {attachments.length > 0 && `(${attachments.length}/5)`}</span>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+          multiple
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={handleFiles}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || attachments.length >= 5}
+          title="Přidat přílohu"
+          style={{
+            background: theme.buttonBg,
+            border: `1px solid ${theme.inputBorder}`,
+            borderRadius: 6,
+            color: theme.text,
+            padding: "3px 8px",
+            fontSize: 12,
+            cursor: uploading ? "wait" : "pointer",
+            fontFamily: FONT,
+            fontWeight: 600,
+          }}
+        >📷 {uploading ? "..." : "+"}</button>
+      </div>
+      <AttachmentGallery
+        attachments={attachments}
+        theme={theme}
+        canDelete={true}
+        onDelete={removeAttachment}
+        thumbSize={60}
+      />
+    </div>
+  );
+}
+
+
+
 /* ═══════════════════════════════════════════════════════
    NOTES SHEET — list všech poznámek (vlastní + sdílené).
    Sekce: 📌 Připnuté / 👥 Sdílené / 🔒 Moje soukromé.
@@ -4316,6 +4449,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
 function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
   useEscapeKey(onClose);
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState("active"); // "active" | "archived"
 
   // Strip HTML tags pro preview
   const stripHtml = (html) => {
@@ -4325,10 +4459,18 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
     return (div.textContent || div.innerText || "").trim();
   };
 
-  // Filter podle search — bez smazaných (deleted)
+  // Filter podle search + view mode
   const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const q = norm(search.trim());
-  const visibleNotes = notes.filter(n => !n.deletedAt);
+  const visibleNotes = notes.filter(n => {
+    if (n.deletedAt) return false;
+    const isArchived = !!(n.archivedBy && n.archivedBy[currentUser?.name]);
+    if (viewMode === "archived") return isArchived;
+    return !isArchived;
+  });
+
+
+
   const filtered = q
     ? visibleNotes.filter(n => norm(n.title).includes(q) || norm(stripHtml(n.content)).includes(q))
     : visibleNotes;
@@ -4446,11 +4588,36 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
           }}>×</button>
         </div>
 
+
+        {/* Přepínač Aktivní / Archiv */}
+        <div style={{
+          padding: "8px 10px 0", display: "flex", gap: 6, flexShrink: 0,
+        }}>
+          <button onClick={() => setViewMode("active")} style={{
+            ...buttonStyle(), padding: "5px 12px", fontSize: 12,
+            background: viewMode === "active" ? theme.accent : theme.inputBg,
+            color: viewMode === "active" ? "#fff" : theme.text,
+            border: `1px solid ${viewMode === "active" ? theme.accent : theme.inputBorder}`,
+          }}>📝 Aktivní</button>
+          <button onClick={() => setViewMode("archived")} style={{
+            ...buttonStyle(), padding: "5px 12px", fontSize: 12,
+            background: viewMode === "archived" ? theme.accent : theme.inputBg,
+            color: viewMode === "archived" ? "#fff" : theme.text,
+            border: `1px solid ${viewMode === "archived" ? theme.accent : theme.inputBorder}`,
+          }}>📂 Archiv</button>
+        </div>
+
+
         {/* Search input + create button */}
         <div style={{
           padding: 10, borderBottom: `1px solid ${theme.cardBorder}`,
           display: "flex", gap: 6, flexShrink: 0,
         }}>
+
+
+
+
+
           <input
             type="text"
             placeholder="Hledat v poznámkách..."
@@ -4532,9 +4699,12 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
     .slice(0, 5);
 
   // Recent poznámky — vlastní + sdílené, ne smazané, řazené podle updatedAt
+
   const myNotes = (notes || [])
     .filter(n => {
       if (n.deletedAt) return false;
+      // Per-user archive: skrýt poznámky, které tento uživatel archivoval
+      if (n.archivedBy && n.archivedBy[currentUser?.name]) return false;
       if (n.createdBy === currentUser?.name) return true;
       if (n.isShared) return true;
       if (Array.isArray(n.sharedWith)) {
@@ -4542,6 +4712,9 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
       }
       return false;
     })
+
+
+
     .sort((a, b) => {
       // Pinned nahoře, pak podle updatedAt
       if (a.pinned && !b.pinned) return -1;
@@ -4792,6 +4965,8 @@ function CopyTaskButton({ task, theme }) {
   );
 }
 
+
+
 /* ═══════════════════════════════════════════════════════
    SCRATCH PAD INLINE — pracovní deník, append-only
    Zobrazeno v TaskDetail View módu, funkčně stejné jako ve Focus
@@ -4916,15 +5091,20 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           {/* Entries */}
           {hasEntries && (
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              {task.scratchPad.filter(e => !e.deletedAt).map(entry => (
+              
+
+		              {task.scratchPad.filter(e => !e.deletedAt).map(entry => (
                 <div key={entry.id} style={{
                   padding: "6px 8px",
                   background: theme.card,
                   border: `1px solid ${theme.inputBorder}`,
                   borderRadius: "6px",
                   fontSize: "12px",
-                  display: "flex", gap: "6px", alignItems: "flex-start",
+                  display: "flex", flexDirection: "column", gap: "4px",
                 }}>
+                  <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
+
+
                   <span style={{
                     fontSize: "9px", color: theme.textMid, fontWeight: 600,
                     whiteSpace: "nowrap", marginTop: "2px",
@@ -4958,8 +5138,12 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
                       {entry.text}
                     </span>
                   )}
+                 
+
+
                   {entry.author === currentUser.name && editingId !== entry.id && (
                     <>
+                      <ScratchEntryAttachButton entry={entry} currentUser={currentUser} theme={theme} />
                       <button onClick={() => startEdit(entry)}
                         title="Upravit"
                         style={{
@@ -4980,8 +5164,12 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
                       </button>
                     </>
                   )}
+                  </div>
+                  <ScratchEntryAttachments entryId={entry.id} currentUser={currentUser} theme={theme} />
                 </div>
               ))}
+
+
             </div>
           )}
         </>
@@ -4989,6 +5177,82 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
     </div>
   );
 }
+
+
+
+/* ═══════════════════════════════════════════════════════
+   SCRATCH ENTRY — komponenty pro přílohy v deníku
+   ═══════════════════════════════════════════════════════ */
+
+function ScratchEntryAttachButton({ entry, currentUser, theme }) {
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const { attachments, addAttachment } = useAttachments("scratch_entry", entry.id);
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > 5) {
+      alert(`Max 5 příloh na jeden záznam deníku.`);
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      const result = await uploadAttachment({
+        file,
+        entityType: "scratch_entry",
+        entityId: entry.id,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) addAttachment(result.attachment);
+      else alert(`Upload selhal: ${result.error}`);
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+        multiple
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={handleFiles}
+      />
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={uploading}
+        title={uploading ? "Nahrávám…" : "Přidat přílohu"}
+        style={{
+          background: "none", border: "none",
+          color: theme.textDim, cursor: "pointer", fontSize: "12px",
+          padding: "0 3px",
+        }}
+      >📷</button>
+    </>
+  );
+}
+
+function ScratchEntryAttachments({ entryId, currentUser, theme }) {
+  const { attachments, removeAttachment } = useAttachments("scratch_entry", entryId);
+  if (!attachments || attachments.length === 0) return null;
+  return (
+    <AttachmentGallery
+      attachments={attachments}
+      theme={theme}
+      canDelete={true}
+      onDelete={removeAttachment}
+      thumbSize={60}
+    />
+  );
+}
+
+
+
 
 /* ═══════════════════════════════════════════════════════
    CHECKLIST COMPONENT
@@ -5756,10 +6020,94 @@ function CommentAttachmentsInline({ commentId, currentUser, theme }) {
 
 
 /* ═══════════════════════════════════════════════════════
+   TASK ATTACHMENTS SECTION — galerie + uploader úkolu
+   ═══════════════════════════════════════════════════════ */
+
+function TaskAttachmentsSection({ task, currentUser, theme }) {
+  const { attachments, addAttachment, removeAttachment } = useAttachments("task", task.id);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > ATTACH_MAX_FILES) {
+      alert(`Max ${ATTACH_MAX_FILES} příloh na úkol.`);
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      const result = await uploadAttachment({
+        file,
+        entityType: "task",
+        entityId: task.id,
+        uploadedBy: currentUser.name,
+      });
+      if (result.ok) addAttachment(result.attachment);
+      else alert(`Upload selhal: ${result.error}`);
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  return (
+    <div style={{
+      marginTop: 12, paddingTop: 10,
+      borderTop: `1px solid ${theme.cardBorder}`,
+    }}>
+      <div style={{
+        fontSize: 10, color: theme.textMid, fontWeight: 700,
+        marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.3px",
+        display: "flex", alignItems: "center", gap: 8,
+      }}>
+        <span>📎 Přílohy úkolu {attachments.length > 0 && `(${attachments.length}/${ATTACH_MAX_FILES})`}</span>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+          multiple
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={handleFiles}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || attachments.length >= ATTACH_MAX_FILES}
+          title="Přidat přílohu"
+          style={{
+            background: theme.buttonBg,
+            border: `1px solid ${theme.inputBorder}`,
+            borderRadius: 6,
+            color: theme.text,
+            padding: "3px 8px",
+            fontSize: 12,
+            cursor: uploading ? "wait" : "pointer",
+            fontFamily: FONT,
+            fontWeight: 600,
+          }}
+        >📷 {uploading ? "..." : "+"}</button>
+      </div>
+      <AttachmentGallery
+        attachments={attachments}
+        theme={theme}
+        canDelete={true}
+        onDelete={removeAttachment}
+        thumbSize={70}
+      />
+    </div>
+  );
+}
+
+
+
+/* ═══════════════════════════════════════════════════════
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
-function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, onArchive, onUnarchive, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim }) {
+function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, onArchive, onUnarchive, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim, onConvertTaskToNote }) {
+
+
   const otherUsers = users.filter(u => u.name !== currentUser.name);
   const canAct = task.assignTo === "both" || task.assignedTo?.includes(currentUser.name) || task.createdBy === currentUser.name;
   const taskIsDone = isDone(task);
@@ -6177,6 +6525,12 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 onReject={null}
                 theme={theme}
               />
+
+
+
+              {/* Galerie příloh úkolu */}
+              <TaskAttachmentsSection task={task} currentUser={currentUser} theme={theme} />
+
               {/* Akční řádek s popisky pod komentáři */}
               {task.status !== "deleted" && (
                 <div style={{
@@ -6194,6 +6548,40 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   }}>
                     ✏️ Upravit
                   </button>
+                  {/* 📂 Archivovat — jen pro aktivní a hotové úkoly */}
+                  {onArchive && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
+                    <button onClick={() => {
+                      if (confirm(`Archivovat úkol "${task.title}"?\n\nÚkol zmizí ze seznamu, ale zůstane v archivu.`)) {
+                        onArchive(task.id);
+                      }
+                    }} title="Archivovat úkol" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.accent}10`, color: theme.accent,
+                      border: `1px solid ${theme.accent}30`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      📂 Archivovat
+                    </button>
+                  )}
+                  {/* 📓 Převést na poznámku — jen pro vlastní aktivní/hotové úkoly */}
+                  {task.createdBy === currentUser.name && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
+                    <button onClick={() => onConvertTaskToNote && onConvertTaskToNote(task)} title="Převést úkol na poznámku" style={{
+                      ...buttonStyle(),
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
+                      border: `1px solid ${theme.purple || "#a855f7"}30`,
+                      borderRadius: "12px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                    }}>
+                      📓 Na poznámku
+                    </button>
+                  )}
+
+
+
+
                   {/* ❌ Odmítnout — jen u cizích úkolů */}
                   {isFromOther && onReject && (
                     <button
@@ -7267,7 +7655,9 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote }) {
+
+
   const [isOpen, setIsOpen] = useState(false);
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const cardRef = useRef(null);
@@ -8305,6 +8695,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           onClose={() => setIsOpen(false)}
           comments={comments}
           onAddComment={onAddComment}
+          onConvertTaskToNote={onConvertTaskToNote}
           onToggleReaction={onToggleReaction}
           onMarkCommentsSeen={onMarkCommentsSeen}
           onTriggerCompleteAnim={() => {
@@ -15439,6 +15830,9 @@ function App() {
   const localEditsRef = useRef({}); // { [taskId]: timestamp }
   const localCommentEditsRef = useRef({}); // { [commentId]: timestamp }
   const [comments, setComments] = useState([]);
+  // commentsRef — drží aktuální comments pro použití v callbacks s prázdnou závislostí
+  const commentsRef = useRef([]);
+  useEffect(() => { commentsRef.current = comments; }, [comments]);
   const [users, setUsers] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -16943,6 +17337,7 @@ function App() {
     return () => clearInterval(tick);
   }, [reminders, loading, currentUser]);
 
+
   const permanentlyDeleteTask = useCallback(async (taskId) => {
     // Optimistický update — drž zálohu pro případ rollback při server chybě
     let backup = null;
@@ -16951,9 +17346,28 @@ function App() {
       return prev.filter(t => t.id !== taskId);
     });
     try {
+      // Auto-mazání všech příloh úkolu (task + scratch_entry + komentářů)
+      try {
+        // Přílohy úkolu
+        await deleteAllAttachmentsForEntity("task", taskId);
+        // Přílohy všech scratch entries (i smazaných)
+        if (backup?.scratchPad?.length) {
+          for (const entry of backup.scratchPad) {
+            await deleteAllAttachmentsForEntity("scratch_entry", entry.id).catch(() => {});
+          }
+        }
+        // Přílohy komentářů úkolu
+        const taskComments = (commentsRef.current || []).filter(c => c.taskId === taskId);
+        for (const c of taskComments) {
+          await deleteAllAttachmentsForEntity("comment", c.id).catch(() => {});
+        }
+      } catch (e) {
+        console.warn("[permanentlyDeleteTask] Failed to delete attachments:", e);
+      }
       const { error } = await supabase.from("tasks").delete().eq("id", taskId);
       if (error) throw error;
     } catch (e) {
+
       if (isNetworkError(e)) {
         console.warn("permanentlyDeleteTask offline — aplikováno lokálně, server se posune při příštím flush");
       } else {
@@ -16990,6 +17404,107 @@ function App() {
       return { ...t, status: "active", archivedAt: null };
     }));
   }, [withUndo]);
+  const convertTaskToNote = useCallback(async (task) => {
+    if (!task) return;
+    // Dialog: co s úkolem po konverzi?
+    const choice = await customDialog.show({
+      title: `📓 Převést "${task.title}" na poznámku`,
+      message: "Co se má stát s původním úkolem?",
+      options: [
+        { key: "keep", label: "📌 Ponechat úkol", color: "accent",
+          description: "Vznikne nová poznámka, úkol zůstane." },
+        { key: "archive", label: "📂 Archivovat úkol", color: "purple",
+          description: "Vznikne poznámka, úkol půjde do archivu." },
+        { key: "delete", label: "🗑 Smazat úkol", color: "red",
+          description: "Vznikne poznámka, úkol půjde do koše (30 dní)." },
+        { key: "cancel", label: "✖ Zrušit", color: "gray" },
+      ],
+    });
+    if (!choice || choice === "cancel") return;
+
+    // Sestav obsah poznámky jako HTML
+    const taskComments = (commentsRef.current || comments || []).filter(c => c.taskId === task.id && c.type === "comment");
+    let html = "";
+    if (task.note) {
+      html += `<p>${task.note.replace(/</g, "<").replace(/\n/g, "<br>")}</p>`;
+    }
+    html += `<h2>📋 Z úkolu</h2>`;
+    html += `<p><strong>Zadal:</strong> ${task.createdBy || "—"}<br>`;
+    if (task.assignedTo?.length) html += `<strong>Komu:</strong> ${task.assignedTo.join(", ")}<br>`;
+    if (task.createdAt) html += `<strong>Vytvořeno:</strong> ${new Date(task.createdAt).toLocaleString("cs-CZ")}<br>`;
+    if (task.dueDate) html += `<strong>Termín:</strong> ${new Date(task.dueDate).toLocaleDateString("cs-CZ")}<br>`;
+    if (task.completedAt) html += `<strong>Dokončeno:</strong> ${new Date(task.completedAt).toLocaleString("cs-CZ")}<br>`;
+    html += `</p>`;
+
+    // Pracovní deník
+    const scratchEntries = (task.scratchPad || []).filter(e => !e.deletedAt);
+    if (scratchEntries.length > 0) {
+      html += `<h2>📔 Pracovní deník</h2><ul>`;
+      for (const e of scratchEntries.slice().reverse()) {
+        const ts = e.createdAt ? new Date(e.createdAt).toLocaleString("cs-CZ") : "";
+        html += `<li><em>${ts} · ${e.author || ""}:</em> ${(e.text || "").replace(/</g, "<")}</li>`;
+      }
+      html += `</ul>`;
+    }
+
+    // Komentáře
+    if (taskComments.length > 0) {
+      html += `<h2>💬 Komentáře</h2><ul>`;
+      for (const c of taskComments) {
+        const ts = c.createdAt ? new Date(c.createdAt).toLocaleString("cs-CZ") : "";
+        html += `<li><strong>${c.author}</strong> <em>(${ts})</em>: ${(c.content || "").replace(/</g, "<")}</li>`;
+      }
+      html += `</ul>`;
+    }
+
+    // Vytvoř poznámku
+    const noteData = {
+      title: task.title || "Z úkolu",
+      content: html,
+      createdBy: currentUser.name,
+      sharedWith: [],
+      pinned: false,
+    };
+    try {
+      const dbRow = await apiCreateNote(noteData);
+      const newNote = noteFromDb(dbRow);
+      if (newNote) {
+        setNotes(prev => [newNote, ...prev]);
+
+        // Přemapuj přílohy z task na note
+        try {
+          await supabase.from("attachments")
+            .update({ entity_type: "note", entity_id: String(newNote.id) })
+            .eq("entity_type", "task").eq("entity_id", String(task.id));
+          // Přílohy scratch entries → také na note
+          for (const e of (task.scratchPad || [])) {
+            await supabase.from("attachments")
+              .update({ entity_type: "note", entity_id: String(newNote.id) })
+              .eq("entity_type", "scratch_entry").eq("entity_id", String(e.id)).catch(() => {});
+          }
+          // Přílohy komentářů → také na note
+          for (const c of taskComments) {
+            await supabase.from("attachments")
+              .update({ entity_type: "note", entity_id: String(newNote.id) })
+              .eq("entity_type", "comment").eq("entity_id", String(c.id)).catch(() => {});
+          }
+        } catch (e) {
+          console.warn("[convertTaskToNote] Failed to remap attachments:", e);
+        }
+      }
+    } catch (e) {
+      alert("Nepodařilo se vytvořit poznámku: " + (e.message || ""));
+      return;
+    }
+
+    // Akce s úkolem
+    if (choice === "delete") {
+      deleteTask(task.id);
+    } else if (choice === "archive") {
+      archiveTask(task.id);
+    }
+    // "keep" — nedělat nic
+  }, [currentUser, comments, deleteTask, archiveTask]);
 
   // Odmítnout cizí úkol — z assignedTo se odeberu, autor uvidí "X odmítl".
   // Pokud nikdo nezbude v assignedTo, úkol se přesune do koše (status="deleted").
@@ -19296,6 +19811,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 alert("Nepodařilo se smazat poznámku, zkus to znovu.");
               }
             }}
+
+
+
             onConvertToTask={(taskData) => {
               // taskData: { title, note }
               addTask({
@@ -19307,6 +19825,20 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 priority: "normal",
                 status: "active",
               });
+            }}
+            onArchive={async (noteId) => {
+              const result = await apiArchiveNote(noteId, currentUser.name);
+              if (result.ok) {
+                setNotes(prev => prev.map(n => n.id === noteId ? { ...n, archivedBy: result.archivedBy } : n));
+              } else {
+                alert("Nepodařilo se archivovat: " + (result.error || "neznámá chyba"));
+              }
+            }}
+            onUnarchive={async (noteId) => {
+              const result = await apiUnarchiveNote(noteId, currentUser.name);
+              if (result.ok) {
+                setNotes(prev => prev.map(n => n.id === noteId ? { ...n, archivedBy: result.archivedBy } : n));
+              }
             }}
           />
         )}
@@ -19458,6 +19990,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onUpdate={updateTask}
             onStatusChange={changeStatus}
             onAddComment={addComment}
+                        onConvertTaskToNote={convertTaskToNote}
             onToggleReaction={toggleReaction}
           />
         )}
@@ -20836,6 +21369,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         theme={theme}
                         comments={comments.filter(c => c.taskId === task.id)}
                         onAddComment={addComment}
+                        onConvertTaskToNote={convertTaskToNote}
                         onToggleReaction={toggleReaction}
                         onMarkCommentsSeen={markCommentsSeen}
                         autoOpen={scrollToTaskId === task.id}
