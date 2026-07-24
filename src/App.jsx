@@ -981,6 +981,8 @@ const THEMES = {
     red: "#ef4444",
     yellow: "#f59e0b",
     purple: "#a855f7",
+    orange: "#f97316",
+    cardBg: "#131a24",
     buttonBg: "#1e2e40",
     snackBg: "#1e293b",
     unreadBg: "#0d1f1a",
@@ -1009,6 +1011,8 @@ const THEMES = {
     red: "#dc2626",
     yellow: "#d97706",
     purple: "#7c3aed",
+    orange: "#ea580c",
+    cardBg: "#ffffff",
     buttonBg: "#e2e8f0",
     snackBg: "#ffffff",
     unreadBg: "#f0fdf4",
@@ -2233,6 +2237,27 @@ async function flushOfflineQueue() {
         result = await supabase.from("task_comments").insert(commentToDb(action.comment));
       } else if (action.type === "update_comment") {
         result = await supabase.from("task_comments").update(commentToDb(action.comment)).eq("id", action.comment.id);
+      } else if (action.type === "create_note") {
+        result = await supabase.from("notes").insert(noteToDb(action.note));
+      } else if (action.type === "update_note") {
+        result = await supabase.from("notes").update(noteToDb(action.note)).eq("id", action.note.id);
+      } else if (action.type === "delete_note") {
+        result = await supabase.from("notes").update({ deleted_at: new Date().toISOString() }).eq("id", action.id);
+      } else if (action.type === "restore_note") {
+        result = await supabase.from("notes").update({ deleted_at: null }).eq("id", action.id);
+      } else if (action.type === "create_reminder") {
+        result = await supabase.from("reminders").insert(reminderToDb(action.reminder));
+      } else if (action.type === "dismiss_reminder") {
+        result = await supabase.from("reminders").update({ dismissed_at: new Date().toISOString() }).eq("id", action.id);
+      } else if (action.type === "snooze_reminder") {
+        result = await supabase.from("reminders").update({ remind_at: action.newRemindAt, notified: false }).eq("id", action.id);
+      } else if (action.type === "reactivate_reminder") {
+        result = await supabase.from("reminders").update({ remind_at: action.newRemindAt, dismissed_at: null, notified: false }).eq("id", action.id);
+      } else {
+        // Neznámý typ — zahodit, ale hlasitě. Dřív se tiše počítal jako odeslaný.
+        console.warn("[flushOfflineQueue] neznámý typ akce, zahazuji:", action.type);
+        dropped++;
+        continue;
       }
       // Supabase vrací error v result.error, ne throw
       if (result?.error) throw result.error;
@@ -3221,6 +3246,26 @@ async function apiDeleteNote(id) {
 }
 
 
+// Obnova poznámky z koše — zruší soft delete.
+// (Volá se z panelu Koš; do 24. 7. 2026 tahle funkce chyběla a tlačítko padalo.)
+async function apiRestoreNote(id) {
+  try {
+    const { error } = await supabase
+      .from("notes")
+      .update({ deleted_at: null })
+      .eq("id", id);
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      addToOfflineQueue({ type: "restore_note", id });
+    } else {
+      logServerError("apiRestoreNote", e, { id });
+    }
+    return false;
+  }
+}
+
 
 // Hard delete — trvalé odstranění z DB (z koše)
 async function apiHardDeleteNote(id) {
@@ -3330,6 +3375,49 @@ function formatStoryDateShort(dateStr) {
     weekday: "short", day: "numeric", month: "numeric",
     ...(sameYear ? {} : { year: "numeric" }),
   });
+}
+
+// Pondělí toho týdne, do kterého datum spadá
+function storyWeekStart(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const dow = (date.getDay() + 6) % 7; // 0 = pondělí
+  date.setDate(date.getDate() - dow);
+  return storyLocalDateStr(date);
+}
+
+function storyWeekEnd(dateStr) {
+  return shiftStoryDate(storyWeekStart(dateStr), 6);
+}
+
+function storyMonthStart(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return storyLocalDateStr(new Date(y, m - 1, 1));
+}
+
+function storyMonthEnd(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return storyLocalDateStr(new Date(y, m, 0)); // 0. den dalšího měsíce = poslední den tohoto
+}
+
+function shiftStoryMonth(dateStr, months) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return storyLocalDateStr(new Date(y, m - 1 + months, 1));
+}
+
+// "červenec 2026"
+function formatStoryMonth(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("cs-CZ", { month: "long", year: "numeric" });
+}
+
+// "29. 6. – 5. 7. 2026"
+function formatStoryWeek(dateStr) {
+  const a = storyWeekStart(dateStr);
+  const b = storyWeekEnd(dateStr);
+  const [ay, am, ad] = a.split("-").map(Number);
+  const [by, bm, bd] = b.split("-").map(Number);
+  return `${ad}. ${am}. – ${bd}. ${bm}. ${by}`;
 }
 
 /* ── Zápisky (entries) ───────────────────────────────── */
@@ -3574,6 +3662,15 @@ async function apiLoadStoryDates(userName, fromDate, toDate) {
    zápis z mobilu (FAB) a z počítače (editor dne) o nic nepřijde.
    ──────────────────────────────────────────────────── */
 
+// PostgREST vrací kompozitní typ podle verze buď jako objekt, nebo jako
+// jednoprvkové pole; NULL řádek může přijít i jako objekt se samými null.
+// Tohle všechny tři varianty srovná na "řádek nebo null".
+function storyRpcRow(data) {
+  const row = Array.isArray(data) ? (data[0] ?? null) : data;
+  if (!row || !row.id) return null;
+  return row;
+}
+
 // FAB — rychlá myšlenka. Přidá zápisek na konec dne, den případně založí.
 async function apiAddStoryEntry(userName, text, { date = null, autoTime = true, time = null } = {}) {
   const clean = (text || "").trim();
@@ -3594,7 +3691,9 @@ async function apiAddStoryEntry(userName, text, { date = null, autoTime = true, 
       p_entry: entry,
     });
     if (error) throw error;
-    return { ok: true, story: storyFromDb(data), entry, date: targetDate };
+    const row = storyRpcRow(data);
+    if (!row) throw new Error("Server nevrátil uložený den");
+    return { ok: true, story: storyFromDb(row), entry, date: targetDate };
   } catch (e) {
     logServerError("apiAddStoryEntry", e, { userName, date: targetDate });
     return { ok: false, error: e.message };
@@ -3612,7 +3711,9 @@ async function apiUpdateStoryEntry(userName, date, entryId, patch = {}) {
       p_time: typeof patch.time === "string" ? patch.time : null,
     });
     if (error) throw error;
-    return { ok: true, story: storyFromDb(data) };
+    const row = storyRpcRow(data);
+    if (!row) throw new Error("Zápisek se nepodařilo uložit");
+    return { ok: true, story: storyFromDb(row) };
   } catch (e) {
     logServerError("apiUpdateStoryEntry", e, { userName, date, entryId });
     return { ok: false, error: e.message };
@@ -3629,7 +3730,8 @@ async function apiDeleteStoryEntry(userName, date, entryId) {
       p_entry_id: entryId,
     });
     if (error) throw error;
-    return { ok: true, story: data ? storyFromDb(data) : null };
+    const row = storyRpcRow(data);
+    return { ok: true, story: row ? storyFromDb(row) : null };
   } catch (e) {
     logServerError("apiDeleteStoryEntry", e, { userName, date, entryId });
     return { ok: false, error: e.message };
@@ -3658,7 +3760,9 @@ async function apiPatchStoryDay(userName, date, patch = {}) {
       p_set_people: patch.setPeople ?? null,
     });
     if (error) throw error;
-    return { ok: true, story: storyFromDb(data) };
+    const row = storyRpcRow(data);
+    // null = server uklidil den, který zůstal úplně prázdný
+    return { ok: true, story: row ? storyFromDb(row) : emptyStory(userName, date) };
   } catch (e) {
     logServerError("apiPatchStoryDay", e, { userName, date, patch });
     return { ok: false, error: e.message };
@@ -3712,6 +3816,65 @@ async function apiDeleteStoryDay(userName, date) {
   } catch (e) {
     logServerError("apiDeleteStoryDay", e, { userName, date });
     return { ok: false, error: e.message };
+  }
+}
+
+/* ── Přesun dne a navigace ───────────────────────────── */
+
+// Oprava překlepu v datu. Když je cílový den obsazený, server oba spojí.
+async function apiMoveStoryDay(userName, fromDate, toDate) {
+  if (!userName || !fromDate || !toDate) return { ok: false, error: "Chybí parametry" };
+  if (fromDate === toDate) return { ok: false, error: "Stejné datum" };
+  try {
+    const { data, error } = await supabase.rpc("story_move_day", {
+      p_user_name: userName,
+      p_from: fromDate,
+      p_to: toDate,
+    });
+    if (error) throw error;
+    const row = storyRpcRow(data);
+    if (!row) throw new Error("Přesun se nepodařil");
+    return { ok: true, story: storyFromDb(row) };
+  } catch (e) {
+    logServerError("apiMoveStoryDay", e, { userName, fromDate, toDate });
+    return { ok: false, error: e.message };
+  }
+}
+
+// Sousední ZAPSANÝ den — pro šipky ← → v prohlížeči.
+// dir: -1 = starší, 1 = novější. Vrací null, když už žádný není.
+async function apiAdjacentStoryDate(userName, date, dir) {
+  if (!userName || !date) return { ok: false, date: null };
+  try {
+    const { data, error } = await supabase.rpc("story_adjacent_date", {
+      p_user_name: userName,
+      p_date: date,
+      p_dir: dir,
+    });
+    if (error) throw error;
+    return { ok: true, date: data || null };
+  } catch (e) {
+    logServerError("apiAdjacentStoryDate", e, { userName, date, dir });
+    return { ok: false, date: null, error: e.message };
+  }
+}
+
+// Všechny dny v rozsahu — pro zobrazení po týdnech a měsících.
+async function apiLoadStoriesInRange(userName, fromDate, toDate) {
+  if (!userName || !fromDate || !toDate) return { ok: false, stories: [] };
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .select(STORY_SELECT)
+      .eq("user_name", userName)
+      .gte("date", fromDate)
+      .lte("date", toDate)
+      .order("date", { ascending: false });
+    if (error) throw error;
+    return { ok: true, stories: (data || []).map(storyFromDb) };
+  } catch (e) {
+    logServerError("apiLoadStoriesInRange", e, { userName, fromDate, toDate });
+    return { ok: false, stories: [], error: e.message };
   }
 }
 
@@ -17100,35 +17263,34 @@ function StoryDayTags({ story, categories, peopleSuggestions, currentUser, theme
 
 
 /* ═══════════════════════════════════════════════════════
-   📔 DENNÍ PŘÍBĚH — FAB (rychlé zadání)
-   Plovoucí tlačítko vpravo dole. Nejdřív jen text + Uložit,
-   po uložení se rozbalí označení pro celý den.
+   📔 DENNÍ PŘÍBĚH — RYCHLÉ ZADÁNÍ
+   Vytažené z FAB do samostatné komponenty, aby ho mohlo
+   otevřít i tlačítko + v prohlížeči.
    ═══════════════════════════════════════════════════════ */
 
-function StoryFab({ currentUser, theme, categories, peopleSuggestions, onOpenDay, onSaved, hidden }) {
-  const [open, setOpen] = useState(false);
+function StoryQuickAdd({ open, presetDate, currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onSaved }) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedStory, setSavedStory] = useState(null);
   const [error, setError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
-  const [date, setDate] = useState(todayStoryDate());
+  const [date, setDate] = useState(presetDate || todayStoryDate());
   const [time, setTime] = useState(storyTimeNow());
   const inputRef = useRef(null);
 
-  const reset = (keepDate = false) => {
+  useEscapeKey(onClose, open);
+
+  // Při každém otevření začít načisto
+  useEffect(() => {
+    if (!open) return;
+    const d = presetDate || todayStoryDate();
     setText("");
     setSavedStory(null);
     setError("");
-    setShowDetails(false);
-    if (!keepDate) {
-      setDate(todayStoryDate());
-      setTime(storyTimeNow());
-    }
-  };
-
-  const close = () => { setOpen(false); reset(); };
-  useEscapeKey(close, open);
+    setDate(d);
+    setTime(storyTimeNow());
+    setShowDetails(d !== todayStoryDate());
+  }, [open, presetDate]);
 
   useEffect(() => {
     if (open && !savedStory) {
@@ -17160,235 +17322,236 @@ function StoryFab({ currentUser, theme, categories, peopleSuggestions, onOpenDay
     setTimeout(() => inputRef.current?.focus(), 60);
   };
 
-  if (hidden) return null;
+  if (!open) return null;
 
   return (
-    <>
-      {!open && (
-        <button
-          onClick={() => { reset(); setOpen(true); }}
-          title="Denní příběh — rychlá myšlenka"
-          style={{
-            position: "fixed", right: 18, bottom: 18, zIndex: 140,
-            width: 52, height: 52, borderRadius: "50%",
-            border: "none", cursor: "pointer",
-            background: theme.accent, color: "#fff", fontSize: 24,
-            boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}
-        >
-          📔
-        </button>
-      )}
-
-      {open && (
-        <div
-          onClick={close}
-          style={{
-            position: "fixed", inset: 0, zIndex: 160,
-            background: "rgba(0,0,0,0.35)",
-            display: "flex", alignItems: "flex-end", justifyContent: "flex-end",
-            padding: 14,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: theme.card,
-              border: `1px solid ${theme.cardBorder}`,
-              borderRadius: 14,
-              boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
-              width: "100%", maxWidth: 380, maxHeight: "82vh",
-              display: "flex", flexDirection: "column",
-            }}
-          >
-            {/* Hlavička */}
-            <div style={{
-              padding: "10px 12px", borderBottom: `1px solid ${theme.cardBorder}`,
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-            }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>
-                📔 {savedStory ? "Uloženo — označ den" : "Rychlá myšlenka"}
-              </div>
-              <button onClick={close} style={{
-                background: "none", border: "none", color: theme.textSub,
-                fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
-              }}>×</button>
-            </div>
-
-            <div style={{ padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-              {!savedStory ? (
-                <>
-                  <textarea
-                    ref={inputRef}
-                    value={text}
-                    onChange={e => setText(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
-                    }}
-                    placeholder="Co se právě stalo…"
-                    rows={4}
-                    style={{ ...inputStyle(theme), resize: "vertical", minHeight: 84, lineHeight: 1.5 }}
-                  />
-
-                  {/* Podrobnosti — datum a čas, kvůli zpětnému zápisu */}
-                  <button
-                    onClick={() => setShowDetails(!showDetails)}
-                    style={{
-                      ...buttonStyle(), background: "none", border: "none",
-                      color: theme.textSub, fontSize: 12, textAlign: "left",
-                      padding: 0, fontWeight: 500,
-                    }}
-                  >
-                    {showDetails ? "▾" : "▸"} Podrobnosti
-                    {date !== todayStoryDate() && (
-                      <span style={{ color: theme.yellow, fontWeight: 700 }}>
-                        {"  "}· {formatStoryDateShort(date)}
-                      </span>
-                    )}
-                  </button>
-
-                  {showDetails && (
-                    <div style={{
-                      display: "flex", flexDirection: "column", gap: 8,
-                      background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
-                      borderRadius: 10, padding: 10,
-                    }}>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <div style={{ flex: 2 }}>
-                          <div style={{ fontSize: 10, color: theme.textSub, marginBottom: 3, fontWeight: 700 }}>DATUM</div>
-                          <input
-                            type="date"
-                            value={date}
-                            max={todayStoryDate()}
-                            onChange={e => setDate(e.target.value || todayStoryDate())}
-                            style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: 13 }}
-                          />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 10, color: theme.textSub, marginBottom: 3, fontWeight: 700 }}>ČAS</div>
-                          <input
-                            type="time"
-                            value={time}
-                            onChange={e => setTime(e.target.value)}
-                            style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: 13 }}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 11, color: theme.textSub }}>
-                        {formatStoryDateLong(date)}
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {[0, -1, -2, -3].map(d => {
-                          const val = shiftStoryDate(todayStoryDate(), d);
-                          const active = val === date;
-                          return (
-                            <button
-                              key={d}
-                              onClick={() => setDate(val)}
-                              style={{
-                                ...buttonStyle(), padding: "3px 9px", fontSize: 11,
-                                background: active ? theme.accent : "transparent",
-                                color: active ? "#fff" : theme.textSub,
-                                border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
-                                borderRadius: 20,
-                              }}
-                            >
-                              {formatStoryDateShort(val)}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {error && (
-                    <div style={{ fontSize: 12, color: theme.red }}>{error}</div>
-                  )}
-
-                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <button
-                      onClick={save}
-                      disabled={!text.trim() || saving}
-                      style={{
-                        ...buttonStyle(), padding: "9px 20px", fontSize: 13,
-                        background: text.trim() && !saving ? theme.accent : theme.inputBg,
-                        color: text.trim() && !saving ? "#fff" : theme.textSub,
-                        cursor: text.trim() && !saving ? "pointer" : "default",
-                      }}
-                    >
-                      {saving ? "Ukládám…" : "Uložit"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div style={{
-                    fontSize: 11, color: theme.textSub,
-                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                  }}>
-                    <span>{formatStoryDateLong(savedStory.date)}</span>
-                    <button
-                      onClick={() => { const d = savedStory.date; close(); onOpenDay(d); }}
-                      style={{
-                        ...buttonStyle(), background: "none", border: "none",
-                        color: theme.accent, fontSize: 11, padding: 0, fontWeight: 600,
-                      }}
-                    >
-                      Otevřít celý den →
-                    </button>
-                  </div>
-
-                  <div style={{
-                    fontSize: 12, color: theme.textSub, background: theme.inputBg,
-                    border: `1px solid ${theme.inputBorder}`, borderRadius: 8,
-                    padding: "7px 10px", lineHeight: 1.45,
-                  }}>
-                    {storyPreview(savedStory.entries, 120)}
-                  </div>
-
-                  <StoryDayTags
-                    story={savedStory}
-                    categories={categories}
-                    peopleSuggestions={peopleSuggestions}
-                    currentUser={currentUser}
-                    theme={theme}
-                    compact
-                    onChanged={(s) => { setSavedStory(s); onSaved?.(s); }}
-                  />
-
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 2 }}>
-                    <button onClick={close} style={{
-                      ...buttonStyle(), padding: "9px 16px", fontSize: 13,
-                      background: theme.inputBg, color: theme.text,
-                      border: `1px solid ${theme.inputBorder}`,
-                    }}>Zavřít</button>
-                    <button onClick={nextEntry} style={{
-                      ...buttonStyle(), padding: "9px 16px", fontSize: 13,
-                      background: theme.accent, color: "#fff",
-                    }}>Další zápis</button>
-                  </div>
-                </>
-              )}
-            </div>
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 170,
+        background: "rgba(0,0,0,0.35)",
+        display: "flex", alignItems: "flex-end", justifyContent: "flex-end",
+        padding: 14,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: theme.card,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 14,
+          boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+          width: "100%", maxWidth: 380, maxHeight: "82vh",
+          display: "flex", flexDirection: "column",
+        }}
+      >
+        <div style={{
+          padding: "10px 12px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>
+            📔 {savedStory ? "Uloženo — označ den" : "Rychlá myšlenka"}
           </div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
         </div>
-      )}
-    </>
+
+        <div style={{ padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+          {!savedStory ? (
+            <>
+              <textarea
+                ref={inputRef}
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+                }}
+                placeholder="Co se právě stalo…"
+                rows={4}
+                style={{ ...inputStyle(theme), resize: "vertical", minHeight: 84, lineHeight: 1.5 }}
+              />
+
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                style={{
+                  ...buttonStyle(), background: "none", border: "none",
+                  color: theme.textSub, fontSize: 12, textAlign: "left",
+                  padding: 0, fontWeight: 500,
+                }}
+              >
+                {showDetails ? "▾" : "▸"} Podrobnosti
+                {date !== todayStoryDate() && (
+                  <span style={{ color: theme.yellow, fontWeight: 700 }}>
+                    {"  "}· {formatStoryDateShort(date)}
+                  </span>
+                )}
+              </button>
+
+              {showDetails && (
+                <div style={{
+                  display: "flex", flexDirection: "column", gap: 8,
+                  background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 10, padding: 10,
+                }}>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 2 }}>
+                      <div style={{ fontSize: 10, color: theme.textSub, marginBottom: 3, fontWeight: 700 }}>DATUM</div>
+                      <input
+                        type="date"
+                        value={date}
+                        max={todayStoryDate()}
+                        onChange={e => setDate(e.target.value || todayStoryDate())}
+                        style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: 13 }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: theme.textSub, marginBottom: 3, fontWeight: 700 }}>ČAS</div>
+                      <input
+                        type="time"
+                        value={time}
+                        onChange={e => setTime(e.target.value)}
+                        style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: 13 }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: theme.textSub }}>
+                    {formatStoryDateLong(date)}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[0, -1, -2, -3].map(d => {
+                      const val = shiftStoryDate(todayStoryDate(), d);
+                      const active = val === date;
+                      return (
+                        <button
+                          key={d}
+                          onClick={() => setDate(val)}
+                          style={{
+                            ...buttonStyle(), padding: "3px 9px", fontSize: 11,
+                            background: active ? theme.accent : "transparent",
+                            color: active ? "#fff" : theme.textSub,
+                            border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
+                            borderRadius: 20,
+                          }}
+                        >
+                          {formatStoryDateShort(val)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {error && <div style={{ fontSize: 12, color: theme.red }}>{error}</div>}
+
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={save}
+                  disabled={!text.trim() || saving}
+                  style={{
+                    ...buttonStyle(), padding: "9px 20px", fontSize: 13,
+                    background: text.trim() && !saving ? theme.accent : theme.inputBg,
+                    color: text.trim() && !saving ? "#fff" : theme.textSub,
+                    cursor: text.trim() && !saving ? "pointer" : "default",
+                  }}
+                >
+                  {saving ? "Ukládám…" : "Uložit"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{
+                fontSize: 11, color: theme.textSub,
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+              }}>
+                <span>{formatStoryDateLong(savedStory.date)}</span>
+                <button
+                  onClick={() => { const d = savedStory.date; onClose(); onOpenDay(d); }}
+                  style={{
+                    ...buttonStyle(), background: "none", border: "none",
+                    color: theme.accent, fontSize: 11, padding: 0, fontWeight: 600,
+                  }}
+                >
+                  Otevřít celý den →
+                </button>
+              </div>
+
+              <div style={{
+                fontSize: 12, color: theme.textSub, background: theme.inputBg,
+                border: `1px solid ${theme.inputBorder}`, borderRadius: 8,
+                padding: "7px 10px", lineHeight: 1.45,
+              }}>
+                {storyPreview(savedStory.entries, 120)}
+              </div>
+
+              <StoryDayTags
+                story={savedStory}
+                categories={categories}
+                peopleSuggestions={peopleSuggestions}
+                currentUser={currentUser}
+                theme={theme}
+                compact
+                onChanged={(s) => { setSavedStory(s); onSaved?.(s); }}
+              />
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 2 }}>
+                <button onClick={onClose} style={{
+                  ...buttonStyle(), padding: "9px 16px", fontSize: 13,
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                }}>Zavřít</button>
+                <button onClick={nextEntry} style={{
+                  ...buttonStyle(), padding: "9px 16px", fontSize: 13,
+                  background: theme.accent, color: "#fff",
+                }}>Další zápis</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Plovoucí tlačítko — už jen spouštěč, obsah je v StoryQuickAdd.
+function StoryFab({ theme, onOpen, hidden }) {
+  if (hidden) return null;
+  return (
+    <button
+      onClick={onOpen}
+      title="Denní příběh — rychlá myšlenka"
+      style={{
+        position: "fixed", right: 18, bottom: 18, zIndex: 140,
+        width: 52, height: 52, borderRadius: "50%",
+        border: "none", cursor: "pointer",
+        background: theme.accent, color: "#fff", fontSize: 24,
+        boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      📔
+    </button>
   );
 }
 
 
 /* ═══════════════════════════════════════════════════════
-   📔 DENNÍ PŘÍBĚH — EDITOR DNE
-   Modal jednoho dne: zápisky (reverzně), označení, a panel
-   „Co jsi ten den udělal" tažený z dokončených úkolů.
+   📔 DENNÍ PŘÍBĚH — DEN
+   Dva režimy: prohlížení (čisté čtení, žádné ovládací prvky)
+   a úpravy (pod tužkou). Šipky ‹ › skáčou na sousední
+   ZAPSANÝ den, aby šel příběh číst v návaznosti.
    ═══════════════════════════════════════════════════════ */
 
-function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestions, onClose, onChanged, onDeleted }) {
+function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestions, startInEdit, onClose, onNavigate, onChanged, onDeleted }) {
+  const [mode, setMode] = useState(startInEdit ? "edit" : "view");
   const [story, setStory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [doneTasks, setDoneTasks] = useState([]);
+  const [prevDate, setPrevDate] = useState(null);
+  const [nextDate, setNextDate] = useState(null);
+
   const [newText, setNewText] = useState("");
   const [newTime, setNewTime] = useState(storyTimeNow());
   const [saving, setSaving] = useState(false);
@@ -17396,19 +17559,33 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
   const [editText, setEditText] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  const [showDateChange, setShowDateChange] = useState(false);
+  const [moveTo, setMoveTo] = useState(date);
+  const [moveError, setMoveError] = useState("");
+  const [moving, setMoving] = useState(false);
+
   useEscapeKey(onClose);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
-      const [s, t] = await Promise.all([
+      const [s, t, p, n] = await Promise.all([
         apiLoadStory(currentUser?.name, date),
         apiCompletedTasksForStoryDay(currentUser?.name, date),
+        apiAdjacentStoryDate(currentUser?.name, date, -1),
+        apiAdjacentStoryDate(currentUser?.name, date, 1),
       ]);
       if (!alive) return;
       setStory(s.story);
       setDoneTasks(t.tasks || []);
+      setPrevDate(p.date);
+      setNextDate(n.date);
+      setMoveTo(date);
+      setShowDateChange(false);
+      setMoveError("");
+      setEditingId(null);
+      setNewText("");
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -17456,7 +17633,45 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
     if (res.ok) { onDeleted?.(); onClose(); }
   };
 
-  const entries = sortStoryEntries(story?.entries || [], true);
+  const doMove = async () => {
+    if (!moveTo || moveTo === date || moving) return;
+    setMoving(true);
+    setMoveError("");
+    const res = await apiMoveStoryDay(currentUser?.name, date, moveTo);
+    setMoving(false);
+    if (!res.ok) {
+      setMoveError(res.error || "Přesun selhal");
+      return;
+    }
+    onChanged?.();
+    onNavigate(moveTo); // editor se překreslí na nové datum
+  };
+
+  const entriesRead = sortStoryEntries(story?.entries || [], false); // čte se odshora dolů
+  const entriesEdit = sortStoryEntries(story?.entries || [], true);  // nejnovější nahoře
+
+  const catByKey = useMemo(() => {
+    const m = new Map();
+    (categories || []).forEach(c => m.set(c.key, c));
+    return m;
+  }, [categories]);
+
+  const navBtn = (target, glyph, title) => (
+    <button
+      onClick={() => target && onNavigate(target)}
+      disabled={!target}
+      title={target ? `${title}: ${formatStoryDateShort(target)}` : "Žádný další zápis"}
+      style={{
+        background: "none", border: "none",
+        cursor: target ? "pointer" : "default",
+        color: target ? theme.textSub : theme.textDim,
+        fontSize: 20, padding: "2px 8px", lineHeight: 1,
+      }}
+    >{glyph}</button>
+  );
+
+  const countLabel = (n) =>
+    n === 1 ? "zápisek" : n < 5 ? "zápisky" : "zápisků";
 
   return (
     <div onClick={onClose} style={{
@@ -17471,35 +17686,153 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
         display: "flex", flexDirection: "column",
         boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
       }}>
-        {/* Hlavička */}
+        {/* Hlavička s navigací mezi dny */}
         <div style={{
-          padding: "12px 14px", borderBottom: `1px solid ${theme.cardBorder}`,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: 8, flexShrink: 0,
+          padding: "10px 10px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
         }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
+          {navBtn(prevDate, "‹", "Starší zápis")}
+
+          <div style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>
               {story?.milestone && <span style={{ marginRight: 5 }}>⭐</span>}
               {formatStoryDateLong(date)}
             </div>
             <div style={{ fontSize: 11, color: theme.textSub, marginTop: 1 }}>
-              {entries.length === 0 ? "Zatím nic" : `${entries.length} ${entries.length === 1 ? "zápisek" : entries.length < 5 ? "zápisky" : "zápisků"}`}
-              {story?.mood && <span>{"  ·  "}{getStoryMood(story.mood)?.emoji}</span>}
+              {mode === "edit"
+                ? "režim úprav"
+                : entriesRead.length === 0
+                  ? "Zatím nic"
+                  : `${entriesRead.length} ${countLabel(entriesRead.length)}`}
             </div>
           </div>
+
+          {navBtn(nextDate, "›", "Novější zápis")}
+
+          <button
+            onClick={() => setMode(mode === "edit" ? "view" : "edit")}
+            title={mode === "edit" ? "Hotovo — zpět na čtení" : "Upravit"}
+            style={{
+              ...buttonStyle(), padding: "5px 10px", fontSize: 13,
+              background: mode === "edit" ? theme.accent : "transparent",
+              color: mode === "edit" ? "#fff" : theme.textSub,
+              border: `1px solid ${mode === "edit" ? theme.accent : theme.inputBorder}`,
+            }}
+          >{mode === "edit" ? "✓" : "✎"}</button>
+
           <button onClick={onClose} style={{
             background: "none", border: "none", color: theme.textSub,
             fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
           }}>×</button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
           {loading ? (
             <div style={{ textAlign: "center", padding: 30, color: theme.textSub, fontSize: 13 }}>
               Načítám…
             </div>
-          ) : (
+          ) : mode === "view" ? (
+            /* ═══════ PROHLÍŽENÍ — jen text, žádné ovládací prvky ═══════ */
             <>
+              {entriesRead.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "30px 20px", color: theme.textSub, fontSize: 13 }}>
+                  Na tenhle den zatím nic nemáš.
+                  <div style={{ marginTop: 10 }}>
+                    <button onClick={() => setMode("edit")} style={{
+                      ...buttonStyle(), padding: "7px 16px", fontSize: 12,
+                      background: theme.accent, color: "#fff",
+                    }}>Začít psát</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+                  {entriesRead.map(e => (
+                    <div key={e.id} style={{ display: "flex", gap: 11 }}>
+                      <div style={{
+                        fontSize: 11, fontWeight: 700, color: theme.textMid,
+                        width: 36, flexShrink: 0, paddingTop: 3,
+                      }}>{e.time || ""}</div>
+                      <div style={{
+                        fontSize: 14, color: theme.text, lineHeight: 1.65,
+                        whiteSpace: "pre-wrap", wordBreak: "break-word", flex: 1,
+                      }}>{e.text}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Kategorie a osoby jen jako popisky, bez emoji a bez ovládání */}
+              {(story?.categories?.length > 0 || story?.people?.length > 0) && (
+                <div style={{
+                  borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 11, marginTop: 4,
+                  display: "flex", gap: 5, flexWrap: "wrap",
+                }}>
+                  {(story?.categories || []).map(k => {
+                    const c = catByKey.get(k) || STORY_UNKNOWN_CATEGORY;
+                    return (
+                      <span key={k} style={{
+                        fontSize: 11, color: theme.textSub,
+                        border: `1px solid ${theme.inputBorder}`, borderRadius: 20,
+                        padding: "2px 10px",
+                      }}>{c.label}</span>
+                    );
+                  })}
+                  {(story?.people || []).map(p => (
+                    <span key={p} style={{
+                      fontSize: 11, color: theme.textMid,
+                      border: `1px dashed ${theme.inputBorder}`, borderRadius: 20,
+                      padding: "2px 10px",
+                    }}>{p}</span>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            /* ═══════ ÚPRAVY ═══════ */
+            <>
+              {/* Změna data — oprava překlepu */}
+              <div>
+                <button
+                  onClick={() => setShowDateChange(!showDateChange)}
+                  style={{
+                    ...buttonStyle(), background: "none", border: "none",
+                    color: theme.textSub, fontSize: 12, padding: 0, fontWeight: 500,
+                  }}
+                >
+                  {showDateChange ? "▾" : "▸"} Změnit datum tohoto dne
+                </button>
+                {showDateChange && (
+                  <div style={{
+                    marginTop: 7, background: theme.inputBg,
+                    border: `1px solid ${theme.inputBorder}`, borderRadius: 10, padding: 10,
+                    display: "flex", flexDirection: "column", gap: 8,
+                  }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="date"
+                        value={moveTo}
+                        onChange={e => setMoveTo(e.target.value)}
+                        style={{ ...inputStyle(theme), flex: 1, padding: "6px 8px", fontSize: 13 }}
+                      />
+                      <button
+                        onClick={doMove}
+                        disabled={!moveTo || moveTo === date || moving}
+                        style={{
+                          ...buttonStyle(), padding: "7px 14px", fontSize: 13,
+                          background: moveTo && moveTo !== date ? theme.accent : theme.card,
+                          color: moveTo && moveTo !== date ? "#fff" : theme.textSub,
+                          cursor: moveTo && moveTo !== date ? "pointer" : "default",
+                        }}
+                      >{moving ? "Přesouvám…" : "Přesunout"}</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textSub, lineHeight: 1.4 }}>
+                      Když na cílovém dni už zápis je, oba se spojí — nic se nepřepíše.
+                    </div>
+                    {moveError && <div style={{ fontSize: 12, color: theme.red }}>{moveError}</div>}
+                  </div>
+                )}
+              </div>
+
               {/* Nový zápisek */}
               <div style={{
                 background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
@@ -17541,7 +17874,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
               {/* Co jsi ten den udělal */}
               {doneTasks.length > 0 && (
                 <div style={{
-                  background: theme.green + "0c",
+                  background: `${theme.green}0c`,
                   border: `1px solid ${theme.green}35`,
                   borderRadius: 10, padding: 10,
                 }}>
@@ -17569,9 +17902,9 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
               )}
 
               {/* Zápisky — nejnovější nahoře */}
-              {entries.length > 0 && (
+              {entriesEdit.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {entries.map(e => (
+                  {entriesEdit.map(e => (
                     <div key={e.id} style={{
                       background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
                       borderRadius: 10, padding: "8px 10px",
@@ -17637,9 +17970,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
 
               {/* Označení dne */}
               {story?.id && (
-                <div style={{
-                  borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 12,
-                }}>
+                <div style={{ borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 12 }}>
                   <StoryDayTags
                     story={story}
                     categories={categories}
@@ -17684,14 +18015,82 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
 }
 
 
+// Karta jednoho dne. Definovaná mimo StorySheet — kdyby byla uvnitř,
+// vznikala by při každém stisku klávesy v hledání znovu a React by
+// všechny výsledky odmountoval a namountoval.
+function StoryDayCard({ s, catByKey, theme, onOpen }) {
+  return (
+
+      <div
+        onClick={() => onOpen(s.date)}
+        style={{
+          background: theme.inputBg,
+          border: `1px solid ${s.milestone ? theme.yellow + "50" : theme.inputBorder}`,
+          borderRadius: 10, padding: "9px 11px", cursor: "pointer",
+          transition: "border-color 0.15s",
+        }}
+        onMouseEnter={e => e.currentTarget.style.borderColor = theme.accent}
+        onMouseLeave={e => e.currentTarget.style.borderColor = s.milestone ? theme.yellow + "50" : theme.inputBorder}
+      >
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, marginBottom: 3,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 5 }}>
+            {s.milestone && <span>⭐</span>}
+            {formatStoryDateShort(s.date)}
+          </div>
+          <div style={{ fontSize: 10, color: theme.textSub, flexShrink: 0 }}>
+            {s.entries.length}×
+          </div>
+        </div>
+
+        <div style={{
+          fontSize: 12, color: theme.textSub, lineHeight: 1.45,
+          wordBreak: "break-word",
+        }}>
+          {storyPreview(s.entries, 100) || <em style={{ opacity: 0.6 }}>(bez textu)</em>}
+        </div>
+
+        {(s.categories.length > 0 || s.people.length > 0) && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
+            {s.categories.map(k => {
+              const c = catByKey.get(k) || STORY_UNKNOWN_CATEGORY;
+              return (
+                <span key={k} style={{
+                  fontSize: 10, color: theme.textSub,
+                  border: `1px solid ${theme.inputBorder}`, borderRadius: 20,
+                  padding: "0 6px",
+                }}>{c.label}</span>
+              );
+            })}
+            {s.people.map(p => (
+              <span key={p} style={{
+                fontSize: 10, color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`, borderRadius: 20,
+                padding: "0 6px",
+              }}>{p}</span>
+            ))}
+          </div>
+        )}
+      </div>
+  );
+}
+
+
 /* ═══════════════════════════════════════════════════════
    📔 DENNÍ PŘÍBĚH — HLAVNÍ PANEL
    3 pohledy: Home (poslední dny) / Hledání (6 os) / Milníky
    ═══════════════════════════════════════════════════════ */
 
-function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, reloadKey }) {
+function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onQuickAdd, reloadKey }) {
   useEscapeKey(onClose);
   const [tab, setTab] = useState("home");
+
+  // Seskupení náhledu: "all" = všechny příběhy, jinak po týdnech / měsících.
+  // cursor drží den, podle kterého se počítá zobrazené období.
+  const [grouping, setGrouping] = useState("all");
+  const [cursor, setCursor] = useState(todayStoryDate());
 
   const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17719,23 +18118,31 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     return m;
   }, [categories]);
 
-  // Home feed
+  // Rozsah dat pro aktuální seskupení (null = neomezeně, stránkuje se)
+  const range = useMemo(() => {
+    if (grouping === "week") return { from: storyWeekStart(cursor), to: storyWeekEnd(cursor) };
+    if (grouping === "month") return { from: storyMonthStart(cursor), to: storyMonthEnd(cursor) };
+    return null;
+  }, [grouping, cursor]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       const [r, s] = await Promise.all([
-        apiLoadStories(currentUser?.name, { limit: 30 }),
+        range
+          ? apiLoadStoriesInRange(currentUser?.name, range.from, range.to)
+          : apiLoadStories(currentUser?.name, { limit: 30 }),
         apiStoryStats(currentUser?.name),
       ]);
       if (!alive) return;
       setStories(r.stories);
-      setHasMore(r.stories.length === 30);
+      setHasMore(!range && r.stories.length === 30);
       setStats(s.stats);
       setLoading(false);
     })();
     return () => { alive = false; };
-  }, [currentUser?.name, reloadKey]);
+  }, [currentUser?.name, reloadKey, range]);
 
   const loadMore = async () => {
     const last = stories[stories.length - 1];
@@ -17745,14 +18152,19 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     setHasMore(r.stories.length === 30);
   };
 
+  // Pozor: reloadKey musí být v závislostech, jinak zůstane seznam milníků
+  // zastaralý poté, co uživatel označí nový den hvězdičkou.
   useEffect(() => {
-    if (tab !== "milestones" || milestonesLoaded) return;
+    if (tab !== "milestones") return;
+    let alive = true;
     (async () => {
       const r = await apiLoadMilestones(currentUser?.name);
+      if (!alive) return;
       setMilestones(r.stories);
       setMilestonesLoaded(true);
     })();
-  }, [tab, milestonesLoaded, currentUser?.name]);
+    return () => { alive = false; };
+  }, [tab, currentUser?.name, reloadKey]);
 
   const runSearch = async () => {
     setSearching(true);
@@ -17779,57 +18191,27 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
   const toggle = (arr, setArr, val) =>
     setArr(arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val]);
 
-  const DayCard = ({ s }) => (
-    <div
-      onClick={() => onOpenDay(s.date)}
+  const shiftCursor = (dir) => {
+    if (grouping === "week") setCursor(shiftStoryDate(cursor, dir * 7));
+    else if (grouping === "month") setCursor(shiftStoryMonth(cursor, dir));
+  };
+
+  const groupBtn = (id, label) => (
+    <button
+      key={id}
+      onClick={() => { setGrouping(id); setCursor(todayStoryDate()); }}
       style={{
-        background: theme.inputBg,
-        border: `1px solid ${s.milestone ? theme.yellow + "50" : theme.inputBorder}`,
-        borderRadius: 10, padding: "9px 11px", cursor: "pointer",
-        transition: "border-color 0.15s",
+        ...buttonStyle(), padding: "4px 11px", fontSize: 11,
+        background: grouping === id ? theme.accentSoft : "transparent",
+        color: grouping === id ? theme.accent : theme.textSub,
+        border: `1px solid ${grouping === id ? theme.accent : theme.inputBorder}`,
+        borderRadius: 20,
       }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = theme.accent}
-      onMouseLeave={e => e.currentTarget.style.borderColor = s.milestone ? theme.yellow + "50" : theme.inputBorder}
-    >
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 8, marginBottom: 3,
-      }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 5 }}>
-          {s.milestone && <span>⭐</span>}
-          {formatStoryDateShort(s.date)}
-          {s.mood && <span style={{ fontSize: 14 }}>{getStoryMood(s.mood)?.emoji}</span>}
-        </div>
-        <div style={{ fontSize: 10, color: theme.textSub, flexShrink: 0 }}>
-          {s.entries.length}×
-        </div>
-      </div>
+    >{label}</button>
+  );
 
-      <div style={{
-        fontSize: 12, color: theme.textSub, lineHeight: 1.45,
-        wordBreak: "break-word",
-      }}>
-        {storyPreview(s.entries, 100) || <em style={{ opacity: 0.6 }}>(bez textu)</em>}
-      </div>
-
-      {(s.categories.length > 0 || s.people.length > 0) && (
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
-          {s.categories.map(k => {
-            const c = catByKey.get(k) || STORY_UNKNOWN_CATEGORY;
-            return (
-              <span key={k} title={c.label} style={{ fontSize: 12 }}>{c.icon}</span>
-            );
-          })}
-          {s.people.map(p => (
-            <span key={p} style={{
-              fontSize: 10, color: theme.textSub,
-              border: `1px solid ${theme.inputBorder}`, borderRadius: 20,
-              padding: "0 6px",
-            }}>{p}</span>
-          ))}
-        </div>
-      )}
-    </div>
+  const DayCard = ({ s }) => (
+    <StoryDayCard s={s} catByKey={catByKey} theme={theme} onOpen={onOpenDay} />
   );
 
   const emptyBox = (txt) => (
@@ -17886,10 +18268,20 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
               </div>
             )}
           </div>
-          <button onClick={onClose} style={{
-            background: "none", border: "none", color: theme.textSub,
-            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
-          }}>×</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              onClick={onQuickAdd}
+              title="Nový zápis"
+              style={{
+                ...buttonStyle(), padding: "4px 13px", fontSize: 17, fontWeight: 700,
+                background: theme.accent, color: "#fff", lineHeight: 1.2,
+              }}
+            >+</button>
+            <button onClick={onClose} style={{
+              background: "none", border: "none", color: theme.textSub,
+              fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+            }}>×</button>
+          </div>
         </div>
 
         {/* Taby */}
@@ -17899,11 +18291,48 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           {tabBtn("milestones", "⭐ Milníky")}
         </div>
 
+        {tab === "home" && (
+          <div style={{
+            padding: "8px 10px 0", display: "flex", flexDirection: "column",
+            gap: 7, flexShrink: 0,
+          }}>
+            <div style={{ display: "flex", gap: 5 }}>
+              {groupBtn("all", "Vše")}
+              {groupBtn("week", "Po týdnech")}
+              {groupBtn("month", "Po měsících")}
+            </div>
+
+            {grouping !== "all" && (
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                borderRadius: 8, padding: "3px 6px",
+              }}>
+                <button onClick={() => shiftCursor(-1)} title="Předchozí" style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  color: theme.textSub, fontSize: 19, padding: "2px 12px", lineHeight: 1,
+                }}>‹</button>
+                <div style={{ fontSize: 12, fontWeight: 700, color: theme.text }}>
+                  {grouping === "week" ? formatStoryWeek(cursor) : formatStoryMonth(cursor)}
+                </div>
+                <button onClick={() => shiftCursor(1)} title="Další" style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  color: theme.textSub, fontSize: 19, padding: "2px 12px", lineHeight: 1,
+                }}>›</button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
-          {/* ── HOME ── */}
+          {/* ── DENÍK ── */}
           {tab === "home" && (
             loading ? emptyBox("Načítám…") :
-            stories.length === 0 ? emptyBox("Zatím žádný zápis. Klikni na 📔 vpravo dole a začni.") : (
+            stories.length === 0 ? emptyBox(
+              grouping === "all"
+                ? "Zatím žádný zápis. Klikni na + a začni."
+                : "V tomhle období nic není."
+            ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {stories.map(s => <DayCard key={s.date} s={s} />)}
                 {hasMore && (
@@ -18033,7 +18462,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           {/* ── MILNÍKY ── */}
           {tab === "milestones" && (
             !milestonesLoaded ? emptyBox("Načítám…") :
-            milestones.length === 0 ? emptyBox("Zatím žádný přelomový den. Označ ho ⭐ v editoru dne.") : (
+            milestones.length === 0 ? emptyBox("Zatím žádný přelomový den. Označ ho ⭐ v režimu úprav.") : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {milestones.map(s => <DayCard key={s.date} s={s} />)}
               </div>
@@ -18107,9 +18536,11 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
     const j = idx + dir;
     if (j < 0 || j >= next.length) return;
     [next[idx], next[j]] = [next[j], next[idx]];
-    setList(next);
+    setList(next); // optimisticky, ať to neposkakuje
     await apiReorderStoryCategories(next.map(c => c.id));
-    onCategoriesChanged?.(next);
+    // Znovu načíst — lokální sortOrder by zůstal starý a další přidaná
+    // kategorie by dostala kolidující pořadí.
+    refresh();
   };
 
   const patchSettings = async (patch) => {
@@ -18516,19 +18947,29 @@ function App() {
   const [storyCategories, setStoryCategories] = useState([]);
   const [storyPeople, setStoryPeople] = useState([]);
   const [storyReloadKey, setStoryReloadKey] = useState(0);
+  const [showStoryQuickAdd, setShowStoryQuickAdd] = useState(false);
+  const [storyQuickAddDate, setStoryQuickAddDate] = useState(null);
 
-  // Kategorie deníku + návrhy osob — načíst po přihlášení a po každé změně
+  // Kategorie deníku — mění se jen ručně v nastavení, stačí po přihlášení.
   useEffect(() => {
     if (!currentUser?.name) return;
     let alive = true;
     (async () => {
-      const [c, p] = await Promise.all([
-        apiLoadStoryCategories(currentUser.name),
-        apiRecentStoryPeople(currentUser.name),
-      ]);
-      if (!alive) return;
-      setStoryCategories(c.categories || []);
-      setStoryPeople(p.people || []);
+      const c = await apiLoadStoryCategories(currentUser.name);
+      if (alive) setStoryCategories(c.categories || []);
+    })();
+    return () => { alive = false; };
+  }, [currentUser?.name]);
+
+  // Návrhy osob — ty se mění s každým zápisem, proto reagují na reloadKey.
+  // Záměrně oddělené od kategorií, ať se při každém ťuknutí na emoji
+  // netahá zbytečně i seznam kategorií.
+  useEffect(() => {
+    if (!currentUser?.name) return;
+    let alive = true;
+    (async () => {
+      const r = await apiRecentStoryPeople(currentUser.name);
+      if (alive) setStoryPeople(r.people || []);
     })();
     return () => { alive = false; };
   }, [currentUser?.name, storyReloadKey]);
@@ -19283,7 +19724,7 @@ function App() {
       const anyModalOpen =
         showReminderSheet || showQuickReminder || showNotesSheet ||
         editingNote !== null || showStatsSheet || showSearchSheet ||
-        showStorySheet || showStorySettings || storyEditorDate !== null ||
+        showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
         showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel || showBlockList;
       if (anyModalOpen) return;
@@ -22532,6 +22973,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             reloadKey={storyReloadKey}
             onClose={() => setShowStorySheet(false)}
             onOpenDay={(d) => setStoryEditorDate(d)}
+            onQuickAdd={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
           />
         )}
 
@@ -22543,6 +22985,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             categories={storyCategories}
             peopleSuggestions={storyPeople}
             onClose={() => setStoryEditorDate(null)}
+            onNavigate={(d) => setStoryEditorDate(d)}
             onChanged={() => setStoryReloadKey(k => k + 1)}
             onDeleted={() => setStoryReloadKey(k => k + 1)}
           />
@@ -22559,11 +23002,19 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         )}
 
         <StoryFab
+          theme={theme}
+          hidden={showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd}
+          onOpen={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
+        />
+
+        <StoryQuickAdd
+          open={showStoryQuickAdd}
+          presetDate={storyQuickAddDate}
           currentUser={currentUser}
           theme={theme}
           categories={storyCategories}
           peopleSuggestions={storyPeople}
-          hidden={showStorySheet || showStorySettings || storyEditorDate !== null}
+          onClose={() => setShowStoryQuickAdd(false)}
           onOpenDay={(d) => setStoryEditorDate(d)}
           onSaved={() => setStoryReloadKey(k => k + 1)}
         />
