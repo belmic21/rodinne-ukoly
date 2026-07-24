@@ -3239,6 +3239,857 @@ async function apiHardDeleteNote(id) {
 }
 
 
+/* ═══════════════════════════════════════════════════════
+   📔 DENNÍ PŘÍBĚH — HELPERY
+   Deník s vyprávěním. Per-user soukromý, nesdílí se.
+   Tabulky: daily_stories, user_categories, user_story_settings
+   Přílohy: attachments s entity_type = "story", entity_id = story.id
+   ═══════════════════════════════════════════════════════ */
+
+const CACHE_STORY_CATEGORIES = "ft_cache_story_categories";
+const CACHE_STORY_SETTINGS = "ft_cache_story_settings";
+
+// Půlnoční pravidlo: 00:00–02:59 patří ke VČERAŠKU (sny, brzké vstávání).
+// Musí sedět s SQL funkcí public.story_date_for().
+const STORY_DAY_CUTOFF_HOUR = 3;
+
+// Nálada 1–5
+const STORY_MOODS = [
+  { value: 1, emoji: "😢", label: "Mizerný" },
+  { value: 2, emoji: "😐", label: "Nic moc" },
+  { value: 3, emoji: "🙂", label: "Dobrý" },
+  { value: 4, emoji: "😊", label: "Fajn" },
+  { value: 5, emoji: "🤩", label: "Skvělý" },
+];
+
+function getStoryMood(value) {
+  return STORY_MOODS.find(m => m.value === value) || null;
+}
+
+// Fallback ikona pro kategorii, kterou uživatel mezitím smazal,
+// ale ve starých zápisech její klíč zůstal.
+const STORY_UNKNOWN_CATEGORY = { key: "", icon: "🏷️", label: "—", sort_order: 999 };
+
+/* ── Datum a čas ─────────────────────────────────────── */
+
+// "YYYY-MM-DD" z lokálního času (NE toISOString — to posouvá o UTC offset).
+function storyLocalDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Ke kterému dni deníku patří daný okamžik (aplikuje půlnoční pravidlo).
+function storyDateFor(when = new Date()) {
+  const d = new Date(when);
+  if (d.getHours() < STORY_DAY_CUTOFF_HOUR) d.setDate(d.getDate() - 1);
+  return storyLocalDateStr(d);
+}
+
+function todayStoryDate() {
+  return storyDateFor(new Date());
+}
+
+// "HH:MM" pro automatický čas u zápisku
+function storyTimeNow(when = new Date()) {
+  return `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+}
+
+function shiftStoryDate(dateStr, days) {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return storyLocalDateStr(date);
+}
+
+// "pátek 24. července 2026"
+function formatStoryDateLong(dateStr) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  return new Date(y, m - 1, d).toLocaleDateString("cs-CZ", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+}
+
+// "pá 24. 7." + relativní popisek pro poslední dny
+function formatStoryDateShort(dateStr) {
+  if (!dateStr) return "";
+  const today = todayStoryDate();
+  if (dateStr === today) return "Dnes";
+  if (dateStr === shiftStoryDate(today, -1)) return "Včera";
+  if (dateStr === shiftStoryDate(today, -2)) return "Předevčírem";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  const date = new Date(y, m - 1, d);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString("cs-CZ", {
+    weekday: "short", day: "numeric", month: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+/* ── Zápisky (entries) ───────────────────────────────── */
+
+function normalizeStoryEntries(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(e => e && typeof e === "object")
+    .map(e => ({
+      id: e.id || generateId(),
+      time: typeof e.time === "string" ? e.time : "",
+      text: typeof e.text === "string" ? e.text : "",
+    }));
+}
+
+// desc = true → nejnovější nahoře (pořadí v editoru dle specifikace)
+function sortStoryEntries(entries, desc = true) {
+  const list = [...(entries || [])];
+  list.sort((a, b) => {
+    const ta = a.time || "";
+    const tb = b.time || "";
+    if (ta === tb) return 0;
+    if (!ta) return 1;
+    if (!tb) return -1;
+    return desc ? tb.localeCompare(ta) : ta.localeCompare(tb);
+  });
+  return list;
+}
+
+// Náhled prvních N znaků pro Home view
+function storyPreview(entries, maxLen = 100) {
+  const text = sortStoryEntries(entries, false)
+    .map(e => e.text)
+    .filter(Boolean)
+    .join(" · ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trimEnd() + "…";
+}
+
+function storyEntriesCharCount(entries) {
+  return (entries || []).reduce((sum, e) => sum + (e.text ? e.text.length : 0), 0);
+}
+
+/* ── Fulltext ────────────────────────────────────────── */
+
+// Musí odpovídat SQL funkci public.cz_unaccent() — jinak by hledání
+// v generovaném sloupci search_tsv míjelo.
+function storyStripDiacritics(s) {
+  if (!s) return "";
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Hrubý český "stem" — ořízne koncovku, aby hledání našlo i skloňované tvary.
+// Bez toho by "Peťulka" nenašla "Peťulkou" a "meloun" nenašel "melouna".
+// (PostgreSQL nemá český slovník, tohle je pragmatická náhrada.)
+function storyStem(word) {
+  if (word.length >= 8) return word.slice(0, word.length - 2);
+  if (word.length >= 5) return word.slice(0, word.length - 1);
+  return word;
+}
+
+// "beton plot" → "beton:* & plot:*"  (prefixové hledání, config 'simple')
+// exact = true → hledá přesné tvary bez ořezu koncovek
+function storyTsQuery(input, { exact = false } = {}) {
+  if (!input) return "";
+  const words = storyStripDiacritics(input)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter(w => w.length >= 2);
+  if (words.length === 0) return "";
+  return words.map(w => `${exact ? w : storyStem(w)}:*`).join(" & ");
+}
+
+/* ── Množinové operace (categories / people se kumulují) ── */
+
+function mergeStorySet(current, added) {
+  const base = Array.isArray(current) ? current : [];
+  const extra = Array.isArray(added) ? added : [added];
+  const out = [...base];
+  for (const v of extra) {
+    const val = typeof v === "string" ? v.trim() : v;
+    if (val && !out.includes(val)) out.push(val);
+  }
+  return out;
+}
+
+function removeFromStorySet(current, removed) {
+  const base = Array.isArray(current) ? current : [];
+  const drop = Array.isArray(removed) ? removed : [removed];
+  return base.filter(v => !drop.includes(v));
+}
+
+/* ── Mapování DB ↔ app ───────────────────────────────── */
+
+function storyFromDb(s) {
+  if (!s) return null;
+  return {
+    id: s.id,
+    userName: s.user_name,
+    date: s.date,
+    entries: normalizeStoryEntries(s.entries),
+    mood: typeof s.mood === "number" ? s.mood : null,
+    categories: Array.isArray(s.categories) ? s.categories : [],
+    people: Array.isArray(s.people) ? s.people : [],
+    milestone: !!s.milestone,
+    createdAt: s.created_at,
+    updatedAt: s.updated_at,
+  };
+}
+
+function emptyStory(userName, date) {
+  return {
+    id: null,
+    userName,
+    date,
+    entries: [],
+    mood: null,
+    categories: [],
+    people: [],
+    milestone: false,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
+function categoryFromDb(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    userName: c.user_name,
+    key: c.key,
+    icon: c.icon || "",
+    label: c.label || "",
+    sortOrder: typeof c.sort_order === "number" ? c.sort_order : 0,
+  };
+}
+
+function storySettingsFromDb(s) {
+  return {
+    userName: s?.user_name || null,
+    autoTime: s ? !!s.auto_time : true,
+    reminderEnabled: s ? !!s.reminder_enabled : false,
+    reminderTime: (s?.reminder_time || "20:00").slice(0, 5),
+    reminderDays: Array.isArray(s?.reminder_days) ? s.reminder_days : [1, 2, 3, 4, 5, 6, 7],
+    reminderSkipIfWritten: s ? !!s.reminder_skip_if_written : true,
+    lastRemindedOn: s?.last_reminded_on || null,
+  };
+}
+
+// Klíč nové kategorie z popisku: "Osobní růst" → "osobni_rust"
+function storyCategoryKeyFrom(label, existingKeys = []) {
+  let base = storyStripDiacritics(label || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  if (!base) base = "kategorie";
+  let key = base;
+  let n = 2;
+  while (existingKeys.includes(key)) {
+    key = `${base}_${n}`;
+    n++;
+  }
+  return key;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   📔 DENNÍ PŘÍBĚH — API
+   Konvence: každá funkce vrací { ok, ... } a nikdy nehází výjimku ven.
+   Deník je soukromý → žádný offline queue, jen čtecí cache u kategorií.
+   ═══════════════════════════════════════════════════════ */
+
+const STORY_SELECT = "id, user_name, date, entries, mood, categories, people, milestone, created_at, updated_at";
+
+/* ── Načítání ────────────────────────────────────────── */
+
+// Home view — chronologicky poslední dny (dnes nahoře).
+// beforeDate = stránkování: vrátí dny STARŠÍ než tohle datum.
+async function apiLoadStories(userName, { limit = 30, beforeDate = null } = {}) {
+  if (!userName) return { ok: false, stories: [], error: "Chybí uživatel" };
+  try {
+    let q = supabase
+      .from("daily_stories")
+      .select(STORY_SELECT)
+      .eq("user_name", userName)
+      .order("date", { ascending: false })
+      .limit(limit);
+    if (beforeDate) q = q.lt("date", beforeDate);
+
+    const { data, error } = await q;
+    if (error) throw error;
+    return { ok: true, stories: (data || []).map(storyFromDb) };
+  } catch (e) {
+    logServerError("apiLoadStories", e, { userName });
+    return { ok: false, stories: [], error: e.message };
+  }
+}
+
+// Jeden konkrétní den. Když neexistuje, vrátí prázdnou strukturu (ne chybu).
+async function apiLoadStory(userName, date) {
+  if (!userName || !date) return { ok: false, story: null, error: "Chybí uživatel nebo datum" };
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .select(STORY_SELECT)
+      .eq("user_name", userName)
+      .eq("date", date)
+      .maybeSingle();
+    if (error) throw error;
+    return { ok: true, story: data ? storyFromDb(data) : emptyStory(userName, date), exists: !!data };
+  } catch (e) {
+    logServerError("apiLoadStory", e, { userName, date });
+    return { ok: false, story: emptyStory(userName, date), error: e.message };
+  }
+}
+
+// Které dny v rozsahu mají zápis — podklad pro tečky v kalendáři.
+async function apiLoadStoryDates(userName, fromDate, toDate) {
+  if (!userName) return { ok: false, days: [] };
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .select("date, mood, milestone")
+      .eq("user_name", userName)
+      .gte("date", fromDate)
+      .lte("date", toDate)
+      .order("date", { ascending: true });
+    if (error) throw error;
+    return { ok: true, days: data || [] };
+  } catch (e) {
+    logServerError("apiLoadStoryDates", e, { userName, fromDate, toDate });
+    return { ok: false, days: [], error: e.message };
+  }
+}
+
+/* ── Zápis ───────────────────────────────────────────── */
+
+// Interní: načti den, uprav ho callbackem, ulož. Vytvoří den, když chybí.
+// (Read-modify-write — deník je per-user, souběh je nepravděpodobný.)
+async function _updateStoryDay(userName, date, mutate) {
+  const loaded = await apiLoadStory(userName, date);
+  if (!loaded.ok && loaded.error) return { ok: false, error: loaded.error };
+
+  const current = loaded.story;
+  const next = mutate({ ...current });
+
+  const payload = {
+    user_name: userName,
+    date,
+    entries: next.entries || [],
+    mood: typeof next.mood === "number" ? next.mood : null,
+    categories: next.categories || [],
+    people: next.people || [],
+    milestone: !!next.milestone,
+    updated_at: new Date().toISOString(),
+  };
+
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .upsert(payload, { onConflict: "user_name,date" })
+      .select(STORY_SELECT)
+      .single();
+    if (error) throw error;
+    return { ok: true, story: storyFromDb(data) };
+  } catch (e) {
+    logServerError("_updateStoryDay", e, { userName, date });
+    return { ok: false, error: e.message };
+  }
+}
+
+// FAB — rychlá myšlenka. Přidá zápisek na konec dne.
+async function apiAddStoryEntry(userName, text, { date = null, autoTime = true, time = null } = {}) {
+  const clean = (text || "").trim();
+  if (!userName) return { ok: false, error: "Chybí uživatel" };
+  if (!clean) return { ok: false, error: "Prázdný zápis" };
+
+  const targetDate = date || todayStoryDate();
+  const entry = {
+    id: generateId(),
+    time: time || (autoTime ? storyTimeNow() : ""),
+    text: clean,
+  };
+
+  const res = await _updateStoryDay(userName, targetDate, (s) => ({
+    ...s,
+    entries: [...(s.entries || []), entry],
+  }));
+  return res.ok ? { ...res, entry, date: targetDate } : res;
+}
+
+async function apiUpdateStoryEntry(userName, date, entryId, patch) {
+  if (!userName || !date || !entryId) return { ok: false, error: "Chybí parametry" };
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    entries: (s.entries || []).map(e =>
+      e.id === entryId
+        ? {
+            ...e,
+            ...(typeof patch.text === "string" ? { text: patch.text } : {}),
+            ...(typeof patch.time === "string" ? { time: patch.time } : {}),
+          }
+        : e
+    ),
+  }));
+}
+
+async function apiDeleteStoryEntry(userName, date, entryId) {
+  if (!userName || !date || !entryId) return { ok: false, error: "Chybí parametry" };
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    entries: (s.entries || []).filter(e => e.id !== entryId),
+  }));
+}
+
+/* ── Vlastnosti dne (nálada / kategorie / osoby / milník) ── */
+
+// Nálada a milník: 1 hodnota na den, přepisuje se.
+async function apiSetStoryMood(userName, date, mood) {
+  const value = mood === null || mood === undefined ? null : Number(mood);
+  if (value !== null && (!Number.isFinite(value) || value < 1 || value > 5)) {
+    return { ok: false, error: "Nálada musí být 1–5" };
+  }
+  return _updateStoryDay(userName, date, (s) => ({ ...s, mood: value }));
+}
+
+async function apiSetStoryMilestone(userName, date, milestone) {
+  return _updateStoryDay(userName, date, (s) => ({ ...s, milestone: !!milestone }));
+}
+
+// Kategorie a osoby: SET — přidávají se, nepřepisují.
+async function apiAddStoryCategories(userName, date, keys) {
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    categories: mergeStorySet(s.categories, keys),
+  }));
+}
+
+async function apiRemoveStoryCategories(userName, date, keys) {
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    categories: removeFromStorySet(s.categories, keys),
+  }));
+}
+
+async function apiAddStoryPeople(userName, date, names) {
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    people: mergeStorySet(s.people, names),
+  }));
+}
+
+async function apiRemoveStoryPeople(userName, date, names) {
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    people: removeFromStorySet(s.people, names),
+  }));
+}
+
+// Hromadná změna z panelu emoji tapů — jeden zápis do DB místo čtyř.
+async function apiPatchStoryDay(userName, date, patch = {}) {
+  return _updateStoryDay(userName, date, (s) => ({
+    ...s,
+    ...(patch.mood !== undefined ? { mood: patch.mood } : {}),
+    ...(patch.milestone !== undefined ? { milestone: !!patch.milestone } : {}),
+    ...(patch.addCategories ? { categories: mergeStorySet(s.categories, patch.addCategories) } : {}),
+    ...(patch.setCategories ? { categories: patch.setCategories } : {}),
+    ...(patch.addPeople ? { people: mergeStorySet(s.people, patch.addPeople) } : {}),
+    ...(patch.setPeople ? { people: patch.setPeople } : {}),
+  }));
+}
+
+// Smazání celého dne + jeho příloh
+async function apiDeleteStoryDay(userName, date) {
+  if (!userName || !date) return { ok: false, error: "Chybí parametry" };
+  try {
+    const { data: row } = await supabase
+      .from("daily_stories")
+      .select("id")
+      .eq("user_name", userName)
+      .eq("date", date)
+      .maybeSingle();
+
+    if (row?.id) {
+      try {
+        await deleteAllAttachmentsForEntity("story", row.id);
+      } catch (e) {
+        console.warn("[apiDeleteStoryDay] Failed to delete attachments:", e);
+      }
+    }
+
+    const { error } = await supabase
+      .from("daily_stories")
+      .delete()
+      .eq("user_name", userName)
+      .eq("date", date);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    logServerError("apiDeleteStoryDay", e, { userName, date });
+    return { ok: false, error: e.message };
+  }
+}
+
+/* ── Hledání (6 os) ──────────────────────────────────── */
+
+// filters: { text, categories[], people[], moods[], from, to, milestoneOnly }
+async function apiSearchStories(userName, filters = {}, { limit = 100, offset = 0 } = {}) {
+  if (!userName) return { ok: false, stories: [], error: "Chybí uživatel" };
+  try {
+    let q = supabase
+      .from("daily_stories")
+      .select(STORY_SELECT, { count: "exact" })
+      .eq("user_name", userName);
+
+    // 1) fulltext v entries
+    const tsq = storyTsQuery(filters.text, { exact: !!filters.exactText });
+    if (tsq) q = q.textSearch("search_tsv", tsq, { config: "simple" });
+
+    // 2) kategorie (multi-select, OR)
+    if (filters.categories?.length) q = q.overlaps("categories", filters.categories);
+
+    // 3) osoby (multi-select, OR)
+    if (filters.people?.length) q = q.overlaps("people", filters.people);
+
+    // 4) nálada (multi-select)
+    if (filters.moods?.length) q = q.in("mood", filters.moods);
+
+    // 5) rozsah dat
+    if (filters.from) q = q.gte("date", filters.from);
+    if (filters.to) q = q.lte("date", filters.to);
+
+    // 6) jen milníky
+    if (filters.milestoneOnly) q = q.eq("milestone", true);
+
+    q = q.order("date", { ascending: false }).range(offset, offset + limit - 1);
+
+    const { data, error, count } = await q;
+    if (error) throw error;
+    return { ok: true, stories: (data || []).map(storyFromDb), total: count ?? null };
+  } catch (e) {
+    logServerError("apiSearchStories", e, { userName, filters });
+    return { ok: false, stories: [], error: e.message };
+  }
+}
+
+// ⭐ Milníky — chronologický seznam
+async function apiLoadMilestones(userName, { limit = 200 } = {}) {
+  if (!userName) return { ok: false, stories: [] };
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .select(STORY_SELECT)
+      .eq("user_name", userName)
+      .eq("milestone", true)
+      .order("date", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return { ok: true, stories: (data || []).map(storyFromDb) };
+  } catch (e) {
+    logServerError("apiLoadMilestones", e, { userName });
+    return { ok: false, stories: [], error: e.message };
+  }
+}
+
+// Auto-návrh osob — z posledních 20 dnů se zápisem, seřazeno dle četnosti
+async function apiRecentStoryPeople(userName, { days = 60, max = 20 } = {}) {
+  if (!userName) return { ok: false, people: [] };
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .select("people, date")
+      .eq("user_name", userName)
+      .order("date", { ascending: false })
+      .limit(days);
+    if (error) throw error;
+
+    const counts = new Map();
+    for (const row of data || []) {
+      for (const p of row.people || []) {
+        counts.set(p, (counts.get(p) || 0) + 1);
+      }
+    }
+    const people = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "cs"))
+      .slice(0, max)
+      .map(([name]) => name);
+    return { ok: true, people };
+  } catch (e) {
+    logServerError("apiRecentStoryPeople", e, { userName });
+    return { ok: false, people: [], error: e.message };
+  }
+}
+
+/* ── Panel „Co jsi ten den udělal" ───────────────────── */
+
+// Úkoly dokončené uživatelem v daném dni deníku.
+// Hranice dne respektují půlnoční pravidlo (03:00 → 03:00).
+async function apiCompletedTasksForStoryDay(userName, date) {
+  if (!userName || !date) return { ok: false, tasks: [] };
+  try {
+    const [y, m, d] = date.split("-").map(Number);
+    const start = new Date(y, m - 1, d, STORY_DAY_CUTOFF_HOUR, 0, 0, 0);
+    const end = new Date(y, m - 1, d + 1, STORY_DAY_CUTOFF_HOUR, 0, 0, 0);
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("id, title, category, completed_at, completed_by_user")
+      .eq("completed_by_user", userName)
+      .gte("completed_at", start.toISOString())
+      .lt("completed_at", end.toISOString())
+      .order("completed_at", { ascending: true });
+    if (error) throw error;
+
+    return {
+      ok: true,
+      tasks: (data || []).map(t => ({
+        id: t.id,
+        title: t.title || "",
+        category: t.category || null,
+        completedAt: t.completed_at,
+        time: t.completed_at ? storyTimeNow(new Date(t.completed_at)) : "",
+      })),
+    };
+  } catch (e) {
+    logServerError("apiCompletedTasksForStoryDay", e, { userName, date });
+    return { ok: false, tasks: [], error: e.message };
+  }
+}
+
+/* ── Kategorie (per-user, editovatelné) ──────────────── */
+
+async function apiLoadStoryCategories(userName, { ensure = true } = {}) {
+  if (!userName) return { ok: false, categories: [] };
+  try {
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("user_categories")
+        .select("id, user_name, key, icon, label, sort_order")
+        .eq("user_name", userName)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      return (data || []).map(categoryFromDb);
+    };
+
+    let categories = await load();
+
+    // První použití deníku novým uživatelem → doplnit startovní sadu
+    if (categories.length === 0 && ensure) {
+      const { error: rpcErr } = await supabase.rpc("ensure_user_categories", { p_user_name: userName });
+      if (rpcErr) throw rpcErr;
+      categories = await load();
+    }
+
+    cacheSet(CACHE_STORY_CATEGORIES, { userName, categories });
+    return { ok: true, categories };
+  } catch (e) {
+    logServerError("apiLoadStoryCategories", e, { userName });
+    const cached = cacheGet(CACHE_STORY_CATEGORIES);
+    if (cached?.userName === userName) {
+      return { ok: true, categories: cached.categories || [], fromCache: true };
+    }
+    return { ok: false, categories: [], error: e.message };
+  }
+}
+
+async function apiCreateStoryCategory(userName, { icon, label }, existing = []) {
+  const cleanLabel = (label || "").trim();
+  if (!userName || !cleanLabel) return { ok: false, error: "Chybí název kategorie" };
+  try {
+    const key = storyCategoryKeyFrom(cleanLabel, existing.map(c => c.key));
+    const maxOrder = existing.reduce((mx, c) => Math.max(mx, c.sortOrder || 0), 0);
+    const { data, error } = await supabase
+      .from("user_categories")
+      .insert({
+        user_name: userName,
+        key,
+        icon: (icon || "🏷️").trim(),
+        label: cleanLabel,
+        sort_order: maxOrder + 10,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return { ok: true, category: categoryFromDb(data) };
+  } catch (e) {
+    logServerError("apiCreateStoryCategory", e, { userName, label });
+    return { ok: false, error: e.message };
+  }
+}
+
+async function apiUpdateStoryCategory(id, patch = {}) {
+  if (!id) return { ok: false, error: "Chybí id" };
+  try {
+    const payload = {};
+    if (typeof patch.icon === "string") payload.icon = patch.icon.trim();
+    if (typeof patch.label === "string") payload.label = patch.label.trim();
+    if (typeof patch.sortOrder === "number") payload.sort_order = patch.sortOrder;
+    if (Object.keys(payload).length === 0) return { ok: true };
+
+    const { data, error } = await supabase
+      .from("user_categories")
+      .update(payload)
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return { ok: true, category: categoryFromDb(data) };
+  } catch (e) {
+    logServerError("apiUpdateStoryCategory", e, { id });
+    return { ok: false, error: e.message };
+  }
+}
+
+// Pozn.: klíč zůstane ve starých zápisech (historie se nepřepisuje),
+// UI ho zobrazí přes STORY_UNKNOWN_CATEGORY.
+async function apiDeleteStoryCategory(id) {
+  if (!id) return { ok: false, error: "Chybí id" };
+  try {
+    const { error } = await supabase.from("user_categories").delete().eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    logServerError("apiDeleteStoryCategory", e, { id });
+    return { ok: false, error: e.message };
+  }
+}
+
+// orderedIds = pole id v novém pořadí
+async function apiReorderStoryCategories(orderedIds) {
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) return { ok: true };
+  try {
+    for (let i = 0; i < orderedIds.length; i++) {
+      const { error } = await supabase
+        .from("user_categories")
+        .update({ sort_order: (i + 1) * 10 })
+        .eq("id", orderedIds[i]);
+      if (error) throw error;
+    }
+    return { ok: true };
+  } catch (e) {
+    logServerError("apiReorderStoryCategories", e, { count: orderedIds.length });
+    return { ok: false, error: e.message };
+  }
+}
+
+/* ── Nastavení deníku + připomínky ───────────────────── */
+
+async function apiLoadStorySettings(userName) {
+  if (!userName) return { ok: false, settings: storySettingsFromDb(null) };
+  try {
+    const { data, error } = await supabase
+      .from("user_story_settings")
+      .select("*")
+      .eq("user_name", userName)
+      .maybeSingle();
+    if (error) throw error;
+
+    if (!data) {
+      const { data: created, error: insErr } = await supabase
+        .from("user_story_settings")
+        .insert({ user_name: userName })
+        .select()
+        .single();
+      if (insErr) throw insErr;
+      const settings = storySettingsFromDb(created);
+      cacheSet(CACHE_STORY_SETTINGS, { userName, settings });
+      return { ok: true, settings };
+    }
+
+    const settings = storySettingsFromDb(data);
+    cacheSet(CACHE_STORY_SETTINGS, { userName, settings });
+    return { ok: true, settings };
+  } catch (e) {
+    logServerError("apiLoadStorySettings", e, { userName });
+    const cached = cacheGet(CACHE_STORY_SETTINGS);
+    if (cached?.userName === userName) {
+      return { ok: true, settings: cached.settings, fromCache: true };
+    }
+    return { ok: false, settings: storySettingsFromDb(null), error: e.message };
+  }
+}
+
+async function apiSaveStorySettings(userName, patch = {}) {
+  if (!userName) return { ok: false, error: "Chybí uživatel" };
+  try {
+    const payload = { user_name: userName };
+    if (patch.autoTime !== undefined) payload.auto_time = !!patch.autoTime;
+    if (patch.reminderEnabled !== undefined) payload.reminder_enabled = !!patch.reminderEnabled;
+    if (patch.reminderTime !== undefined) payload.reminder_time = patch.reminderTime;
+    if (patch.reminderDays !== undefined) payload.reminder_days = patch.reminderDays;
+    if (patch.reminderSkipIfWritten !== undefined) {
+      payload.reminder_skip_if_written = !!patch.reminderSkipIfWritten;
+    }
+
+    const { data, error } = await supabase
+      .from("user_story_settings")
+      .upsert(payload, { onConflict: "user_name" })
+      .select()
+      .single();
+    if (error) throw error;
+
+    const settings = storySettingsFromDb(data);
+    cacheSet(CACHE_STORY_SETTINGS, { userName, settings });
+    return { ok: true, settings };
+  } catch (e) {
+    logServerError("apiSaveStorySettings", e, { userName });
+    return { ok: false, error: e.message };
+  }
+}
+
+/* ── Statistiky pro Home view ────────────────────────── */
+
+async function apiStoryStats(userName) {
+  if (!userName) return { ok: false, stats: null };
+  try {
+    const { count: total, error: e1 } = await supabase
+      .from("daily_stories")
+      .select("id", { count: "exact", head: true })
+      .eq("user_name", userName);
+    if (e1) throw e1;
+
+    const { count: milestones, error: e2 } = await supabase
+      .from("daily_stories")
+      .select("id", { count: "exact", head: true })
+      .eq("user_name", userName)
+      .eq("milestone", true);
+    if (e2) throw e2;
+
+    // Série po sobě jdoucích dnů zpětně od dneška
+    const { data: recent, error: e3 } = await supabase
+      .from("daily_stories")
+      .select("date")
+      .eq("user_name", userName)
+      .order("date", { ascending: false })
+      .limit(400);
+    if (e3) throw e3;
+
+    let streak = 0;
+    let cursor = todayStoryDate();
+    const dates = new Set((recent || []).map(r => r.date));
+    if (!dates.has(cursor)) cursor = shiftStoryDate(cursor, -1); // dnešek se ještě nepočítá proti
+    while (dates.has(cursor)) {
+      streak++;
+      cursor = shiftStoryDate(cursor, -1);
+    }
+
+    return { ok: true, stats: { total: total || 0, milestones: milestones || 0, streak } };
+  } catch (e) {
+    logServerError("apiStoryStats", e, { userName });
+    return { ok: false, stats: null, error: e.message };
+  }
+}
+
+
+
 
 /* ═══════════════════════════════════════════════════════
    QUICK REMINDER MODAL — krátký dialog pro vytvoření připomínky.
