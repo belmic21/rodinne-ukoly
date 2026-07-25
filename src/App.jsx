@@ -3902,6 +3902,70 @@ async function apiLoadStoriesInRange(userName, fromDate, toDate) {
 
 /* ── Hlášky ──────────────────────────────────────────── */
 
+// Poskládá hlášky do čitelného textu pro schránku / sdílení.
+// stories = pole {quote, quotePerson, date}
+function formatQuotesForShare(stories, { person = null } = {}) {
+  const title = person ? `💬 Hlášky — ${person}` : "💬 Hlášky";
+  const blocks = (stories || [])
+    .filter(s => s.quote)
+    .map(s => {
+      const lines = [`„${s.quote}"`];
+      const meta = [];
+      if (!person && s.quotePerson) meta.push(s.quotePerson);
+      meta.push(formatStoryDateHuman(s.date));
+      lines.push(`   ${meta.join(" · ")}`);
+      return lines.join("\n");
+    });
+  return `${title}\n\n${blocks.join("\n\n")}`;
+}
+
+// "4. 7. 2026"
+function formatStoryDateHuman(dateStr) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  return `${d}. ${m}. ${y}`;
+}
+
+// Zkopíruje text do schránky (s fallbackem pro starší prohlížeče).
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
+
+// Systémové sdílení (WhatsApp, Zprávy, mail…). Když ho zařízení nemá,
+// vrátí "unsupported", ať UI spadne zpět na kopírování.
+async function shareText(text, title) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: title || "Hlášky", text });
+      return "shared";
+    } catch (e) {
+      if (e && e.name === "AbortError") return "cancelled";
+      return "error";
+    }
+  }
+  return "unsupported";
+}
+
+
+
 // Dny, které mají hlášku. Volitelně jen od jedné osoby.
 async function apiLoadQuotes(userName, { person = null, limit = 200 } = {}) {
   if (!userName) return { ok: false, quotes: [] };
@@ -17617,24 +17681,66 @@ function StoryQuickAdd({ open, presetDate, currentUser, theme, categories, peopl
   );
 }
 
-// Plovoucí tlačítko — už jen spouštěč, obsah je v StoryQuickAdd.
-function StoryFab({ theme, onOpen, hidden }) {
+// Plovoucí tlačítko — po ťuknutí nabídne zápisek nebo hlášku.
+function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden }) {
+  const [menu, setMenu] = useState(false);
+  useEscapeKey(() => setMenu(false), menu);
   if (hidden) return null;
-  return (
+
+  const item = (glyph, label, onClick, bg) => (
     <button
-      onClick={onOpen}
-      title="Denní příběh — rychlá myšlenka"
+      onClick={() => { setMenu(false); onClick(); }}
       style={{
-        position: "fixed", right: 18, bottom: 18, zIndex: 140,
-        width: 52, height: 52, borderRadius: "50%",
-        border: "none", cursor: "pointer",
-        background: theme.accent, color: "#fff", fontSize: 24,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        ...buttonStyle(), display: "flex", alignItems: "center", gap: 8,
+        padding: "10px 14px", fontSize: 13, fontWeight: 600,
+        background: theme.card, color: theme.text,
+        border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.22)", whiteSpace: "nowrap",
       }}
     >
-      📔
+      <span style={{
+        width: 26, height: 26, borderRadius: "50%", background: bg, color: "#fff",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15,
+      }}>{glyph}</span>
+      {label}
     </button>
+  );
+
+  return (
+    <>
+      {menu && (
+        <div
+          onClick={() => setMenu(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 139 }}
+        />
+      )}
+      <div style={{
+        position: "fixed", right: 18, bottom: 18, zIndex: 140,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10,
+      }}>
+        {menu && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+            {item("📔", "Zápisek", onOpenEntry, theme.accent)}
+            {item("💬", "Hláška", onOpenQuote, theme.purple)}
+          </div>
+        )}
+        <button
+          onClick={() => setMenu(m => !m)}
+          title="Přidat do deníku"
+          style={{
+            width: 52, height: 52, borderRadius: "50%",
+            border: "none", cursor: "pointer",
+            background: theme.accent, color: "#fff", fontSize: 24,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.28)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "transform 0.15s",
+            transform: menu ? "rotate(45deg)" : "none",
+          }}
+        >
+          {menu ? "+" : "📔"}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -18267,11 +18373,297 @@ function StoryDayCard({ s, catByKey, theme, onOpen }) {
 
 
 /* ═══════════════════════════════════════════════════════
+   📔 DENNÍ PŘÍBĚH — PŘIDÁNÍ HLÁŠKY (bez vazby na den)
+   Hláška vždy patří k nějakému dni; tady se zapíše k dnešku
+   (datum jde přepnout). Když už den hlášku má, ptáme se.
+   ═══════════════════════════════════════════════════════ */
+
+function StoryQuickQuote({ open, currentUser, theme, peopleSuggestions, onClose, onSaved, onOpenDay }) {
+  const [text, setText] = useState("");
+  const [person, setPerson] = useState("");
+  const [date, setDate] = useState(todayStoryDate());
+  const [showDetails, setShowDetails] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmOverwrite, setConfirmOverwrite] = useState(null); // {existing}
+  const inputRef = useRef(null);
+
+  useEscapeKey(onClose, open);
+
+  useEffect(() => {
+    if (!open) return;
+    setText(""); setPerson(""); setDate(todayStoryDate());
+    setShowDetails(false); setError(""); setConfirmOverwrite(null);
+    const t = setTimeout(() => inputRef.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  const doSave = async () => {
+    const clean = text.trim();
+    if (!clean || saving) return;
+    setSaving(true);
+    setError("");
+    const res = await apiSetStoryQuote(currentUser?.name, date, clean, person);
+    setSaving(false);
+    if (!res.ok) { setError(res.error || "Uložení selhalo"); return; }
+    onSaved?.(res.story);
+    onClose();
+  };
+
+  const trySave = async () => {
+    const clean = text.trim();
+    if (!clean || saving) return;
+    // Nejdřív zjistit, jestli cílový den hlášku už má
+    const existing = await apiLoadStory(currentUser?.name, date);
+    if (existing.ok && existing.story?.quote) {
+      setConfirmOverwrite({ quote: existing.story.quote, person: existing.story.quotePerson });
+      return;
+    }
+    doSave();
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 175,
+        background: "rgba(0,0,0,0.35)",
+        display: "flex", alignItems: "flex-end", justifyContent: "flex-end",
+        padding: 14,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: theme.card,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 14,
+          boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+          width: "100%", maxWidth: 380, maxHeight: "82vh",
+          display: "flex", flexDirection: "column",
+        }}
+      >
+        <div style={{
+          padding: "10px 12px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>💬 Nová hláška</div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        <div style={{ padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+          {confirmOverwrite ? (
+            <>
+              <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>
+                {formatStoryDateLong(date)} už hlášku má:
+              </div>
+              <div style={{
+                fontSize: 12, fontStyle: "italic", color: theme.textSub,
+                background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                borderRadius: 8, padding: "7px 10px",
+              }}>
+                „{confirmOverwrite.quote}"{confirmOverwrite.person ? ` — ${confirmOverwrite.person}` : ""}
+              </div>
+              <div style={{ fontSize: 12, color: theme.textSub }}>
+                Nová ji přepíše. Na den připadá jedna hláška.
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button onClick={() => setConfirmOverwrite(null)} style={{
+                  ...buttonStyle(), padding: "8px 14px", fontSize: 13,
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.inputBorder}`,
+                }}>Zpět</button>
+                <button onClick={doSave} disabled={saving} style={{
+                  ...buttonStyle(), padding: "8px 14px", fontSize: 13,
+                  background: theme.red, color: "#fff",
+                }}>{saving ? "Ukládám…" : "Přepsat"}</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <textarea
+                ref={inputRef}
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); trySave(); }
+                }}
+                placeholder="Co někdo pronesl…"
+                rows={3}
+                style={{ ...inputStyle(theme), resize: "vertical", minHeight: 64, lineHeight: 1.5 }}
+              />
+
+              <StoryQuotePersonInput
+                value={person}
+                suggestions={peopleSuggestions}
+                theme={theme}
+                onChange={setPerson}
+              />
+
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                style={{
+                  ...buttonStyle(), background: "none", border: "none",
+                  color: theme.textSub, fontSize: 12, textAlign: "left",
+                  padding: 0, fontWeight: 500,
+                }}
+              >
+                {showDetails ? "▾" : "▸"} Podrobnosti
+                {date !== todayStoryDate() && (
+                  <span style={{ color: theme.yellow, fontWeight: 700 }}>
+                    {"  "}· {formatStoryDateShort(date)}
+                  </span>
+                )}
+              </button>
+
+              {showDetails && (
+                <div style={{
+                  background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 8,
+                }}>
+                  <div style={{ fontSize: 10, color: theme.textSub, fontWeight: 700 }}>DATUM</div>
+                  <input
+                    type="date"
+                    value={date}
+                    max={todayStoryDate()}
+                    onChange={e => setDate(e.target.value || todayStoryDate())}
+                    style={{ ...inputStyle(theme), padding: "6px 8px", fontSize: 13 }}
+                  />
+                  <div style={{ fontSize: 11, color: theme.textSub }}>{formatStoryDateLong(date)}</div>
+                </div>
+              )}
+
+              {error && <div style={{ fontSize: 12, color: theme.red }}>{error}</div>}
+
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={trySave}
+                  disabled={!text.trim() || saving}
+                  style={{
+                    ...buttonStyle(), padding: "9px 20px", fontSize: 13,
+                    background: text.trim() && !saving ? theme.purple : theme.inputBg,
+                    color: text.trim() && !saving ? "#fff" : theme.textSub,
+                    cursor: text.trim() && !saving ? "pointer" : "default",
+                  }}
+                >
+                  {saving ? "Ukládám…" : "Uložit hlášku"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   📔 DENNÍ PŘÍBĚH — ČTEČKA HLÁŠEK
+   Jedna hláška přes celou plochu, šipky ‹ › mezi nimi.
+   Respektuje aktivní filtr osoby.
+   ═══════════════════════════════════════════════════════ */
+
+function StoryQuoteReader({ quotes, startIndex, theme, onClose, onOpenDay }) {
+  const [idx, setIdx] = useState(startIndex || 0);
+  useEscapeKey(onClose);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "ArrowLeft") setIdx(i => Math.max(0, i - 1));
+      if (e.key === "ArrowRight") setIdx(i => Math.min(quotes.length - 1, i + 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [quotes.length]);
+
+  const q = quotes[idx];
+  if (!q) return null;
+
+  const nav = (dir, glyph) => {
+    const target = idx + dir;
+    const ok = target >= 0 && target < quotes.length;
+    return (
+      <button
+        onClick={() => ok && setIdx(target)}
+        disabled={!ok}
+        style={{
+          background: "none", border: "none",
+          cursor: ok ? "pointer" : "default",
+          color: ok ? theme.purple : theme.textDim,
+          fontSize: 30, padding: "0 10px", lineHeight: 1,
+        }}
+      >{glyph}</button>
+    );
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 170, padding: 12,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.card,
+        width: "100%", maxWidth: 520,
+        borderRadius: 14, display: "flex", flexDirection: "column",
+        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+      }}>
+        <div style={{
+          padding: "10px 12px", borderBottom: `1px solid ${theme.cardBorder}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+        }}>
+          <div style={{ fontSize: 12, color: theme.textSub }}>
+            {idx + 1} / {quotes.length}
+          </div>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: theme.textSub,
+            fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        <div style={{
+          display: "flex", alignItems: "center", padding: "8px 4px",
+          minHeight: 200,
+        }}>
+          {nav(-1, "‹")}
+          <div style={{ flex: 1, textAlign: "center", padding: "20px 8px" }}>
+            <div style={{
+              fontSize: 20, color: theme.text, lineHeight: 1.5,
+              fontStyle: "italic", wordBreak: "break-word",
+            }}>💬 „{q.quote}"</div>
+            {q.quotePerson && (
+              <div style={{ fontSize: 15, color: theme.purple, fontWeight: 700, marginTop: 14 }}>
+                — {q.quotePerson}
+              </div>
+            )}
+            <button
+              onClick={() => { onClose(); onOpenDay(q.date); }}
+              style={{
+                ...buttonStyle(), background: "none", border: "none",
+                color: theme.textSub, fontSize: 12, marginTop: 12, cursor: "pointer",
+              }}
+            >{formatStoryDateShort(q.date)} — otevřít den →</button>
+          </div>
+          {nav(1, "›")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════
    📔 DENNÍ PŘÍBĚH — HLAVNÍ PANEL
    3 pohledy: Home (poslední dny) / Hledání (6 os) / Milníky
    ═══════════════════════════════════════════════════════ */
 
-function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onQuickAdd, reloadKey }) {
+function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onQuickAdd, onQuickQuote, reloadKey }) {
   useEscapeKey(onClose);
   const [tab, setTab] = useState("home");
 
@@ -18293,6 +18685,8 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
   const [quotesLoaded, setQuotesLoaded] = useState(false);
   const [quotePeople, setQuotePeople] = useState([]);
   const [quotePersonFilter, setQuotePersonFilter] = useState(null);
+  const [readerIndex, setReaderIndex] = useState(null); // otevřená čtečka hlášek
+  const [copyToast, setCopyToast] = useState("");
 
   // Hledání
   const [qText, setQText] = useState("");
@@ -18442,6 +18836,25 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
       }}
     >{label}</button>
   );
+
+  const doCopyQuotes = async () => {
+    const text = formatQuotesForShare(quotes, { person: quotePersonFilter });
+    const ok = await copyTextToClipboard(text);
+    setCopyToast(ok ? "Zkopírováno" : "Kopírování selhalo");
+    setTimeout(() => setCopyToast(""), 1600);
+  };
+
+  const doShareQuotes = async () => {
+    const text = formatQuotesForShare(quotes, { person: quotePersonFilter });
+    const title = quotePersonFilter ? `Hlášky — ${quotePersonFilter}` : "Hlášky";
+    const res = await shareText(text, title);
+    if (res === "unsupported") {
+      // zařízení nemá systémové sdílení → spadneme na kopírování
+      const ok = await copyTextToClipboard(text);
+      setCopyToast(ok ? "Zkopírováno (sdílení není podporováno)" : "Nepodařilo se");
+      setTimeout(() => setCopyToast(""), 1900);
+    }
+  };
 
   const filterLabel = (txt) => (
     <div style={{
@@ -18683,6 +19096,36 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           {/* ── HLÁŠKY ── */}
           {tab === "quotes" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {/* Akční lišta */}
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={onQuickQuote} style={{
+                  ...buttonStyle(), padding: "6px 12px", fontSize: 12, fontWeight: 700,
+                  background: theme.purple, color: "#fff",
+                }}>+ Hláška</button>
+                <div style={{ flex: 1 }} />
+                {quotes.length > 0 && (
+                  <>
+                    <button onClick={doCopyQuotes} title="Kopírovat do schránky" style={{
+                      ...buttonStyle(), padding: "6px 11px", fontSize: 12,
+                      background: theme.inputBg, color: theme.text,
+                      border: `1px solid ${theme.inputBorder}`,
+                    }}>⧉ Kopírovat</button>
+                    <button onClick={doShareQuotes} title="Sdílet" style={{
+                      ...buttonStyle(), padding: "6px 11px", fontSize: 12,
+                      background: theme.inputBg, color: theme.text,
+                      border: `1px solid ${theme.inputBorder}`,
+                    }}>↗ Sdílet</button>
+                  </>
+                )}
+              </div>
+
+              {copyToast && (
+                <div style={{
+                  fontSize: 12, color: theme.green, textAlign: "center",
+                  background: `${theme.green}12`, borderRadius: 8, padding: "6px 10px",
+                }}>{copyToast}</div>
+              )}
+
               {/* Filtr podle osoby */}
               {quotePeople.length > 0 && (
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
@@ -18722,10 +19165,11 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                    : "Zatím žádná hláška. Přidej ji v režimu úprav dne."
                ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {quotes.map(s => (
+                  {quotes.map((s, i) => (
                     <div
                       key={s.date}
-                      onClick={() => onOpenDay(s.date)}
+                      onClick={() => setReaderIndex(i)}
+                      title="Otevřít čtečku"
                       style={{
                         background: `${theme.purple}0c`,
                         border: `1px solid ${theme.purple}30`,
@@ -18744,7 +19188,13 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                         {s.quotePerson
                           ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
                           : <span />}
-                        <span style={{ fontSize: 10, color: theme.textSub }}>{formatStoryDateShort(s.date)}</span>
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); onOpenDay(s.date); }}
+                          style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            fontSize: 10, color: theme.textSub, padding: 0,
+                          }}
+                        >{formatStoryDateShort(s.date)} →</button>
                       </div>
                     </div>
                   ))}
@@ -18753,6 +19203,16 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
             </div>
           )}
         </div>
+
+        {readerIndex !== null && (
+          <StoryQuoteReader
+            quotes={quotes}
+            startIndex={readerIndex}
+            theme={theme}
+            onClose={() => setReaderIndex(null)}
+            onOpenDay={onOpenDay}
+          />
+        )}
       </div>
     </div>
   );
@@ -19233,6 +19693,7 @@ function App() {
   const [storyReloadKey, setStoryReloadKey] = useState(0);
   const [showStoryQuickAdd, setShowStoryQuickAdd] = useState(false);
   const [storyQuickAddDate, setStoryQuickAddDate] = useState(null);
+  const [showStoryQuickQuote, setShowStoryQuickQuote] = useState(false);
 
   // Kategorie deníku — mění se jen ručně v nastavení, stačí po přihlášení.
   useEffect(() => {
@@ -20008,7 +20469,7 @@ function App() {
       const anyModalOpen =
         showReminderSheet || showQuickReminder || showNotesSheet ||
         editingNote !== null || showStatsSheet || showSearchSheet ||
-        showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd ||
+        showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd || showStoryQuickQuote ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
         showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel || showBlockList;
       if (anyModalOpen) return;
@@ -23258,6 +23719,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onClose={() => setShowStorySheet(false)}
             onOpenDay={(d) => setStoryEditorDate(d)}
             onQuickAdd={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
+            onQuickQuote={() => setShowStoryQuickQuote(true)}
           />
         )}
 
@@ -23287,8 +23749,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
         <StoryFab
           theme={theme}
-          hidden={showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd}
-          onOpen={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
+          hidden={showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd || showStoryQuickQuote}
+          onOpenEntry={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
+          onOpenQuote={() => setShowStoryQuickQuote(true)}
         />
 
         <StoryQuickAdd
@@ -23299,6 +23762,16 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           categories={storyCategories}
           peopleSuggestions={storyPeople}
           onClose={() => setShowStoryQuickAdd(false)}
+          onOpenDay={(d) => setStoryEditorDate(d)}
+          onSaved={() => setStoryReloadKey(k => k + 1)}
+        />
+
+        <StoryQuickQuote
+          open={showStoryQuickQuote}
+          currentUser={currentUser}
+          theme={theme}
+          peopleSuggestions={storyPeople}
+          onClose={() => setShowStoryQuickQuote(false)}
           onOpenDay={(d) => setStoryEditorDate(d)}
           onSaved={() => setStoryReloadKey(k => k + 1)}
         />
