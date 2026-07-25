@@ -3526,6 +3526,8 @@ function storyFromDb(s) {
     categories: Array.isArray(s.categories) ? s.categories : [],
     people: Array.isArray(s.people) ? s.people : [],
     milestone: !!s.milestone,
+    quote: s.quote || null,
+    quotePerson: s.quote_person || null,
     createdAt: s.created_at,
     updatedAt: s.updated_at,
   };
@@ -3541,6 +3543,8 @@ function emptyStory(userName, date) {
     categories: [],
     people: [],
     milestone: false,
+    quote: null,
+    quotePerson: null,
     createdAt: null,
     updatedAt: null,
   };
@@ -3758,6 +3762,10 @@ async function apiPatchStoryDay(userName, date, patch = {}) {
       p_add_people: patch.addPeople ?? null,
       p_del_people: patch.delPeople ?? null,
       p_set_people: patch.setPeople ?? null,
+      p_quote: patch.quote ?? null,
+      p_clear_quote: !!patch.clearQuote,
+      p_quote_person: patch.quotePerson ?? null,
+      p_clear_quote_person: !!patch.clearQuotePerson,
     });
     if (error) throw error;
     const row = storyRpcRow(data);
@@ -3800,6 +3808,20 @@ async function apiAddStoryPeople(userName, date, names) {
 
 async function apiRemoveStoryPeople(userName, date, names) {
   return apiPatchStoryDay(userName, date, { delPeople: Array.isArray(names) ? names : [names] });
+}
+
+// Nastavit / změnit hlášku dne. quote i person se ukládají spolu.
+// Prázdný quote hlášku smaže (a s ní i osobu).
+async function apiSetStoryQuote(userName, date, quote, person) {
+  const q = (quote || "").trim();
+  if (!q) {
+    return apiPatchStoryDay(userName, date, { clearQuote: true });
+  }
+  return apiPatchStoryDay(userName, date, {
+    quote: q,
+    quotePerson: (person || "").trim() || null,
+    clearQuotePerson: !(person || "").trim(),
+  });
 }
 
 // Smazání celého dne
@@ -3875,6 +3897,43 @@ async function apiLoadStoriesInRange(userName, fromDate, toDate) {
   } catch (e) {
     logServerError("apiLoadStoriesInRange", e, { userName, fromDate, toDate });
     return { ok: false, stories: [], error: e.message };
+  }
+}
+
+/* ── Hlášky ──────────────────────────────────────────── */
+
+// Dny, které mají hlášku. Volitelně jen od jedné osoby.
+async function apiLoadQuotes(userName, { person = null, limit = 200 } = {}) {
+  if (!userName) return { ok: false, quotes: [] };
+  try {
+    let q = supabase
+      .from("daily_stories")
+      .select(STORY_SELECT)
+      .eq("user_name", userName)
+      .not("quote", "is", null)
+      .order("date", { ascending: false })
+      .limit(limit);
+    if (person) q = q.eq("quote_person", person);
+
+    const { data, error } = await q;
+    if (error) throw error;
+    return { ok: true, quotes: (data || []).map(storyFromDb) };
+  } catch (e) {
+    logServerError("apiLoadQuotes", e, { userName, person });
+    return { ok: false, quotes: [], error: e.message };
+  }
+}
+
+// Osoby, které něco pronesly — pro filtr chips (řazeno dle četnosti).
+async function apiQuotePeople(userName) {
+  if (!userName) return { ok: false, people: [] };
+  try {
+    const { data, error } = await supabase.rpc("story_quote_people", { p_user_name: userName });
+    if (error) throw error;
+    return { ok: true, people: (data || []).map(r => ({ name: r.person, count: Number(r.cnt) })) };
+  } catch (e) {
+    logServerError("apiQuotePeople", e, { userName });
+    return { ok: false, people: [], error: e.message };
   }
 }
 
@@ -17187,6 +17246,49 @@ function StoryPeopleInput({ people, suggestions, onAdd, onRemove, theme }) {
   );
 }
 
+// Autor hlášky — jedna osoba, s návrhy ze stejného zdroje jako osoby dne.
+function StoryQuotePersonInput({ value, suggestions, onChange, theme }) {
+  const unused = (suggestions || []).filter(s => s !== value).slice(0, 10);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          type="text"
+          value={value || ""}
+          placeholder="Kdo to řekl…"
+          onChange={e => onChange(e.target.value)}
+          style={{ ...inputStyle(theme), flex: 1, padding: "7px 10px", fontSize: 13 }}
+        />
+        {value && (
+          <button
+            onClick={() => onChange("")}
+            title="Smazat autora"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: theme.textSub, fontSize: 16, padding: "0 4px",
+            }}
+          >×</button>
+        )}
+      </div>
+      {unused.length > 0 && (
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          {unused.map(sug => (
+            <button
+              key={sug}
+              onClick={() => onChange(sug)}
+              style={{
+                ...buttonStyle(), padding: "3px 9px", fontSize: 11, fontWeight: 500,
+                background: "transparent", color: theme.textSub,
+                border: `1px dashed ${theme.inputBorder}`, borderRadius: 20,
+              }}
+            >{sug}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Panel vlastností dne — nálada, kategorie, osoby, milník.
 // Sdílí ho FAB (po uložení) i editor dne. Zapisuje rovnou do DB.
 function StoryDayTags({ story, categories, peopleSuggestions, currentUser, theme, onChanged, compact = false }) {
@@ -17564,6 +17666,11 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
   const [moveError, setMoveError] = useState("");
   const [moving, setMoving] = useState(false);
 
+  // Hláška dne — draft, ukládá se tlačítkem (ne při každém písmenu)
+  const [quoteText, setQuoteText] = useState("");
+  const [quotePerson, setQuotePerson] = useState("");
+  const [quoteSaving, setQuoteSaving] = useState(false);
+
   useEscapeKey(onClose);
 
   useEffect(() => {
@@ -17578,6 +17685,8 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
       ]);
       if (!alive) return;
       setStory(s.story);
+      setQuoteText(s.story?.quote || "");
+      setQuotePerson(s.story?.quotePerson || "");
       setDoneTasks(t.tasks || []);
       setPrevDate(p.date);
       setNextDate(n.date);
@@ -17632,6 +17741,18 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
     const res = await apiDeleteStoryDay(currentUser?.name, date);
     if (res.ok) { onDeleted?.(); onClose(); }
   };
+
+  const saveQuote = async () => {
+    if (quoteSaving) return;
+    setQuoteSaving(true);
+    const res = await apiSetStoryQuote(currentUser?.name, date, quoteText, quotePerson);
+    setQuoteSaving(false);
+    if (res.ok) apply(res.story);
+  };
+
+  const quoteDirty =
+    (quoteText || "") !== (story?.quote || "") ||
+    (quotePerson || "") !== (story?.quotePerson || "");
 
   const doMove = async () => {
     if (!moveTo || moveTo === date || moving) return;
@@ -17734,7 +17855,27 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
           ) : mode === "view" ? (
             /* ═══════ PROHLÍŽENÍ — jen text, žádné ovládací prvky ═══════ */
             <>
-              {entriesRead.length === 0 ? (
+              {story?.quote && (
+                <div style={{
+                  background: `${theme.purple}10`,
+                  border: `1px solid ${theme.purple}35`,
+                  borderLeft: `3px solid ${theme.purple}`,
+                  borderRadius: 10, padding: "10px 12px",
+                }}>
+                  <div style={{
+                    fontSize: 14, color: theme.text, lineHeight: 1.55,
+                    fontStyle: "italic", wordBreak: "break-word",
+                  }}>💬 „{story.quote}"</div>
+                  {story.quotePerson && (
+                    <div style={{
+                      fontSize: 12, color: theme.purple, fontWeight: 700,
+                      marginTop: 4, textAlign: "right",
+                    }}>— {story.quotePerson}</div>
+                  )}
+                </div>
+              )}
+
+              {entriesRead.length === 0 && !story?.quote ? (
                 <div style={{ textAlign: "center", padding: "30px 20px", color: theme.textSub, fontSize: 13 }}>
                   Na tenhle den zatím nic nemáš.
                   <div style={{ marginTop: 10 }}>
@@ -17744,7 +17885,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                     }}>Začít psát</button>
                   </div>
                 </div>
-              ) : (
+              ) : entriesRead.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
                   {entriesRead.map(e => (
                     <div key={e.id} style={{ display: "flex", gap: 11 }}>
@@ -17759,7 +17900,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                     </div>
                   ))}
                 </div>
-              )}
+              ) : null}
 
               {/* Kategorie a osoby jen jako popisky, bez emoji a bez ovládání */}
               {(story?.categories?.length > 0 || story?.people?.length > 0) && (
@@ -17968,6 +18109,52 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                 </div>
               )}
 
+              {/* Hláška dne */}
+              <div style={{
+                background: `${theme.purple}0c`,
+                border: `1px solid ${theme.purple}30`,
+                borderRadius: 10, padding: 10,
+                display: "flex", flexDirection: "column", gap: 8,
+              }}>
+                <div style={{
+                  fontSize: 10, fontWeight: 700, color: theme.purple,
+                  textTransform: "uppercase", letterSpacing: "0.5px",
+                }}>💬 Hláška dne</div>
+                <textarea
+                  value={quoteText}
+                  onChange={e => setQuoteText(e.target.value)}
+                  placeholder="Co dnes někdo pronesl…"
+                  rows={2}
+                  style={{ ...inputStyle(theme), resize: "vertical", minHeight: 44, lineHeight: 1.5 }}
+                />
+                <StoryQuotePersonInput
+                  value={quotePerson}
+                  suggestions={peopleSuggestions}
+                  theme={theme}
+                  onChange={setQuotePerson}
+                />
+                {quoteDirty && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                    <button
+                      onClick={() => { setQuoteText(story?.quote || ""); setQuotePerson(story?.quotePerson || ""); }}
+                      style={{
+                        ...buttonStyle(), padding: "6px 12px", fontSize: 12,
+                        background: theme.card, color: theme.textSub,
+                        border: `1px solid ${theme.inputBorder}`,
+                      }}
+                    >Zpět</button>
+                    <button
+                      onClick={saveQuote}
+                      disabled={quoteSaving}
+                      style={{
+                        ...buttonStyle(), padding: "6px 14px", fontSize: 12,
+                        background: theme.purple, color: "#fff",
+                      }}
+                    >{quoteSaving ? "Ukládám…" : (story?.quote ? "Uložit hlášku" : "Přidat hlášku")}</button>
+                  </div>
+                )}
+              </div>
+
               {/* Označení dne */}
               {story?.id && (
                 <div style={{ borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 12 }}>
@@ -18039,6 +18226,7 @@ function StoryDayCard({ s, catByKey, theme, onOpen }) {
           <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 5 }}>
             {s.milestone && <span>⭐</span>}
             {formatStoryDateShort(s.date)}
+            {s.quote && <span title="Má hlášku dne">💬</span>}
           </div>
           <div style={{ fontSize: 10, color: theme.textSub, flexShrink: 0 }}>
             {s.entries.length}×
@@ -18099,6 +18287,12 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
 
   const [milestones, setMilestones] = useState([]);
   const [milestonesLoaded, setMilestonesLoaded] = useState(false);
+
+  // 💬 Hlášky
+  const [quotes, setQuotes] = useState([]);
+  const [quotesLoaded, setQuotesLoaded] = useState(false);
+  const [quotePeople, setQuotePeople] = useState([]);
+  const [quotePersonFilter, setQuotePersonFilter] = useState(null);
 
   // Hledání
   const [qText, setQText] = useState("");
@@ -18165,6 +18359,22 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     })();
     return () => { alive = false; };
   }, [tab, currentUser?.name, reloadKey]);
+
+  useEffect(() => {
+    if (tab !== "quotes") return;
+    let alive = true;
+    (async () => {
+      const [q, p] = await Promise.all([
+        apiLoadQuotes(currentUser?.name, { person: quotePersonFilter }),
+        apiQuotePeople(currentUser?.name),
+      ]);
+      if (!alive) return;
+      setQuotes(q.quotes);
+      setQuotePeople(p.people);
+      setQuotesLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, [tab, currentUser?.name, reloadKey, quotePersonFilter]);
 
   const runSearch = async () => {
     setSearching(true);
@@ -18289,6 +18499,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           {tabBtn("home", "📔 Deník")}
           {tabBtn("search", "🔍 Hledání")}
           {tabBtn("milestones", "⭐ Milníky")}
+          {tabBtn("quotes", "💬 Hlášky")}
         </div>
 
         {tab === "home" && (
@@ -18467,6 +18678,79 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                 {milestones.map(s => <DayCard key={s.date} s={s} />)}
               </div>
             )
+          )}
+
+          {/* ── HLÁŠKY ── */}
+          {tab === "quotes" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {/* Filtr podle osoby */}
+              {quotePeople.length > 0 && (
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => setQuotePersonFilter(null)}
+                    style={{
+                      ...buttonStyle(), padding: "4px 11px", fontSize: 11,
+                      background: quotePersonFilter === null ? theme.purple : theme.inputBg,
+                      color: quotePersonFilter === null ? "#fff" : theme.text,
+                      border: `1px solid ${quotePersonFilter === null ? theme.purple : theme.inputBorder}`,
+                      borderRadius: 20,
+                    }}
+                  >Všichni</button>
+                  {quotePeople.map(qp => {
+                    const active = quotePersonFilter === qp.name;
+                    return (
+                      <button
+                        key={qp.name}
+                        onClick={() => setQuotePersonFilter(active ? null : qp.name)}
+                        style={{
+                          ...buttonStyle(), padding: "4px 11px", fontSize: 11,
+                          background: active ? theme.purple : theme.inputBg,
+                          color: active ? "#fff" : theme.text,
+                          border: `1px solid ${active ? theme.purple : theme.inputBorder}`,
+                          borderRadius: 20,
+                        }}
+                      >{qp.name} <span style={{ opacity: 0.6 }}>{qp.count}</span></button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!quotesLoaded ? emptyBox("Načítám…") :
+               quotes.length === 0 ? emptyBox(
+                 quotePersonFilter
+                   ? `Od „${quotePersonFilter}" zatím žádná hláška.`
+                   : "Zatím žádná hláška. Přidej ji v režimu úprav dne."
+               ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {quotes.map(s => (
+                    <div
+                      key={s.date}
+                      onClick={() => onOpenDay(s.date)}
+                      style={{
+                        background: `${theme.purple}0c`,
+                        border: `1px solid ${theme.purple}30`,
+                        borderLeft: `3px solid ${theme.purple}`,
+                        borderRadius: 10, padding: "9px 11px", cursor: "pointer",
+                      }}
+                    >
+                      <div style={{
+                        fontSize: 13, color: theme.text, lineHeight: 1.5,
+                        fontStyle: "italic", wordBreak: "break-word",
+                      }}>💬 „{s.quote}"</div>
+                      <div style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        gap: 8, marginTop: 4,
+                      }}>
+                        {s.quotePerson
+                          ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
+                          : <span />}
+                        <span style={{ fontSize: 10, color: theme.textSub }}>{formatStoryDateShort(s.date)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
