@@ -3817,11 +3817,21 @@ async function apiSetStoryQuote(userName, date, quote, person) {
   if (!q) {
     return apiPatchStoryDay(userName, date, { clearQuote: true });
   }
-  return apiPatchStoryDay(userName, date, {
+  const res = await apiPatchStoryDay(userName, date, {
     quote: q,
     quotePerson: (person || "").trim() || null,
     clearQuotePerson: !(person || "").trim(),
   });
+  // Pojistka: pokud server hlášku nevrátil (např. stará verze RPC v DB
+  // bez sloupce quote), nehlásit falešný úspěch.
+  if (res.ok && res.story && (res.story.quote || "").trim() !== q) {
+    return {
+      ok: false,
+      error: "Hláška se neuložila správně. Nejspíš chybí aktualizace databáze — spusť opravný SQL skript (story_patch_day).",
+      story: res.story,
+    };
+  }
+  return res;
 }
 
 // Smazání celého dne
@@ -3985,6 +3995,24 @@ async function apiLoadQuotes(userName, { person = null, limit = 200 } = {}) {
   } catch (e) {
     logServerError("apiLoadQuotes", e, { userName, person });
     return { ok: false, quotes: [], error: e.message };
+  }
+}
+
+// Přejmenovat / sloučit autora hlášky napříč všemi dny.
+// Když p_to už existuje, hlášky se sloučí pod jedno jméno.
+async function apiRenameQuotePerson(userName, fromName, toName) {
+  const to = (toName || "").trim();
+  if (!userName || !fromName || !to) return { ok: false, error: "Chybí jméno" };
+  if (fromName === to) return { ok: true, count: 0 };
+  try {
+    const { data, error } = await supabase.rpc("story_rename_quote_person", {
+      p_user_name: userName, p_from: fromName, p_to: to,
+    });
+    if (error) throw error;
+    return { ok: true, count: Number(data) || 0 };
+  } catch (e) {
+    logServerError("apiRenameQuotePerson", e, { userName, fromName, toName });
+    return { ok: false, error: e.message };
   }
 }
 
@@ -18687,6 +18715,14 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
   const [quotePersonFilter, setQuotePersonFilter] = useState(null);
   const [readerIndex, setReaderIndex] = useState(null); // otevřená čtečka hlášek
   const [copyToast, setCopyToast] = useState("");
+  const [quotePersonQuery, setQuotePersonQuery] = useState(""); // hledání osoby ve filtru
+  const [quotePersonOpen, setQuotePersonOpen] = useState(false); // rozbalený výběr osoby
+  const [quoteTextQuery, setQuoteTextQuery] = useState("");      // hledání v textu hlášek
+  const [editingQuote, setEditingQuote] = useState(null);       // date rozeditované hlášky
+  const [eqText, setEqText] = useState("");
+  const [eqPerson, setEqPerson] = useState("");
+  const [eqBusy, setEqBusy] = useState(false);
+  const [confirmDeleteQuote, setConfirmDeleteQuote] = useState(null); // date
 
   // Hledání
   const [qText, setQText] = useState("");
@@ -18837,15 +18873,35 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     >{label}</button>
   );
 
+  // Text-filtr běží nad už načteným seznamem (osoba se řeší na serveru).
+  const visibleQuotes = useMemo(() => {
+    const q = storyStripDiacritics((quoteTextQuery || "").toLowerCase()).trim();
+    if (!q) return quotes;
+    return quotes.filter(s => {
+      const hay = storyStripDiacritics(
+        ((s.quote || "") + " " + (s.quotePerson || "")).toLowerCase()
+      );
+      return hay.includes(q);
+    });
+  }, [quotes, quoteTextQuery]);
+
+  const filteredQuotePeople = useMemo(() => {
+    const q = storyStripDiacritics((quotePersonQuery || "").toLowerCase()).trim();
+    if (!q) return quotePeople;
+    return quotePeople.filter(qp =>
+      storyStripDiacritics(qp.name.toLowerCase()).includes(q)
+    );
+  }, [quotePeople, quotePersonQuery]);
+
   const doCopyQuotes = async () => {
-    const text = formatQuotesForShare(quotes, { person: quotePersonFilter });
+    const text = formatQuotesForShare(visibleQuotes, { person: quotePersonFilter });
     const ok = await copyTextToClipboard(text);
     setCopyToast(ok ? "Zkopírováno" : "Kopírování selhalo");
     setTimeout(() => setCopyToast(""), 1600);
   };
 
   const doShareQuotes = async () => {
-    const text = formatQuotesForShare(quotes, { person: quotePersonFilter });
+    const text = formatQuotesForShare(visibleQuotes, { person: quotePersonFilter });
     const title = quotePersonFilter ? `Hlášky — ${quotePersonFilter}` : "Hlášky";
     const res = await shareText(text, title);
     if (res === "unsupported") {
@@ -18854,6 +18910,47 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
       setCopyToast(ok ? "Zkopírováno (sdílení není podporováno)" : "Nepodařilo se");
       setTimeout(() => setCopyToast(""), 1900);
     }
+  };
+
+  const startEditQuote = (s) => {
+    setEditingQuote(s.date);
+    setEqText(s.quote || "");
+    setEqPerson(s.quotePerson || "");
+    setConfirmDeleteQuote(null);
+  };
+
+  const saveEditQuote = async (dateStr) => {
+    const t = eqText.trim();
+    if (!t || eqBusy) return;
+    setEqBusy(true);
+    const res = await apiSetStoryQuote(currentUser?.name, dateStr, t, eqPerson);
+    setEqBusy(false);
+    if (!res.ok) {
+      setCopyToast(res.error || "Uložení selhalo");
+      setTimeout(() => setCopyToast(""), 2600);
+      return;
+    }
+    setEditingQuote(null);
+    reloadQuotesLocal();
+  };
+
+  const deleteQuote = async (dateStr) => {
+    setEqBusy(true);
+    // smazat jen hlášku, den zůstane; apiSetStoryQuote s prázdným = clearQuote
+    const res = await apiSetStoryQuote(currentUser?.name, dateStr, "", "");
+    setEqBusy(false);
+    setConfirmDeleteQuote(null);
+    if (res.ok) reloadQuotesLocal();
+  };
+
+  // Znovu načíst hlášky i seznam osob po změně (bez zavření panelu).
+  const reloadQuotesLocal = async () => {
+    const [q, pp] = await Promise.all([
+      apiLoadQuotes(currentUser?.name, { person: quotePersonFilter }),
+      apiQuotePeople(currentUser?.name),
+    ]);
+    setQuotes(q.quotes);
+    setQuotePeople(pp.people);
   };
 
   const filterLabel = (txt) => (
@@ -19126,76 +19223,194 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                 }}>{copyToast}</div>
               )}
 
-              {/* Filtr podle osoby */}
+              {/* Filtr osoby — rozbalovací výběr s hledáním (zvládne i stovky jmen) */}
               {quotePeople.length > 0 && (
-                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                <div style={{ position: "relative" }}>
                   <button
-                    onClick={() => setQuotePersonFilter(null)}
+                    onClick={() => setQuotePersonOpen(o => !o)}
                     style={{
-                      ...buttonStyle(), padding: "4px 11px", fontSize: 11,
-                      background: quotePersonFilter === null ? theme.purple : theme.inputBg,
-                      color: quotePersonFilter === null ? "#fff" : theme.text,
-                      border: `1px solid ${quotePersonFilter === null ? theme.purple : theme.inputBorder}`,
-                      borderRadius: 20,
+                      ...buttonStyle(), width: "100%", padding: "8px 11px", fontSize: 12,
+                      background: theme.inputBg, color: theme.text,
+                      border: `1px solid ${quotePersonFilter ? theme.purple : theme.inputBorder}`,
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
                     }}
-                  >Všichni</button>
-                  {quotePeople.map(qp => {
-                    const active = quotePersonFilter === qp.name;
-                    return (
-                      <button
-                        key={qp.name}
-                        onClick={() => setQuotePersonFilter(active ? null : qp.name)}
-                        style={{
-                          ...buttonStyle(), padding: "4px 11px", fontSize: 11,
-                          background: active ? theme.purple : theme.inputBg,
-                          color: active ? "#fff" : theme.text,
-                          border: `1px solid ${active ? theme.purple : theme.inputBorder}`,
-                          borderRadius: 20,
-                        }}
-                      >{qp.name} <span style={{ opacity: 0.6 }}>{qp.count}</span></button>
-                    );
-                  })}
+                  >
+                    <span style={{ fontWeight: quotePersonFilter ? 700 : 500, color: quotePersonFilter ? theme.purple : theme.text }}>
+                      {quotePersonFilter ? `💬 ${quotePersonFilter}` : "Všichni autoři"}
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {quotePersonFilter && (
+                        <span
+                          onClick={(e) => { e.stopPropagation(); setQuotePersonFilter(null); }}
+                          style={{ color: theme.textSub, fontSize: 15, cursor: "pointer" }}
+                        >×</span>
+                      )}
+                      <span style={{ color: theme.textSub, fontSize: 11 }}>{quotePersonOpen ? "▲" : "▼"}</span>
+                    </span>
+                  </button>
+
+                  {quotePersonOpen && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 5,
+                      background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                      borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+                      maxHeight: 280, display: "flex", flexDirection: "column",
+                    }}>
+                      <div style={{ padding: 8, borderBottom: `1px solid ${theme.cardBorder}` }}>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={quotePersonQuery}
+                          placeholder="Najít osobu…"
+                          onChange={e => setQuotePersonQuery(e.target.value)}
+                          style={{ ...inputStyle(theme), padding: "7px 10px", fontSize: 13 }}
+                        />
+                      </div>
+                      <div style={{ overflowY: "auto", padding: 6 }}>
+                        <button
+                          onClick={() => { setQuotePersonFilter(null); setQuotePersonOpen(false); setQuotePersonQuery(""); }}
+                          style={{
+                            ...buttonStyle(), width: "100%", textAlign: "left", padding: "7px 10px",
+                            fontSize: 13, background: quotePersonFilter === null ? theme.accentSoft : "transparent",
+                            color: theme.text, border: "none", borderRadius: 8,
+                          }}
+                        >Všichni autoři</button>
+                        {filteredQuotePeople.length === 0 && (
+                          <div style={{ fontSize: 12, color: theme.textSub, padding: "8px 10px" }}>
+                            Nikdo takový.
+                          </div>
+                        )}
+                        {filteredQuotePeople.map(qp => {
+                          const active = quotePersonFilter === qp.name;
+                          return (
+                            <button
+                              key={qp.name}
+                              onClick={() => { setQuotePersonFilter(qp.name); setQuotePersonOpen(false); setQuotePersonQuery(""); }}
+                              style={{
+                                ...buttonStyle(), width: "100%", padding: "7px 10px", fontSize: 13,
+                                background: active ? theme.accentSoft : "transparent",
+                                color: theme.text, border: "none", borderRadius: 8,
+                                display: "flex", alignItems: "center", justifyContent: "space-between",
+                              }}
+                            >
+                              <span style={{ fontWeight: active ? 700 : 500 }}>{qp.name}</span>
+                              <span style={{
+                                fontSize: 11, color: theme.textSub,
+                                background: theme.inputBg, borderRadius: 20, padding: "1px 8px",
+                              }}>{qp.count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
+              )}
+
+              {/* Hledání v textu hlášek */}
+              {quotes.length > 0 && (
+                <input
+                  type="text"
+                  value={quoteTextQuery}
+                  placeholder="Hledat v hláškách…"
+                  onChange={e => setQuoteTextQuery(e.target.value)}
+                  style={{ ...inputStyle(theme), padding: "8px 11px", fontSize: 13 }}
+                />
               )}
 
               {!quotesLoaded ? emptyBox("Načítám…") :
                quotes.length === 0 ? emptyBox(
                  quotePersonFilter
                    ? `Od „${quotePersonFilter}" zatím žádná hláška.`
-                   : "Zatím žádná hláška. Přidej ji v režimu úprav dne."
-               ) : (
+                   : "Zatím žádná hláška. Přidej ji tlačítkem + Hláška."
+               ) :
+               visibleQuotes.length === 0 ? emptyBox(`Nic neodpovídá „${quoteTextQuery}".`) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {quotes.map((s, i) => (
+                  {visibleQuotes.map((s, i) => (
                     <div
                       key={s.date}
-                      onClick={() => setReaderIndex(i)}
-                      title="Otevřít čtečku"
                       style={{
                         background: `${theme.purple}0c`,
                         border: `1px solid ${theme.purple}30`,
                         borderLeft: `3px solid ${theme.purple}`,
-                        borderRadius: 10, padding: "9px 11px", cursor: "pointer",
+                        borderRadius: 10, padding: "9px 11px",
                       }}
                     >
-                      <div style={{
-                        fontSize: 13, color: theme.text, lineHeight: 1.5,
-                        fontStyle: "italic", wordBreak: "break-word",
-                      }}>💬 „{s.quote}"</div>
-                      <div style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        gap: 8, marginTop: 4,
-                      }}>
-                        {s.quotePerson
-                          ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
-                          : <span />}
-                        <button
-                          onClick={(ev) => { ev.stopPropagation(); onOpenDay(s.date); }}
-                          style={{
-                            background: "none", border: "none", cursor: "pointer",
-                            fontSize: 10, color: theme.textSub, padding: 0,
-                          }}
-                        >{formatStoryDateShort(s.date)} →</button>
-                      </div>
+                      {editingQuote === s.date ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <textarea
+                            value={eqText}
+                            onChange={e => setEqText(e.target.value)}
+                            rows={2}
+                            placeholder="Text hlášky…"
+                            style={{ ...inputStyle(theme), resize: "vertical", minHeight: 44, lineHeight: 1.5 }}
+                          />
+                          <StoryQuotePersonInput
+                            value={eqPerson}
+                            suggestions={(quotePeople || []).map(q => q.name)}
+                            theme={theme}
+                            onChange={setEqPerson}
+                          />
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <button onClick={() => setEditingQuote(null)} style={{
+                              ...buttonStyle(), padding: "5px 12px", fontSize: 12,
+                              background: theme.card, color: theme.textSub,
+                              border: `1px solid ${theme.inputBorder}`,
+                            }}>Zrušit</button>
+                            <button onClick={() => saveEditQuote(s.date)} disabled={eqBusy || !eqText.trim()} style={{
+                              ...buttonStyle(), padding: "5px 12px", fontSize: 12,
+                              background: theme.purple, color: "#fff",
+                            }}>{eqBusy ? "…" : "Uložit"}</button>
+                          </div>
+                        </div>
+                      ) : confirmDeleteQuote === s.date ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ flex: 1, fontSize: 12, color: theme.red }}>Smazat tuhle hlášku?</span>
+                          <button onClick={() => setConfirmDeleteQuote(null)} style={{
+                            ...buttonStyle(), padding: "4px 10px", fontSize: 11,
+                            background: theme.card, color: theme.text,
+                            border: `1px solid ${theme.inputBorder}`,
+                          }}>Ne</button>
+                          <button onClick={() => deleteQuote(s.date)} disabled={eqBusy} style={{
+                            ...buttonStyle(), padding: "4px 10px", fontSize: 11,
+                            background: theme.red, color: "#fff",
+                          }}>Smazat</button>
+                        </div>
+                      ) : (
+                        <>
+                          <div
+                            onClick={() => setReaderIndex(i)}
+                            title="Otevřít čtečku"
+                            style={{
+                              fontSize: 13, color: theme.text, lineHeight: 1.5,
+                              fontStyle: "italic", wordBreak: "break-word", cursor: "pointer",
+                              minHeight: 18,
+                            }}
+                          >💬 „{s.quote}"</div>
+                          <div style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between",
+                            gap: 8, marginTop: 4,
+                          }}>
+                            {s.quotePerson
+                              ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
+                              : <span style={{ fontSize: 11, color: theme.textDim }}>(bez autora)</span>}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <button onClick={() => startEditQuote(s)} title="Upravit hlášku" style={{
+                                background: "none", border: "none", cursor: "pointer",
+                                fontSize: 12, color: theme.textSub, padding: "2px 4px",
+                              }}>✎</button>
+                              <button onClick={() => setConfirmDeleteQuote(s.date)} title="Smazat hlášku" style={{
+                                background: "none", border: "none", cursor: "pointer",
+                                fontSize: 12, color: theme.textSub, padding: "2px 4px",
+                              }}>🗑</button>
+                              <button onClick={() => onOpenDay(s.date)} title="Otevřít den" style={{
+                                background: "none", border: "none", cursor: "pointer",
+                                fontSize: 10, color: theme.textSub, padding: "2px 4px",
+                              }}>{formatStoryDateShort(s.date)} →</button>
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -19206,7 +19421,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
 
         {readerIndex !== null && (
           <StoryQuoteReader
-            quotes={quotes}
+            quotes={visibleQuotes}
             startIndex={readerIndex}
             theme={theme}
             onClose={() => setReaderIndex(null)}
@@ -19238,6 +19453,13 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
 
   const [settings, setSettings] = useState(null);
 
+  // Autoři hlášek — přejmenování / sloučení
+  const [quotePeople, setQuotePeople] = useState([]);
+  const [renamingPerson, setRenamingPerson] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameToast, setRenameToast] = useState("");
+
   useEffect(() => { setList(categories || []); }, [categories]);
 
   useEffect(() => {
@@ -19246,6 +19468,27 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
       setSettings(r.settings);
     })();
   }, [currentUser?.name]);
+
+  const loadQuotePeople = async () => {
+    const r = await apiQuotePeople(currentUser?.name);
+    setQuotePeople(r.people || []);
+  };
+  useEffect(() => { loadQuotePeople(); }, [currentUser?.name]);
+
+  const doRename = async () => {
+    const to = renameValue.trim();
+    if (!renamingPerson || !to || renameBusy) return;
+    setRenameBusy(true);
+    const res = await apiRenameQuotePerson(currentUser?.name, renamingPerson, to);
+    setRenameBusy(false);
+    setRenamingPerson(null);
+    setRenameValue("");
+    if (res.ok) {
+      setRenameToast(res.count > 0 ? `Přejmenováno u ${res.count} hlášek` : "Beze změny");
+      setTimeout(() => setRenameToast(""), 1800);
+      loadQuotePeople();
+    }
+  };
 
   const refresh = async () => {
     const r = await apiLoadStoryCategories(currentUser?.name);
@@ -19412,6 +19655,72 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
               }}>Přidat</button>
             </div>
           </div>
+
+          {/* Autoři hlášek */}
+          {quotePeople.length > 0 && (
+            <div style={{ borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: theme.text, marginBottom: 4 }}>
+                💬 Autoři hlášek
+              </div>
+              <div style={{ fontSize: 11, color: theme.textSub, marginBottom: 8, lineHeight: 1.4 }}>
+                Přejmenováním sjednotíš překlepy (např. „linduška" → „Linduška").
+                Když nové jméno už existuje, hlášky se sloučí.
+              </div>
+
+              {renameToast && (
+                <div style={{
+                  fontSize: 12, color: theme.green, textAlign: "center",
+                  background: `${theme.green}12`, borderRadius: 8, padding: "6px 10px", marginBottom: 8,
+                }}>{renameToast}</div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {quotePeople.map(qp => (
+                  <div key={qp.name} style={{
+                    background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+                    borderRadius: 8, padding: "6px 8px",
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    {renamingPerson === qp.name ? (
+                      <>
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={e => setRenameValue(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") doRename(); }}
+                          style={{ ...inputStyle(theme), flex: 1, padding: "5px 8px", fontSize: 13 }}
+                        />
+                        <button onClick={doRename} disabled={renameBusy || !renameValue.trim()} style={{
+                          ...buttonStyle(), padding: "5px 10px", fontSize: 12,
+                          background: theme.purple, color: "#fff",
+                        }}>{renameBusy ? "…" : "Uložit"}</button>
+                        <button onClick={() => { setRenamingPerson(null); setRenameValue(""); }} style={{
+                          background: "none", border: "none", color: theme.textSub,
+                          fontSize: 16, cursor: "pointer", padding: "0 3px",
+                        }}>×</button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ flex: 1, fontSize: 13, color: theme.text }}>{qp.name}</span>
+                        <span style={{
+                          fontSize: 11, color: theme.textSub,
+                          background: theme.card, borderRadius: 20, padding: "1px 8px",
+                        }}>{qp.count}</span>
+                        <button
+                          onClick={() => { setRenamingPerson(qp.name); setRenameValue(qp.name); }}
+                          title="Přejmenovat"
+                          style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            color: theme.textSub, fontSize: 12, padding: "2px 6px",
+                          }}
+                        >✎</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Připomínka */}
           {settings && (
