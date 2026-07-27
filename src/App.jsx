@@ -3598,7 +3598,7 @@ function storyCategoryKeyFrom(label, existingKeys = []) {
    Deník je soukromý → žádný offline queue, jen čtecí cache u kategorií.
    ═══════════════════════════════════════════════════════ */
 
-const STORY_SELECT = "id, user_name, date, entries, mood, categories, people, milestone, created_at, updated_at";
+const STORY_SELECT = "id, user_name, date, entries, mood, categories, people, milestone, quote, quote_person, created_at, updated_at";
 
 /* ── Načítání ────────────────────────────────────────── */
 
