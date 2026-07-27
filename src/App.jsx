@@ -4151,9 +4151,12 @@ async function apiLoadMilestones(userName, { limit = 200 } = {}) {
 async function apiRecentStoryPeople(userName, { days = 60, max = 20 } = {}) {
   if (!userName) return { ok: false, people: [] };
   try {
+    // Jeden zdroj jmen pro celý deník: osoby dne (people) I autoři hlášek
+    // (quote_person). Díky tomu se jméno zadané u hlášky nabízí i u zápisku
+    // a naopak.
     const { data, error } = await supabase
       .from("daily_stories")
-      .select("people, date")
+      .select("people, quote_person, date")
       .eq("user_name", userName)
       .order("date", { ascending: false })
       .limit(days);
@@ -4162,7 +4165,10 @@ async function apiRecentStoryPeople(userName, { days = 60, max = 20 } = {}) {
     const counts = new Map();
     for (const row of data || []) {
       for (const p of row.people || []) {
-        counts.set(p, (counts.get(p) || 0) + 1);
+        if (p) counts.set(p, (counts.get(p) || 0) + 1);
+      }
+      if (row.quote_person) {
+        counts.set(row.quote_person, (counts.get(row.quote_person) || 0) + 1);
       }
     }
     const people = [...counts.entries()]
@@ -18749,7 +18755,7 @@ function StoryQuoteReader({ quotes, startIndex, theme, onClose, onOpenDay }) {
    3 pohledy: Home (poslední dny) / Hledání (6 os) / Milníky
    ═══════════════════════════════════════════════════════ */
 
-function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onQuickAdd, onQuickQuote, reloadKey }) {
+function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onQuickAdd, onQuickQuote, onDataChanged, reloadKey }) {
   useEscapeKey(onClose);
   const [tab, setTab] = useState("home");
 
@@ -19009,6 +19015,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     ]);
     setQuotes(q.quotes);
     setQuotePeople(pp.people);
+    onDataChanged?.(); // ať se obnoví i sdílené návrhy osob v rodiči
   };
 
   const filterLabel = (txt) => (
@@ -24087,6 +24094,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onOpenDay={(d) => setStoryEditorDate(d)}
             onQuickAdd={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
             onQuickQuote={() => setShowStoryQuickQuote(true)}
+            onDataChanged={() => setStoryReloadKey(k => k + 1)}
           />
         )}
 
