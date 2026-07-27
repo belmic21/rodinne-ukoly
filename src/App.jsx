@@ -3772,7 +3772,58 @@ async function apiPatchStoryDay(userName, date, patch = {}) {
     // null = server uklidil den, který zůstal úplně prázdný
     return { ok: true, story: row ? storyFromDb(row) : emptyStory(userName, date) };
   } catch (e) {
+    // Když RPC selže (např. v DB je stará verze funkce bez hlášky, nebo
+    // PostgREST drží zastaralé schéma), zkusit zápis přímo do tabulky.
+    console.warn("[apiPatchStoryDay] RPC selhalo, zkouším přímý zápis:", e.message);
+    const fb = await _patchStoryDayDirect(userName, date, patch);
+    if (fb.ok) return fb;
     logServerError("apiPatchStoryDay", e, { userName, date, patch });
+    return { ok: false, error: e.message };
+  }
+}
+
+// Záložní zápis vlastností dne přímo do tabulky (bez RPC).
+// Read-modify-write; pro soukromý deník je souběh nepravděpodobný.
+async function _patchStoryDayDirect(userName, date, patch = {}) {
+  try {
+    const loaded = await apiLoadStory(userName, date);
+    const cur = loaded.story || emptyStory(userName, date);
+
+    const nextCategories = patch.setCategories
+      ? patch.setCategories
+      : mergeStorySet(
+          removeFromStorySet(cur.categories, patch.delCategories || []),
+          patch.addCategories || []
+        );
+    const nextPeople = patch.setPeople
+      ? patch.setPeople
+      : mergeStorySet(
+          removeFromStorySet(cur.people, patch.delPeople || []),
+          patch.addPeople || []
+        );
+
+    const payload = {
+      user_name: userName,
+      date,
+      mood: patch.clearMood ? null : (patch.mood ?? cur.mood ?? null),
+      milestone: patch.milestone ?? cur.milestone ?? false,
+      categories: nextCategories,
+      people: nextPeople,
+      quote: patch.clearQuote ? null : (patch.quote ?? cur.quote ?? null),
+      quote_person: (patch.clearQuote || patch.clearQuotePerson)
+        ? null
+        : (patch.quotePerson ?? cur.quotePerson ?? null),
+    };
+
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .upsert(payload, { onConflict: "user_name,date" })
+      .select(STORY_SELECT)
+      .single();
+    if (error) throw error;
+    return { ok: true, story: storyFromDb(data) };
+  } catch (e) {
+    logServerError("_patchStoryDayDirect", e, { userName, date });
     return { ok: false, error: e.message };
   }
 }
@@ -3810,28 +3861,34 @@ async function apiRemoveStoryPeople(userName, date, names) {
   return apiPatchStoryDay(userName, date, { delPeople: Array.isArray(names) ? names : [names] });
 }
 
-// Nastavit / změnit hlášku dne. quote i person se ukládají spolu.
-// Prázdný quote hlášku smaže (a s ní i osobu).
+// Nastavit / změnit hlášku dne. quote i person se ukládají SPOLU.
+// Zapisuje PŘÍMO do tabulky (ne přes RPC) — odolné vůči tomu, jaká verze
+// funkce story_patch_day je zrovna v databázi. Prázdný quote hlášku smaže.
 async function apiSetStoryQuote(userName, date, quote, person) {
+  if (!userName || !date) return { ok: false, error: "Chybí parametry" };
   const q = (quote || "").trim();
-  if (!q) {
-    return apiPatchStoryDay(userName, date, { clearQuote: true });
+  const p = q ? ((person || "").trim() || null) : null; // bez textu nemá osoba smysl
+  try {
+    const { data, error } = await supabase
+      .from("daily_stories")
+      .upsert(
+        { user_name: userName, date, quote: q || null, quote_person: p },
+        { onConflict: "user_name,date" }
+      )
+      .select(STORY_SELECT)
+      .single();
+    if (error) throw error;
+
+    const story = storyFromDb(data);
+    // Pojistka: ověřit, že se text opravdu zapsal
+    if (q && (story.quote || "").trim() !== q) {
+      return { ok: false, error: "Hlášku se nepodařilo uložit.", story };
+    }
+    return { ok: true, story };
+  } catch (e) {
+    logServerError("apiSetStoryQuote", e, { userName, date });
+    return { ok: false, error: e.message };
   }
-  const res = await apiPatchStoryDay(userName, date, {
-    quote: q,
-    quotePerson: (person || "").trim() || null,
-    clearQuotePerson: !(person || "").trim(),
-  });
-  // Pojistka: pokud server hlášku nevrátil (např. stará verze RPC v DB
-  // bez sloupce quote), nehlásit falešný úspěch.
-  if (res.ok && res.story && (res.story.quote || "").trim() !== q) {
-    return {
-      ok: false,
-      error: "Hláška se neuložila správně. Nejspíš chybí aktualizace databáze — spusť opravný SQL skript (story_patch_day).",
-      story: res.story,
-    };
-  }
-  return res;
 }
 
 // Smazání celého dne
@@ -18661,10 +18718,11 @@ function StoryQuoteReader({ quotes, startIndex, theme, onClose, onOpenDay }) {
         }}>
           {nav(-1, "‹")}
           <div style={{ flex: 1, textAlign: "center", padding: "20px 8px" }}>
+            <div style={{ fontSize: 40, color: `${theme.purple}55`, lineHeight: 0.6, marginBottom: 6 }}>„</div>
             <div style={{
-              fontSize: 20, color: theme.text, lineHeight: 1.5,
+              fontSize: 20, color: q.quote ? theme.text : theme.textDim, lineHeight: 1.5,
               fontStyle: "italic", wordBreak: "break-word",
-            }}>💬 „{q.quote}"</div>
+            }}>{q.quote || "(prázdná hláška)"}</div>
             {q.quotePerson && (
               <div style={{ fontSize: 15, color: theme.purple, fontWeight: 700, marginTop: 14 }}>
                 — {q.quotePerson}
@@ -19382,11 +19440,11 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                             onClick={() => setReaderIndex(i)}
                             title="Otevřít čtečku"
                             style={{
-                              fontSize: 13, color: theme.text, lineHeight: 1.5,
+                              fontSize: 13, color: s.quote ? theme.text : theme.textDim, lineHeight: 1.5,
                               fontStyle: "italic", wordBreak: "break-word", cursor: "pointer",
                               minHeight: 18,
                             }}
-                          >💬 „{s.quote}"</div>
+                          >💬 {s.quote ? `„${s.quote}"` : "(prázdná — klikni na ✎ a doplň)"}</div>
                           <div style={{
                             display: "flex", alignItems: "center", justifyContent: "space-between",
                             gap: 8, marginTop: 4,
