@@ -19045,7 +19045,10 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           gap: 8, flexShrink: 0,
         }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>📔 Denní příběh</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
+              📔 Denní příběh
+              <span style={{ fontSize: 9, fontWeight: 500, color: theme.textDim, marginLeft: 6 }}>build 260725-1730</span>
+            </div>
             {stats && (
               <div style={{ fontSize: 11, color: theme.textSub, marginTop: 1 }}>
                 {stats.total} dnů · ⭐ {stats.milestones}
