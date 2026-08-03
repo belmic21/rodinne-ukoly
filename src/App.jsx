@@ -9055,7 +9055,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote, onRemindTask }) {
 
 
   const [isOpen, setIsOpen] = useState(false);
@@ -9963,14 +9963,43 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               🎯
             </button>
           )}
-          {/* Quick snooze icon — visible only for active non-deferred tasks */}
+          {/* Připomínka — nastavit upozornění na konkrétní čas */}
+          {!taskIsDone && !taskIsDeleted && !taskIsArchived && canAct && onRemindTask && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemindTask(task);
+              }}
+              title="Připomenout v daný čas"
+              style={{
+                ...buttonStyle(),
+                width: "34px", height: "34px", padding: "0",
+                background: "transparent",
+                color: theme.textSub, fontSize: "17px",
+                border: `1px solid transparent`,
+                borderRadius: "6px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = theme.accentSoft;
+                e.currentTarget.style.borderColor = theme.accentBorder;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}>
+              ⏰
+            </button>
+          )}
+          {/* Odložit na později — přesýpací hodiny (ne budík, ten je připomínka) */}
           {!taskIsDone && !taskIsArchived && canAct && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 setSnoozeMenuOpen(!snoozeMenuOpen);
               }}
-              title="Odložit úkol"
+              title="Odložit úkol na později"
               style={{
                 ...buttonStyle(),
                 width: "34px", height: "34px", padding: "0",
@@ -9981,7 +10010,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 display: "flex", alignItems: "center", justifyContent: "center",
                 transition: "all 0.15s",
               }}>
-              ⏰
+              ⏳
             </button>
           )}
           {/* Vrátit z archivu — viditelné jen pro archivované úkoly */}
@@ -19047,7 +19076,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>
               📔 Denní příběh
-              <span style={{ fontSize: 9, fontWeight: 500, color: theme.textDim, marginLeft: 6 }}>build 260725-1730</span>
+              <span style={{ fontSize: 9, fontWeight: 500, color: theme.textDim, marginLeft: 6 }}>build 260727-0700</span>
             </div>
             {stats && (
               <div style={{ fontSize: 11, color: theme.textSub, marginTop: 1 }}>
@@ -25702,6 +25731,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         onStartFocus={(taskId) => {
                           setFocusInitialTask(taskId);
                           setShowFocus(true);
+                        }}
+                        onRemindTask={(t) => {
+                          setReminderPrefill({ text: t.title || "" });
+                          setShowQuickReminder(true);
                         }}
                       />
                     </BulkSelectableCard>
