@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Component } from "react";
+import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -2210,6 +2211,7 @@ function addToOfflineQueue(action) {
   const queue = getOfflineQueue();
   queue.push({ ...action, timestamp: Date.now() });
   cacheSet(OFFLINE_QUEUE, queue);
+  reportSyncQueued();
 }
 
 function clearOfflineQueue() {
@@ -2280,6 +2282,7 @@ async function flushOfflineQueue() {
   }
 
   cacheSet(OFFLINE_QUEUE, remaining);
+  reportSyncFlushed(flushed);
   return flushed;
 }
 
@@ -2287,14 +2290,40 @@ async function flushOfflineQueue() {
    ERROR CLASSIFICATION
    ═══════════════════════════════════════════════════════ */
 
-// Rozliš síťovou chybu (offline, fetch failed) od server chyby (4xx/5xx).
-// Síťová chyba → queue pro pozdější retry. Server chyba → log + alert pro vývojáře.
+// HTTP stavy, které znamenají "server teď nemůže, zkus to později".
+const TRANSIENT_HTTP_STATUS = [408, 425, 429, 500, 502, 503, 504, 521, 522, 523, 524];
+
+// Kódy chyb, které znamenají totéž na úrovni PostgREST / Postgresu.
+//   PGRST000-003 — PostgREST se nedostal k databázi nebo nenačetl schema cache
+//   08000/08003/08006 — spojení s databází spadlo
+//   53300 — příliš mnoho připojení, 53200 — došla paměť
+//   57P01/57P02/57P03 — databáze se vypíná, restartuje nebo startuje
+const TRANSIENT_ERROR_CODES = [
+  "PGRST000", "PGRST001", "PGRST002", "PGRST003",
+  "08000", "08003", "08006", "08P01",
+  "53300", "53200", "57P01", "57P02", "57P03",
+];
+
+// Rozliš dočasnou chybu (offline, fetch failed, výpadek serveru) od trvalé
+// server chyby (4xx, chybný sloupec, porušená podmínka).
+// Dočasná chyba → queue pro pozdější retry. Trvalá chyba → log + viditelné hlášení.
 function isNetworkError(e) {
   if (!e) return false;
   // Browser je prokazatelně offline
   if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
   // Supabase v JS error má někdy `message: "Failed to fetch"` při síťové chybě
   if (e.message && /failed to fetch|networkerror|load failed/i.test(e.message)) return true;
+
+  // ─── DOČASNÝ VÝPADEK DATOVÉ VRSTVY ───
+  // Když je Supabase projekt nezdravý (restart, došlá paměť, přetížení),
+  // PostgREST vrací 503 + kód PGRST002 "Could not query the database for the
+  // schema cache". Dřív to spadlo do kategorie "server chyba" a změna se
+  // ZAHODILA — proto mizely úkoly označené jako splněné.
+  // Tyhle chyby přejdou, takže změnu patří uložit do fronty a zkusit znovu.
+  const httpStatus = Number(e.status ?? e.statusCode ?? 0);
+  if (TRANSIENT_HTTP_STATUS.includes(httpStatus)) return true;
+  if (e.code && TRANSIENT_ERROR_CODES.includes(String(e.code))) return true;
+
   // PostgREST/Supabase chyby mají `code` (např. PGRST204) nebo `status` (4xx/5xx) — server chyba
   if (e.code || e.status >= 400) return false;
   // TypeError z fetch je obvykle síťová chyba
@@ -2323,6 +2352,114 @@ function logServerError(context, error, payload) {
     // Drž jen posledních 20 errorů
     localStorage.setItem("ft_server_errors", JSON.stringify(log.slice(0, 20)));
   } catch (e) { /* ignore */ }
+  // Ať se o chybě dozví i uživatel, ne jen konzole.
+  reportSyncError(context, error);
+}
+
+/* ═══════════════════════════════════════════════════════
+   SYNC HEALTH — viditelný stav spojení se serverem
+
+   Cílem je jediná věc: aplikace nikdy netvrdí "uloženo",
+   když uloženo není. Každá cesta k serveru hlásí výsledek
+   sem a odsud se to promítne do lišty a do odznaku v hlavičce.
+   ═══════════════════════════════════════════════════════ */
+
+// Kontexty, které znamenají ZÁPIS. Neúspěch u nich = hrozí ztráta dat.
+const WRITE_CONTEXT_RE = /^(apiCreate|apiUpdate|apiDelete|apiUpsert|apiDismiss|apiSnooze|apiReactivate|apiRestore|apiArchive|flushOfflineQueue)/;
+
+const syncState = {
+  pending: 0,          // kolik změn čeká ve frontě na odeslání
+  lostWrites: 0,       // kolik zápisů trvale selhalo (nutno ukázat uživateli)
+  serverDown: false,   // server neodpovídá (čtení selhává)
+  lastOkAt: null,
+  lastErrorAt: null,
+  lastErrorCode: null,
+  lastErrorContext: null,
+  justRecovered: 0,    // kolik změn se právě doodeslalo (pro zelené potvrzení)
+};
+
+const syncListeners = new Set();
+
+function subscribeSync(fn) {
+  syncListeners.add(fn);
+  return () => syncListeners.delete(fn);
+}
+
+function emitSync() {
+  const snapshot = { ...syncState };
+  syncListeners.forEach(fn => { try { fn(snapshot); } catch (e) { /* ignore */ } });
+}
+
+function refreshPendingCount() {
+  try { syncState.pending = getOfflineQueue().length; } catch (e) { syncState.pending = 0; }
+}
+
+// Cokoliv se serverem povedlo.
+function reportSyncOk() {
+  refreshPendingCount();
+  syncState.lastOkAt = Date.now();
+  syncState.serverDown = false;
+  if (syncState.pending === 0) {
+    syncState.lastErrorCode = null;
+    syncState.lastErrorContext = null;
+  }
+  emitSync();
+}
+
+// Změna se nepodařila odeslat, ale je bezpečně ve frontě.
+function reportSyncQueued() {
+  refreshPendingCount();
+  syncState.lastErrorAt = Date.now();
+  emitSync();
+}
+
+// Trvalá chyba. U zápisu to znamená, že se změna nikam neuložila.
+function reportSyncError(context, error) {
+  refreshPendingCount();
+  syncState.lastErrorAt = Date.now();
+  syncState.lastErrorCode = error?.code || error?.status || "chyba";
+  syncState.lastErrorContext = context || "neznámý";
+  if (WRITE_CONTEXT_RE.test(String(context || ""))) {
+    syncState.lostWrites += 1;
+  } else {
+    syncState.serverDown = true;
+  }
+  emitSync();
+}
+
+// Čtení ze serveru selhalo — data na obrazovce můžou být stará.
+function reportSyncStale(context, error) {
+  syncState.serverDown = true;
+  syncState.lastErrorAt = Date.now();
+  syncState.lastErrorCode = error?.code || error?.status || "offline";
+  syncState.lastErrorContext = context || "načítání";
+  emitSync();
+}
+
+// Fronta se doodeslala.
+function reportSyncFlushed(count) {
+  refreshPendingCount();
+  if (count > 0) {
+    syncState.justRecovered = count;
+    setTimeout(() => { syncState.justRecovered = 0; emitSync(); }, 8000);
+  }
+  reportSyncOk();
+}
+
+// Uživatel vzal ztracené zápisy na vědomí.
+function acknowledgeLostWrites() {
+  syncState.lostWrites = 0;
+  emitSync();
+}
+
+// Celkový verdikt pro UI.
+function syncSeverity(s) {
+  if (s.lostWrites > 0) return "error";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "offline";
+  if (s.pending > 0) return "pending";
+  if (s.serverDown) return "stale";
+  if (s.justRecovered > 0) return "recovered";
+  return "ok";
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -2667,9 +2804,11 @@ async function apiLoadTasks() {
       return t;
     });
     cacheSet(CACHE_TASKS, serverTasks);
+    reportSyncOk();
     return serverTasks;
   } catch (e) {
     console.warn("apiLoadTasks offline, using cache");
+    reportSyncStale("apiLoadTasks", e);
     return cacheGet(CACHE_TASKS) || [];
   }
 }
@@ -2736,6 +2875,7 @@ async function apiCreateTask(task) {
     if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
     const { error } = await supabase.from("tasks").insert(dbRow);
     if (error) throw error;
+    reportSyncOk();
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiCreateTask offline, queued");
@@ -2757,8 +2897,16 @@ async function apiUpdateTask(task) {
     if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
     // Archived_at — pro archiv (nový sloupec)
     if (task.archivedAt !== undefined) dbRow.archived_at = task.archivedAt;
-    const { error } = await supabase.from("tasks").update(dbRow).eq("id", task.id);
+    // .select("id") — chceme zpátky potvrzení, že se opravdu změnil nějaký řádek.
+    // Bez toho projde i UPDATE, který kvůli RLS nebo chybějícímu řádku nezměnil nic.
+    const { data, error } = await supabase.from("tasks").update(dbRow).eq("id", task.id).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) {
+      const noRows = new Error(`Úkol "${task.title || task.id}" se na serveru nezměnil (0 řádků).`);
+      noRows.code = "NOROWS";
+      throw noRows;
+    }
+    reportSyncOk();
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiUpdateTask offline, queued");
@@ -17262,6 +17410,127 @@ function Snackbar({ message, onUndo, visible, theme }) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   STAV SYNCHRONIZACE — lišta, která je vidět
+   ═══════════════════════════════════════════════════════ */
+
+// Hook, který drží aktuální stav spojení se serverem.
+function useSyncStatus() {
+  const [state, setState] = useState(() => ({ ...syncState }));
+  useEffect(() => {
+    refreshPendingCount();
+    setState({ ...syncState });
+    return subscribeSync(setState);
+  }, []);
+  return state;
+}
+
+function formatSyncTime(ts) {
+  if (!ts) return "zatím nikdy";
+  const d = new Date(ts);
+  return d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Lišta nahoře. Mlčí, dokud je všechno v pořádku.
+function SyncStatusBar({ theme, onRetry }) {
+  const sync = useSyncStatus();
+  const [hidden, setHidden] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const severity = syncSeverity(sync);
+
+  // Jakmile se stav změní, případné skrytí zrušíme — nová situace = nové upozornění.
+  useEffect(() => { setHidden(false); }, [severity, sync.pending, sync.lostWrites]);
+
+  if (severity === "ok" || hidden) return null;
+
+  const palette = {
+    error:     { bg: theme.red,    icon: "⚠️" },
+    offline:   { bg: theme.textSub, icon: "📡" },
+    pending:   { bg: theme.yellow, icon: "⏳" },
+    stale:     { bg: theme.orange, icon: "⚠️" },
+    recovered: { bg: theme.green,  icon: "✅" },
+  }[severity];
+
+  let text;
+  if (severity === "error") {
+    text = `Neuložené změny: ${sync.lostWrites}. Server je odmítl (${sync.lastErrorCode}). Zkontroluj úkoly, na kterých jsi právě pracoval.`;
+  } else if (severity === "offline") {
+    text = sync.pending > 0
+      ? `Jsi offline. ${sync.pending} změn čeká na odeslání, neztratí se.`
+      : "Jsi offline. Zobrazená data můžou být stará.";
+  } else if (severity === "pending") {
+    text = `${sync.pending} změn čeká na odeslání. Poslední spojení ${formatSyncTime(sync.lastOkAt)}.`;
+  } else if (severity === "stale") {
+    text = `Server neodpovídá (${sync.lastErrorCode}). Poslední úspěšné načtení ${formatSyncTime(sync.lastOkAt)} — data můžou být stará.`;
+  } else {
+    text = `Spojení obnoveno, ${sync.justRecovered} změn odesláno.`;
+  }
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try { await onRetry?.(); } finally { setRetrying(false); }
+  };
+
+  const bar = (
+    <div
+      data-sync-bar={severity}
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0, right: 0,
+        background: palette.bg,
+        color: "#fff",
+        fontFamily: FONT,
+        fontSize: "12px",
+        fontWeight: 600,
+        padding: "8px 12px",
+        paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
+        display: "flex", alignItems: "center", gap: "10px",
+        zIndex: 2147483000,
+        boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+      }}
+    >
+      <span style={{ fontSize: "14px", flexShrink: 0 }}>{palette.icon}</span>
+      <span style={{ flex: 1, lineHeight: 1.35 }}>{text}</span>
+      {(severity === "error" || severity === "pending" || severity === "stale") && (
+        <button
+          onClick={handleRetry}
+          disabled={retrying}
+          style={{
+            ...buttonStyle(),
+            background: "rgba(255,255,255,0.22)",
+            color: "#fff",
+            padding: "5px 10px",
+            fontSize: "11px",
+            fontWeight: 700,
+            flexShrink: 0,
+            opacity: retrying ? 0.6 : 1,
+          }}
+        >{retrying ? "ZKOUŠÍM…" : "ZKUSIT ZNOVU"}</button>
+      )}
+      <button
+        onClick={() => { if (severity === "error") acknowledgeLostWrites(); setHidden(true); }}
+        title="Skrýt"
+        style={{
+          ...buttonStyle(),
+          background: "transparent",
+          color: "#fff",
+          padding: "4px 6px",
+          fontSize: "14px",
+          flexShrink: 0,
+        }}
+      >✕</button>
+    </div>
+  );
+
+  // Portál přímo do <body>. Kdyby lištu nějaký rodičovský prvek s vlastním
+  // transformem nebo z-indexem uvěznil, takhle se k ní nedostane.
+  if (typeof document !== "undefined" && document.body) {
+    return createPortal(bar, document.body);
+  }
+  return bar;
+}
+
+/* ═══════════════════════════════════════════════════════
    📔 DENNÍ PŘÍBĚH — SDÍLENÉ UI PRVKY
    ═══════════════════════════════════════════════════════ */
 
@@ -20136,6 +20405,7 @@ function App() {
   const [focusSummaryAfter, setFocusSummaryAfter] = useState(null); // timestamp when focus closed with "all done"
   const [pendingCount, setPendingCount] = useState(() => getOfflineQueue().length);
   const undoTimerRef = useRef();
+  const sync = useSyncStatus();
 
   const theme = THEMES[themeName];
 
@@ -20159,6 +20429,35 @@ function App() {
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, []);
+
+  // Ruční "Zkusit znovu" z lišty stavu synchronizace.
+  const retrySync = useCallback(async () => {
+    const flushed = await flushOfflineQueue();
+    setPendingCount(getOfflineQueue().length);
+    const [freshUsers, freshTasks, freshComments] = await Promise.all([
+      apiLoadUsers(), apiLoadTasks(), apiLoadComments()
+    ]);
+    setUsers(freshUsers);
+    setTasks(freshTasks);
+    setComments(freshComments);
+    return flushed;
+  }, []);
+
+  // Automatické opakování: dokud něco visí ve frontě, zkoušej to každých 20 s.
+  // Výpadek Supabase tak aplikace přežije sama, bez zásahu uživatele.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!navigator.onLine) return;
+      if (getOfflineQueue().length === 0) return;
+      const flushed = await flushOfflineQueue();
+      setPendingCount(getOfflineQueue().length);
+      if (flushed > 0) {
+        const freshTasks = await apiLoadTasks();
+        setTasks(freshTasks);
+      }
+    }, 20000);
+    return () => clearInterval(id);
   }, []);
 
   // PWA install prompt — Chrome/Edge/Brave triggernou `beforeinstallprompt`,
@@ -20239,7 +20538,8 @@ function App() {
       // Flush any pending offline changes first
       if (navigator.onLine) {
         await flushOfflineQueue();
-        setPendingCount(0);
+        // Ne všechno se muselo podařit — přečti skutečný zbytek fronty.
+        setPendingCount(getOfflineQueue().length);
       }
 
       const [loadedUsers, loadedTasks, loadedComments] = await Promise.all([
@@ -23065,13 +23365,25 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             <span style={{
               fontSize: "9px", background: theme.red, color: "#fff",
               padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>OFFLINE{pendingCount > 0 ? ` (${pendingCount})` : ""}</span>
+            }}>OFFLINE{sync.pending > 0 ? ` (${sync.pending})` : ""}</span>
           )}
-          {online && pendingCount > 0 && (
-            <span style={{
+          {online && sync.lostWrites > 0 && (
+            <span title="Změny, které server odmítl uložit" style={{
+              fontSize: "9px", background: theme.red, color: "#fff",
+              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
+            }}>NEULOŽENO {sync.lostWrites}</span>
+          )}
+          {online && sync.lostWrites === 0 && sync.pending > 0 && (
+            <span title="Změny čekají na odeslání" style={{
               fontSize: "9px", background: theme.yellow, color: "#fff",
               padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>{pendingCount}↑</span>
+            }}>{sync.pending}↑</span>
+          )}
+          {online && sync.lostWrites === 0 && sync.pending === 0 && sync.serverDown && (
+            <span title="Server neodpovídá, zobrazená data můžou být stará" style={{
+              fontSize: "9px", background: theme.orange, color: "#fff",
+              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
+            }}>SERVER ?</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
@@ -25874,6 +26186,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           }}
         />
       )}
+
+      <SyncStatusBar theme={theme} onRetry={retrySync} />
 
       <Snackbar
         message={undoState?.message}
