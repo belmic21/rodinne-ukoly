@@ -11,6 +11,15 @@
     <meta name="apple-mobile-web-app-title" content="Úkoly" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>Rodinné úkoly</title>
+
+    <!-- Písmo DM Sans. Dřív se načítalo @importem uvnitř GLOBAL_CSS v App.jsx,
+         který se vkládá na třech místech — každý řez se proto stahoval třikrát.
+         Odsud se stáhne jednou a prohlížeč může začít dřív. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,700&display=swap" />
+
     <style>
       html, body { margin: 0; padding: 0; background: #0c1017; }
       body { overscroll-behavior: none; }
