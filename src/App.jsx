@@ -887,6 +887,21 @@ async function triggerReminderNotification(reminder) {
   });
 }
 
+// Levný otisk seznamu úkolů pro porovnání "změnilo se něco?".
+// Dřív se porovnávalo přes t.updatedAt, jenže tohle pole v datech vůbec není —
+// porovnání tedy vycházelo vždy jako shoda a polling přehlédl každou změnu
+// obsahu úkolu (text, termín, priorita). Zachytil jen přibytí a úbytek řádků.
+function tasksSignature(list) {
+  if (!Array.isArray(list)) return "";
+  let out = "";
+  for (const t of list) {
+    out += t.id + "|" + t.status + "|" + (t.completedAt || "") + "|" +
+           (t.dueDate || "") + "|" + (t.title || "").length + "|" +
+           (t.priority || "") + "|" + (t.doneBy ? t.doneBy.length : 0) + ";";
+  }
+  return out;
+}
+
 function processRecurring(tasks) {
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
@@ -2477,6 +2492,9 @@ async function checkDbSchema() {
     "checklist", "images", "created_by", "created_at",
     "completed_at", "completed_by_user", "deleted_at",
     "scratch_pad", "parked_reason", "parked_at", "parked_by", "time_spent_min",
+    // Sloupce, které aplikace čte nebo zapisuje mimo taskToDb — bez nich
+    // kontrola hlásila planý poplach o "extra sloupcích".
+    "shared_with", "rejected_by", "archived_at", "reminder_at",
   ];
 
   try {
@@ -17430,6 +17448,142 @@ function formatSyncTime(ts) {
   return d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
 }
 
+// Trvalý ukazatel v hlavičce. Na rozdíl od lišty je vidět POŘÁD,
+// takže ticho znamená "ověřeno uloženo", ne "nevím".
+function SyncPill({ theme, online, onRetry }) {
+  const sync = useSyncStatus();
+  const [open, setOpen] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [, tick] = useState(0);
+
+  // Přetiskni se každých 10 s, ať čas poslední synchronizace nezestárne na obrazovce.
+  useEffect(() => {
+    const id = setInterval(() => tick(t => t + 1), 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  const ageSec = sync.lastOkAt ? Math.round((Date.now() - sync.lastOkAt) / 1000) : null;
+  // Server bereme za nereagující, když se déle než 90 s nic nepovedlo.
+  // Nespoléháme na navigator.onLine — ten o výpadku Supabase nic neví.
+  const stale = !online || sync.serverDown || ageSec === null || ageSec > 90;
+
+  let color, label, title;
+  if (sync.lostWrites > 0) {
+    color = theme.red;
+    label = `NEULOŽENO ${sync.lostWrites}`;
+    title = "Server odmítl uložit změny. Klikni pro detail.";
+  } else if (sync.pending > 0) {
+    color = theme.yellow;
+    label = `${sync.pending} ČEKÁ`;
+    title = "Změny čekají ve frontě na odeslání.";
+  } else if (stale) {
+    color = theme.orange;
+    label = online ? "SERVER ?" : "OFFLINE";
+    title = "Spojení se serverem se teď nedaří.";
+  } else {
+    color = theme.green;
+    label = "ULOŽENO";
+    title = "Všechno je uložené na serveru.";
+  }
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try { await onRetry?.(); } finally { setRetrying(false); }
+  };
+
+  const ageText = ageSec === null
+    ? "zatím nikdy"
+    : ageSec < 60 ? `před ${ageSec} s`
+    : ageSec < 3600 ? `před ${Math.round(ageSec / 60)} min`
+    : `v ${formatSyncTime(sync.lastOkAt)}`;
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={title}
+        style={{
+          ...buttonStyle(),
+          display: "inline-flex", alignItems: "center", gap: "4px",
+          background: "transparent",
+          border: `1px solid ${color}55`,
+          borderRadius: "4px",
+          padding: "2px 6px",
+          fontSize: "9px",
+          fontWeight: 700,
+          color: color,
+          cursor: "pointer",
+        }}
+      >
+        <span style={{
+          width: "6px", height: "6px", borderRadius: "50%",
+          background: color, display: "inline-block", flexShrink: 0,
+        }} />
+        {label}
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0,
+          minWidth: "230px",
+          background: theme.card,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: "8px",
+          padding: "10px",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+          zIndex: 200,
+          fontFamily: FONT,
+          fontSize: "11px",
+          color: theme.text,
+          lineHeight: 1.6,
+          textAlign: "left",
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: "6px", color }}>{label}</div>
+          <div style={{ color: theme.textSub }}>
+            Poslední spojení se serverem: <strong style={{ color: theme.text }}>{ageText}</strong>
+          </div>
+          <div style={{ color: theme.textSub }}>
+            Ve frontě k odeslání: <strong style={{ color: theme.text }}>{sync.pending}</strong>
+          </div>
+          {sync.lostWrites > 0 && (
+            <div style={{ color: theme.red }}>
+              Neuložené změny: <strong>{sync.lostWrites}</strong>
+            </div>
+          )}
+          {sync.lastErrorCode && (
+            <div style={{ color: theme.textSub }}>
+              Poslední chyba: <strong style={{ color: theme.text }}>{String(sync.lastErrorCode)}</strong>
+              {sync.lastErrorContext ? ` (${sync.lastErrorContext})` : ""}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+            <button
+              onClick={handleRetry}
+              disabled={retrying}
+              style={{
+                ...buttonStyle(),
+                background: theme.accent, color: "#fff",
+                padding: "5px 10px", fontSize: "11px", fontWeight: 700,
+                opacity: retrying ? 0.6 : 1,
+              }}
+            >{retrying ? "SYNCHRONIZUJI…" : "SYNCHRONIZOVAT TEĎ"}</button>
+            {sync.lostWrites > 0 && (
+              <button
+                onClick={acknowledgeLostWrites}
+                style={{
+                  ...buttonStyle(),
+                  background: "transparent", color: theme.textSub,
+                  padding: "5px 8px", fontSize: "11px",
+                }}
+              >BERU NA VĚDOMÍ</button>
+            )}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 // Lišta nahoře. Mlčí, dokud je všechno v pořádku.
 function SyncStatusBar({ theme, onRetry }) {
   const sync = useSyncStatus();
@@ -20983,13 +21137,57 @@ function App() {
     };
   }, [loading, tasks, users, comments, customLists, currentUser]);
 
+  // ── SPOLEČNÉ NAČÍTÁNÍ ──
+  // Dřív mělo každé místo (focus, viditelnost, polling, heartbeat) vlastní
+  // načítání. Při startu se proto každá tabulka stáhla dvakrát.
+  // Teď vede jedna cesta s jedním zámkem a jedním odstupem.
+  const refreshAllRef = useRef({ lastAt: 0, inFlight: false });
+
+  const refreshAll = useCallback(async (reason = "", minGapMs = 3000) => {
+    const g = refreshAllRef.current;
+    const now = Date.now();
+    if (g.inFlight) return false;
+    if (now - g.lastAt < minGapMs) return false;
+    g.lastAt = now;
+    g.inFlight = true;
+    try {
+      const [freshTasks, freshComments, freshReminders, freshNotes] = await Promise.all([
+        apiLoadTasks(),
+        apiLoadComments(),
+        apiLoadReminders(currentUser?.name),
+        apiLoadNotes(currentUser?.name),
+      ]);
+      setTasks(prev => (tasksSignature(prev) === tasksSignature(freshTasks) ? prev : freshTasks));
+      setComments(prev => (prev.length === freshComments.length
+        && prev.every((c, i) => c.id === freshComments[i]?.id) ? prev : freshComments));
+      setReminders(prev => (prev.length === freshReminders.length
+        && prev.every((r, i) => r.id === freshReminders[i]?.id && r.remindAt === freshReminders[i]?.remindAt)
+        ? prev : freshReminders));
+      setNotes(prev => (prev.length === freshNotes.length
+        && prev.every((n, i) => n.id === freshNotes[i]?.id && n.updatedAt === freshNotes[i]?.updatedAt)
+        ? prev : freshNotes));
+      const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
+      if (data) setCustomLists(data);
+      return true;
+    } catch (e) {
+      console.warn(`[refreshAll${reason ? " " + reason : ""}] selhalo:`, e?.message || e);
+      return false;
+    } finally {
+      refreshAllRef.current.inFlight = false;
+    }
+  }, [currentUser?.name]);
+
+  // Po dokončení úvodního načtení drž chvíli klid — jinak focus hned
+  // po startu vyvolá druhé stažení všeho.
+  useEffect(() => {
+    if (!loading) refreshAllRef.current.lastAt = Date.now();
+  }, [loading]);
+
   // Refresh on focus — fallback pokud realtime selže (slabá síť, websocket timeout).
   // Server je vždy zdroj pravdy; lokální cache se používá jen v offline režimu.
   // Navíc: zkontroluj stav Realtime kanálů a pokud nejsou joined, donuť je k reconnectu.
   useEffect(() => {
     if (loading) return;
-    let lastRefreshAt = 0;
-    let inFlight = false;
 
     // Pomocná: zkontroluj stav Realtime kanálu a pokud není OK, zkus reconnect.
     // Supabase v2 channel.state je 'closed' | 'errored' | 'joined' | 'joining' | 'leaving'.
@@ -21010,14 +21208,6 @@ function App() {
     };
 
     const onFocus = async () => {
-      // Debounce: pokud jsme refreshovali v posledních 2s, skip.
-      // Brání tomu, aby se focus + visibilitychange + click vyvolaly multiple načtení.
-      const now = Date.now();
-      if (now - lastRefreshAt < 2000) return;
-      if (inFlight) return;
-      lastRefreshAt = now;
-      inFlight = true;
-
       // 1) Zkontroluj zdraví Realtime kanálů (mohly spadnout během sleep / slabé sítě)
       const channels = realtimeChannelsRef.current;
       ensureChannelHealthy(channels.tasks, "tasks");
@@ -21027,31 +21217,8 @@ function App() {
       ensureChannelHealthy(channels.reminders, "reminders");
       ensureChannelHealthy(channels.notes, "notes");
 
-      // 2) Force refresh ze serveru — chytne změny zmeškané během odpojení
-      try {
-        const [freshTasks, freshComments, freshReminders, freshNotes] = await Promise.all([
-          apiLoadTasks(),
-          apiLoadComments(),
-          apiLoadReminders(currentUser?.name),
-          apiLoadNotes(currentUser?.name),
-        ]);
-        setTasks(freshTasks);
-        setComments(freshComments);
-        setReminders(freshReminders);
-        setNotes(freshNotes);
-        // Diagnostický log — kolik je smazaných v polling (pomáhá ověřit že server má deletedAt)
-        const deletedCount = freshNotes.filter(n => n.deletedAt).length;
-        if (deletedCount > 0) {
-          console.log(`[polling] notes refresh: ${freshNotes.length} total, ${deletedCount} deleted`);
-        }
-        // custom_lists raw fetch
-        const { data } = await supabase.from("custom_lists").select("*").order("created_at", { ascending: true });
-        if (data) setCustomLists(data);
-      } catch (e) {
-        console.warn("Focus refresh failed:", e);
-      } finally {
-        inFlight = false;
-      }
+      // 2) Jedno společné načtení s odstupem — viz refreshAll výše
+      await refreshAll("focus");
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") onFocus();
@@ -21062,60 +21229,21 @@ function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [loading]);
+  }, [loading, refreshAll]);
 
-  // Live sync — VRSTVA 2: polling fallback každých 30 s když je appka otevřená.
+  // Live sync — VRSTVA 2: polling fallback každých 60 s když je appka otevřená.
   // Pojistka pro případ, kdy realtime nedoručí event (slabá síť, mobilní suspend).
-  // Žádné loading indikátory — silent refresh na pozadí.
+  // Dřív to běželo každých 30 s a mělo vlastní načítání; teď jde přes refreshAll,
+  // takže se nikdy nepotká s refreshem po focusu.
   useEffect(() => {
     if (loading || !currentUser) return;
-    let cancelled = false;
-    const POLL_MS = 30000; // 30 s
-
-    const tick = async () => {
-      if (cancelled) return;
-      // Skip pokud appka není visible (visibilitychange už vyřeší re-fetch)
+    const POLL_MS = 60000;
+    const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      try {
-        const [freshTasks, freshComments, freshReminders, freshNotes] = await Promise.all([
-          apiLoadTasks(),
-          apiLoadComments(),
-          apiLoadReminders(currentUser.name),
-          apiLoadNotes(currentUser.name),
-        ]);
-        if (cancelled) return;
-        // Apply updates jen pokud existují rozdíly (porovnání IDs+timestamps)
-        setTasks(prev => {
-          const sameLen = prev.length === freshTasks.length;
-          const sameIds = sameLen && prev.every((t, i) => t.id === freshTasks[i]?.id && t.updatedAt === freshTasks[i]?.updatedAt);
-          return sameIds ? prev : freshTasks;
-        });
-        setComments(prev => {
-          const sameLen = prev.length === freshComments.length;
-          const sameIds = sameLen && prev.every((c, i) => c.id === freshComments[i]?.id);
-          return sameIds ? prev : freshComments;
-        });
-        setReminders(prev => {
-          const sameLen = prev.length === freshReminders.length;
-          const sameIds = sameLen && prev.every((r, i) => r.id === freshReminders[i]?.id && r.remindAt === freshReminders[i]?.remindAt);
-          return sameIds ? prev : freshReminders;
-        });
-        setNotes(prev => {
-          const sameLen = prev.length === freshNotes.length;
-          const sameIds = sameLen && prev.every((n, i) => n.id === freshNotes[i]?.id && n.updatedAt === freshNotes[i]?.updatedAt);
-          return sameIds ? prev : freshNotes;
-        });
-      } catch (e) {
-        console.warn("[live-sync poll] failed:", e?.message);
-      }
-    };
-
-    const interval = setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [loading, currentUser]);
+      refreshAll("poll", POLL_MS - 5000);
+    }, POLL_MS);
+    return () => clearInterval(interval);
+  }, [loading, currentUser, refreshAll]);
 
   // Live sync — VRSTVA 3: agresivní channel reconnect (heartbeat-style).
   // Každých 10 s zkontroluj stav všech kanálů; pokud kterýkoliv není joined,
@@ -21144,26 +21272,11 @@ function App() {
           }
         }
       });
-      // Pokud něco bylo broken, force fetch (chytne missed updates)
-      if (needsRefetch && currentUser) {
-        (async () => {
-          try {
-            const [freshTasks, freshReminders, freshNotes] = await Promise.all([
-              apiLoadTasks(),
-              apiLoadReminders(currentUser.name),
-              apiLoadNotes(currentUser.name),
-            ]);
-            setTasks(freshTasks);
-            setReminders(freshReminders);
-            setNotes(freshNotes);
-          } catch (e) {
-            console.warn("[heartbeat re-fetch] failed:", e?.message);
-          }
-        })();
-      }
+      // Pokud něco bylo broken, dotáhni zmeškané změny — opět přes refreshAll
+      if (needsRefetch && currentUser) refreshAll("heartbeat", 5000);
     }, HEARTBEAT_MS);
     return () => clearInterval(interval);
-  }, [loading, currentUser]);
+  }, [loading, currentUser, refreshAll]);
 
   // Globální Esc handler — když je user na hlavní stránce (žádný modal otevřený),
   // Esc přepne na defaultView (homepage). Pokud je modal otevřený, Esc ho zavře
@@ -23361,30 +23474,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             }}>
             🎯{windowWidth >= 720 && <span> Fokus</span>}
           </button>
-          {!online && (
-            <span style={{
-              fontSize: "9px", background: theme.red, color: "#fff",
-              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>OFFLINE{sync.pending > 0 ? ` (${sync.pending})` : ""}</span>
-          )}
-          {online && sync.lostWrites > 0 && (
-            <span title="Změny, které server odmítl uložit" style={{
-              fontSize: "9px", background: theme.red, color: "#fff",
-              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>NEULOŽENO {sync.lostWrites}</span>
-          )}
-          {online && sync.lostWrites === 0 && sync.pending > 0 && (
-            <span title="Změny čekají na odeslání" style={{
-              fontSize: "9px", background: theme.yellow, color: "#fff",
-              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>{sync.pending}↑</span>
-          )}
-          {online && sync.lostWrites === 0 && sync.pending === 0 && sync.serverDown && (
-            <span title="Server neodpovídá, zobrazená data můžou být stará" style={{
-              fontSize: "9px", background: theme.orange, color: "#fff",
-              padding: "2px 6px", borderRadius: "4px", fontWeight: 700,
-            }}>SERVER ?</span>
-          )}
+          <SyncPill theme={theme} online={online} onRetry={retrySync} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           {/* Search ikona */}
