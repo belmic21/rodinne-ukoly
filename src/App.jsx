@@ -1041,8 +1041,10 @@ const THEMES = {
   },
 };
 
+// Pozn.: písmo DM Sans se načítá odkazem v index.html, ne @importem zde.
+// GLOBAL_CSS se vkládá na třech místech, takže @import stahoval každý řez
+// písma třikrát a navíc blokoval vykreslení.
 const GLOBAL_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,700&display=swap');
 html, body {
   /* Safe area pro iPhone notch — viewport-fit=cover v index.html doplní funkčnost */
   -webkit-tap-highlight-color: transparent;
