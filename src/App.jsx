@@ -3100,6 +3100,23 @@ async function mapAddFact(owner, { personId, content, tags, context, happenedAt 
   }
 }
 
+async function mapUpdateFact(id, patch) {
+  try {
+    const { data, error } = await supabase
+      .from("map_facts")
+      .update(patch)
+      .eq("id", id)
+      .select("id, content, tags, happened_at, context, person_id")
+      .single();
+    if (error) throw error;
+    reportSyncOk();
+    return data;
+  } catch (e) {
+    logServerError("mapUpdateFact", e, { id, patch });
+    return null;
+  }
+}
+
 async function mapDeleteFact(id) {
   try {
     const { error } = await supabase.from("map_facts").delete().eq("id", id);
@@ -13870,10 +13887,14 @@ function MapaHelp({ theme, onClose }) {
 
       <H>Oprava a mazání</H>
       <P>
-        Jednotlivý záznam smažeš křížkem na jeho konci. Celého člověka
-        otevřeš, klikneš na <b>✎</b> a dole je <b>🗑 smazat</b> — jeho
-        záznamy se přitom nesmažou, jen přejdou pod <b>Bez jména</b>,
-        odkud je můžeš přiřadit někomu jinému.
+        U každého záznamu je vpravo <b>✎</b> pro úpravu textu i data
+        a <b>×</b> pro smazání.
+      </P>
+      <P>
+        Celého člověka otevřeš tlačítkem <b>✎ detail a historie</b>.
+        Tam opravíš jméno, místo seznámení a kontakt, sloučíš duplicitu,
+        nebo ho dole smažeš. Jeho záznamy se přitom nesmažou, jen přejdou
+        pod <b>Bez jména</b>, odkud je přiřadíš někomu jinému.
       </P>
       <P>
         Do pole <b>Kdo?</b> patří jen jméno. Když tam omylem napíšeš celou
@@ -13903,6 +13924,73 @@ function MapaHelp({ theme, onClose }) {
         typu neumírají na chybějící funkce, ale na to, že se do nich
         přestane psát.
       </P>
+    </div>
+  );
+}
+
+/* ── Úprava jednoho záznamu ──
+   Překlep ve větě nebo špatné datum se dřív daly řešit jen smazáním
+   a napsáním znovu. */
+function FactEditor({ row, theme, onSave, onCancel }) {
+  const [text, setText] = useState(row.content || "");
+  const [date, setDate] = useState(
+    row.happened_at ? new Date(row.happened_at).toISOString().slice(0, 10) : ""
+  );
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  useEffect(() => { setTimeout(() => ref.current?.focus(), 30); }, []);
+
+  const save = async () => {
+    const p = parseFactInput(text);
+    if (!p.content) return;
+    setBusy(true);
+    try {
+      const origDay = row.happened_at ? new Date(row.happened_at).toISOString().slice(0, 10) : "";
+      // Čas měň jen když se změnil den — jinak se zachová původní pořadí v rámci dne.
+      const happenedAt = date === origDay
+        ? row.happened_at
+        : new Date(date + "T12:00:00").toISOString();
+      await onSave({
+        content: p.content,
+        tags: p.tags.length ? p.tags : (row.tags || []),
+        happened_at: happenedAt,
+      });
+    } finally { setBusy(false); }
+  };
+
+  const input = {
+    boxSizing: "border-box", fontSize: "13px", padding: "8px 10px",
+    background: theme.inputBg, color: theme.text,
+    border: `1px solid ${theme.accentBorder}`, borderRadius: 7,
+    outline: "none", fontFamily: FONT,
+  };
+
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ marginTop: 7 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input ref={ref} value={text} onChange={e => setText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
+            if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+          }}
+          style={{ ...input, flex: 1 }} />
+        <input type="date" value={date} max={todayIso}
+          onChange={e => setDate(e.target.value)}
+          style={{ ...input, flex: "0 0 auto", fontSize: "12px", padding: "7px 6px" }} />
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        <button onClick={save} disabled={busy} style={{
+          ...buttonStyle(), background: theme.accent, color: "#fff",
+          padding: "4px 12px", fontSize: "11px", fontWeight: 700,
+          opacity: busy ? 0.6 : 1,
+        }}>{busy ? "UKLÁDÁM…" : "ULOŽIT"}</button>
+        <button onClick={onCancel} style={{
+          ...buttonStyle(), background: "transparent", color: theme.textSub,
+          padding: "4px 10px", fontSize: "11px",
+        }}>Zrušit</button>
+      </div>
     </div>
   );
 }
@@ -14073,8 +14161,15 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(initialPerson);
   const [assigning, setAssigning] = useState(null);
-  // Nápověda je zavřená; vyvolá se tlačítkem v hlavičce.
-  const [showHelp, setShowHelp] = useState(false);
+  const [editingFact, setEditingFact] = useState(null);
+  // Nápověda se ukáže jednou při prvním otevření Mapy na tomhle zařízení,
+  // pak už jen na tlačítko v hlavičce.
+  const [showHelp, setShowHelp] = useState(() => {
+    try { return localStorage.getItem("ft_mapa_help_seen") !== "1"; } catch (e) { return false; }
+  });
+  useEffect(() => {
+    if (showHelp) { try { localStorage.setItem("ft_mapa_help_seen", "1"); } catch (e) { /* ignore */ } }
+  }, [showHelp]);
   const [dupes, setDupes] = useState([]);
   const draftRef = useRef(null);
 
@@ -14098,7 +14193,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
       }
       const [f, p, o] = await Promise.all([
         mapSearch(owner, query, 50),
-        mapPeopleSearch(owner, query, query.trim() ? 8 : 0),
+        query.trim() ? mapPeopleSearch(owner, query, 8) : Promise.resolve([]),
         mapOrphanFacts(owner, 200),
       ]);
       if (!cancelled) { setFacts(f); setPeopleHits(p); setOrphanCount(o.length); setBusy(false); }
@@ -14224,11 +14319,25 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
         ))}
         <span>{fmtDate(r.happened_at)}</span>
         <span style={{ flex: 1 }} />
+        <button onClick={() => setEditingFact(editingFact === r.id ? null : r.id)}
+          title="Upravit záznam" style={{
+            ...buttonStyle(), background: "transparent", color: theme.textDim,
+            fontSize: "12px", padding: "0 4px",
+          }}>✎</button>
         <button onClick={() => removeFact(r.id)} title="Smazat záznam" style={{
           ...buttonStyle(), background: "transparent", color: theme.textDim,
           fontSize: "13px", padding: "0 4px",
         }}>×</button>
       </div>
+      {editingFact === r.id && (
+        <FactEditor row={r} theme={theme}
+          onCancel={() => setEditingFact(null)}
+          onSave={async (patch) => {
+            const ok = await mapUpdateFact(r.id, patch);
+            setEditingFact(null);
+            if (ok) setReloadKey(k => k + 1);
+          }} />
+      )}
       {assigning === r.id && (
         <div style={{ marginTop: 7 }}>
           <PersonPicker owner={owner} theme={theme}
@@ -14297,10 +14406,16 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                 <>
                   {/* Vybraný člověk — klikem se mění, šipkou se otevře jeho stránka */}
                   <div style={{
-                    display: "flex", alignItems: "center", gap: 8, marginBottom: 8,
+                    display: "flex", alignItems: "center", gap: 6, marginBottom: 8,
                     padding: "7px 10px", background: theme.accentSoft,
                     border: `1px solid ${theme.accentBorder}`, borderRadius: 8,
                   }}>
+                    {/* Zpět = zrušit výběr člověka a vrátit se k hledání */}
+                    <button onClick={() => { setWho(null); setPickerOpen(true); }}
+                      title="Zpět — vybrat jiného člověka" style={{
+                        ...buttonStyle(), background: "transparent", color: theme.textSub,
+                        fontSize: "14px", padding: "0 4px",
+                      }}>←</button>
                     <span style={{ fontSize: "13.5px", fontWeight: 700, color: theme.accent }}>
                       {who.name}
                     </span>
@@ -14308,14 +14423,13 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                       <span style={{ fontSize: "11px", color: theme.textSub }}>📍 {who.met_at}</span>
                     )}
                     <span style={{ flex: 1 }} />
-                    <button onClick={() => openPerson(who)} title="Otevřít stránku člověka" style={{
-                      ...buttonStyle(), background: "transparent", color: theme.accent,
-                      fontSize: "11px", padding: "2px 7px",
-                    }}>historie →</button>
-                    <button onClick={() => setPickerOpen(true)} title="Vybrat jiného" style={{
-                      ...buttonStyle(), background: "transparent", color: theme.textSub,
-                      fontSize: "11px", padding: "2px 7px",
-                    }}>změnit</button>
+                    <button onClick={() => openPerson(who)}
+                      title="Otevřít stránku — historie, úpravy, smazání" style={{
+                        ...buttonStyle(),
+                        background: theme.card, color: theme.accent,
+                        border: `1px solid ${theme.accentBorder}`, borderRadius: 6,
+                        fontSize: "11px", fontWeight: 700, padding: "3px 9px",
+                      }}>✎ detail a historie</button>
                   </div>
 
                   <div style={{ display: "flex", gap: "7px" }}>
@@ -14492,6 +14606,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const [editMeta, setEditMeta] = useState(false);
   const [pickIntro, setPickIntro] = useState(false);
   const [pickMerge, setPickMerge] = useState(false);
+  const [editingFact, setEditingFact] = useState(null);
   const [mergeMsg, setMergeMsg] = useState(null);
   const [name, setName] = useState(person.name || "");
   const [metAt, setMetAt] = useState(person.met_at || "");
@@ -14848,11 +14963,27 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                     </div>
                   )}
                 </div>
+                <button onClick={() => setEditingFact(editingFact === r.id ? null : r.id)}
+                  title="Upravit" style={{
+                    ...buttonStyle(), background: "transparent", color: theme.textDim,
+                    fontSize: "12px", padding: "0 4px", flex: "0 0 auto",
+                  }}>✎</button>
                 <button onClick={() => remove(r.id)} title="Smazat" style={{
                   ...buttonStyle(), background: "transparent", color: theme.textDim,
                   fontSize: "13px", padding: "0 4px", flex: "0 0 auto",
                 }}>×</button>
               </div>
+              {editingFact === r.id && (
+                <div style={{ paddingLeft: 18, paddingBottom: 10 }}>
+                  <FactEditor row={r} theme={theme}
+                    onCancel={() => setEditingFact(null)}
+                    onSave={async (patch) => {
+                      const ok = await mapUpdateFact(r.id, patch);
+                      setEditingFact(null);
+                      if (ok) setReloadKey(k => k + 1);
+                    }} />
+                </div>
+              )}
             </div>
           );
         })}
