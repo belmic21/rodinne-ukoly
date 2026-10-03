@@ -13584,6 +13584,111 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    neumírají na chybějící funkce, ale na to, že zápis trvá moc dlouho.
    ═══════════════════════════════════════════════════════ */
 
+/* ── Nápověda ──
+   Žije uvnitř nástroje, ne v odděleném dokumentu. Za rok ji najdeš tam,
+   kde ji budeš potřebovat. */
+function MapaHelp({ theme, onClose }) {
+  const H = ({ children }) => (
+    <div style={{
+      fontSize: "11px", fontWeight: 700, color: theme.accent,
+      textTransform: "uppercase", letterSpacing: "0.04em",
+      marginTop: 12, marginBottom: 4,
+    }}>{children}</div>
+  );
+  const P = ({ children }) => (
+    <div style={{ fontSize: "12.5px", color: theme.textSub, lineHeight: 1.65 }}>{children}</div>
+  );
+  const K = ({ children }) => (
+    <span style={{
+      background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
+      borderRadius: 4, padding: "0 5px", fontSize: "11.5px",
+      color: theme.text, fontFamily: "ui-monospace, monospace",
+    }}>{children}</span>
+  );
+
+  return (
+    <div style={{
+      background: theme.card, border: `1px solid ${theme.cardBorder}`,
+      borderRadius: 10, padding: "12px 14px", marginBottom: 10,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline" }}>
+        <div style={{ flex: 1, fontSize: "13px", fontWeight: 700, color: theme.text }}>
+          K čemu Mapa je
+        </div>
+        <button onClick={onClose} style={{
+          ...buttonStyle(), background: "transparent", color: theme.textSub,
+          fontSize: "12px", padding: "0 4px",
+        }}>skrýt</button>
+      </div>
+      <P>
+        Lidé ti denně říkají věci, které se budou hodit za rok. Že prodává
+        octavii, že má restauraci v Praze, že zná někoho v Miami. Mapa si to
+        pamatuje za tebe — a hlavně si pamatuje, <b>kdo</b> to řekl.
+      </P>
+
+      <H>Zápis — nejdřív kdo, pak co</H>
+      <P>
+        Do horního pole napiš, koho se to týká, a vyber ho ze seznamu.
+        Pokud ho tam ještě nemáš, zvol <b>+ nový člověk</b>.
+        Pak napiš jednu větu a dej <K>Enter</K>.
+      </P>
+      <P>
+        Vedle věty je <b>datum</b>. Výchozí je dnešek; když zapisuješ něco,
+        co zaznělo dřív, posuň ho zpět. Časová osa je pak věrná.
+      </P>
+      <P>
+        Kdekoli ve větě můžeš použít <K>#štítek</K>, třeba <K>#auto</K> nebo
+        <K>#kontakt</K>. Není to povinné — hledání funguje i bez nich.
+      </P>
+
+      <H>Když si nemůžeš vzpomenout na jméno</H>
+      <P>
+        Tohle je ten hlavní trik. Do <b>Hledat</b> napiš cokoli, co si
+        pamatuješ: <K>octavia</K>, <K>restaurace Praha</K>, <K>letiště</K>,
+        kus telefonního čísla. V sekci <b>Lidé</b> vyskočí ten, u koho to
+        sedí, i když si na jeho jméno nevzpomeneš. Hledá se ve jménech,
+        přezdívkách, místě seznámení, kontaktu i ve všech větách, co jsi
+        kdy o kom zapsal. Diakritika nevadí a překlep většinou taky ne.
+      </P>
+
+      <H>Stránka člověka</H>
+      <P>
+        Klikni na jméno a uvidíš celou historii po rocích, od nejstaršího,
+        aby šel vidět vývoj. Přepínačem vpravo obrátíš pořadí.
+        Zapisovat tam můžeš rovnou, bez vybírání člověka.
+      </P>
+      <P>
+        Nahoře doplň <b>kde jsi ho poznal</b>, <b>kontakt</b> a
+        <b> přezdívky</b>. Vyplatí se to: přesně podle těchhle údajů ho
+        příště najdeš, když ti vypadne jméno.
+      </P>
+
+      <H>Kdo mi koho představil</H>
+      <P>
+        Na stránce člověka nastav <b>kdo mi ho představil</b>. Není to jen
+        poznámka — je to vazba. Když pak hledáš <K>Ivan</K>, najdeš Ivana
+        i všechny, kteří k tobě přišli přes něj. A na Ivanově stránce vidíš
+        seznam „přes něj znám“.
+      </P>
+
+      <H>Když spěcháš</H>
+      <P>
+        Záznam jde uložit i bez člověka. Takové věty čekají pod záložkou
+        <b> Bez jména</b> a přiřadíš je později tlačítkem
+        <b> + kdo to řekl?</b>. Používej to jen jako záchranu — přiřazený
+        záznam je k nalezení mnohem líp.
+      </P>
+
+      <H>Jediné pravidlo, na kterém záleží</H>
+      <P>
+        Zapisuj hned a krátce. Jedna věta = jeden záznam. Systémy tohohle
+        typu neumírají na chybějící funkce, ale na to, že se do nich
+        přestane psát.
+      </P>
+    </div>
+  );
+}
+
 /* ── Výběr člověka ──
    Hledá na serveru přes map_people_search, takže najde člověka podle čehokoli,
    co si o něm pamatuješ: jména, přezdívky, místa seznámení, kontaktu, toho kdo
@@ -13710,12 +13815,25 @@ function MapaSheet({ currentUser, theme, onClose }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(null);
   const [assigning, setAssigning] = useState(null);
+  // Nápověda. Zobrazí se sama, dokud není v mapě aspoň jeden člověk —
+  // při prvním otevření za rok tak nemusíš nic hledat.
+  const [showHelp, setShowHelp] = useState(false);
   const draftRef = useRef(null);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const parsed = useMemo(() => parseFactInput(draft), [draft]);
 
   useEffect(() => { setPickerOpen(true); }, []);
+
+  // Dokud je mapa prázdná, nápověda se otevře sama. Jakmile v ní někdo je,
+  // drží se zavřená a vyvoláš ji tlačítkem v hlavičce.
+  useEffect(() => {
+    let cancelled = false;
+    mapPeopleSearch(owner, "", 1).then(r => {
+      if (!cancelled && (r || []).length === 0) setShowHelp(true);
+    });
+    return () => { cancelled = true; };
+  }, [owner]);
 
   // Hledání
   useEffect(() => {
@@ -13902,11 +14020,20 @@ function MapaSheet({ currentUser, theme, onClose }) {
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                 <span style={{ fontSize: "16px" }}>🗺️</span>
                 <div style={{ flex: 1, fontSize: "14px", fontWeight: 700, color: theme.text }}>Mapa</div>
+                <button onClick={() => setShowHelp(v => !v)} title="Jak to funguje" style={{
+                  ...buttonStyle(),
+                  background: showHelp ? theme.accentSoft : "transparent",
+                  border: `1px solid ${showHelp ? theme.accentBorder : theme.cardBorder}`,
+                  color: showHelp ? theme.accent : theme.textSub,
+                  fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                }}>? nápověda</button>
                 <button onClick={onClose} style={{
                   background: "none", border: "none", fontSize: "20px",
                   cursor: "pointer", color: theme.textSub, padding: "0 4px",
                 }}>×</button>
               </div>
+
+              {showHelp && <MapaHelp theme={theme} onClose={() => setShowHelp(false)} />}
 
               {pickerOpen || !who ? (
                 <PersonPicker
