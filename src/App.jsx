@@ -2942,6 +2942,269 @@ async function apiUpdateTasks(tasks) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   🗺️ MAPA — znalostní báze vztahů ("co mi kdo řekl")
+
+   Jednotkou je jedna věta. Má svůj čas, svého autora a svůj obsah.
+   Člověk je jen jeden z rozměrů záznamu, ne nadřazená složka — proto
+   najdeš "Miami" i tehdy, když si nevzpomeneš, kdo to řekl.
+
+   Vyhledávání běží celé na serveru (funkce map_search). Aplikace nikdy
+   nestahuje celou bázi, vždy jen jednu obrazovku výsledků.
+   ═══════════════════════════════════════════════════════ */
+
+// Normalizace pro porovnávání jmen — stejná pravidla jako map_norm v databázi.
+function mapNorm(s) {
+  return (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+}
+
+// Rozebere zápis na člověka, štítky a vlastní text.
+//   "@Martin má známého v Miami #kontakt"
+//   → { personName: "Martin", tags: ["kontakt"], content: "má známého v Miami" }
+// Jméno může být víceslovné v uvozovkách: @"Pavel Šlégr"
+function parseFactInput(raw) {
+  let text = (raw || "").trim();
+  let personName = null;
+  const tags = [];
+
+  const quoted = text.match(/@"([^"]+)"/);
+  if (quoted) {
+    personName = quoted[1].trim();
+    text = text.replace(quoted[0], " ");
+  } else {
+    const simple = text.match(/(^|\s)@([\p{L}][\p{L}0-9._-]*)/u);
+    if (simple) {
+      personName = simple[2].trim();
+      text = text.replace(simple[0], " ");
+    }
+  }
+
+  text = text.replace(/(^|\s)#([\p{L}][\p{L}0-9._-]*)/gu, (m, _pre, tag) => {
+    tags.push(tag.toLowerCase());
+    return " ";
+  });
+
+  return {
+    personName,
+    tags: [...new Set(tags)],
+    content: text.replace(/\s+/g, " ").trim(),
+  };
+}
+
+async function mapLoadPeople(owner) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .select("id, name, aliases, note, met_at, contact, introduced_by")
+      .eq("owner", owner)
+      .order("name");
+    if (error) throw error;
+    reportSyncOk();
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("mapLoadPeople", e);
+    return [];
+  }
+}
+
+// Najde člověka podle jména nebo přezdívky; když neexistuje, založí ho.
+async function mapEnsurePerson(owner, name, knownPeople = []) {
+  const wanted = mapNorm(name);
+  if (!owner || !wanted) return null;
+
+  const hit = knownPeople.find(p =>
+    mapNorm(p.name) === wanted ||
+    (p.aliases || []).some(a => mapNorm(a) === wanted)
+  );
+  if (hit) return hit;
+
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .insert({ owner, name: name.trim() })
+      .select("id, name, aliases, note, met_at, contact, introduced_by")
+      .single();
+    if (error) throw error;
+    reportSyncOk();
+    return data;
+  } catch (e) {
+    // Souběžný zápis ze dvou zařízení — člověk už mezitím vznikl, načti ho.
+    if (e?.code === "23505") {
+      const all = await mapLoadPeople(owner);
+      return all.find(p => mapNorm(p.name) === wanted) || null;
+    }
+    if (isNetworkError(e)) logServerError("mapEnsurePerson", e, { owner, name });
+    else logServerError("mapEnsurePerson", e, { owner, name });
+    return null;
+  }
+}
+
+async function mapAddFact(owner, { personId, content, tags, context, happenedAt }) {
+  if (!owner || !content) return null;
+  try {
+    const { data, error } = await supabase
+      .from("map_facts")
+      .insert({
+        owner,
+        person_id: personId || null,
+        content,
+        tags: tags || [],
+        context: context || null,
+        happened_at: happenedAt || new Date().toISOString(),
+      })
+      .select("id, content, tags, happened_at, context, person_id")
+      .single();
+    if (error) throw error;
+    reportSyncOk();
+    return data;
+  } catch (e) {
+    logServerError("mapAddFact", e, { owner, content });
+    return null;
+  }
+}
+
+async function mapDeleteFact(id) {
+  try {
+    const { error } = await supabase.from("map_facts").delete().eq("id", id);
+    if (error) throw error;
+    reportSyncOk();
+    return true;
+  } catch (e) {
+    logServerError("mapDeleteFact", e, { id });
+    return false;
+  }
+}
+
+// Hledání ČLOVĚKA podle toho, co si o něm pamatuješ — jméno, přezdívka,
+// poznámka, nebo obsah jeho záznamů. "Miami" najde Petra Nováka.
+async function mapPeopleSearch(owner, query, limit = 20) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_people_search", {
+      p_owner: owner, p_query: query || "", p_limit: limit,
+    });
+    if (error) throw error;
+    reportSyncOk();
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("mapPeopleSearch", e, { query });
+    return [];
+  }
+}
+
+// Nepřiřazené záznamy — věty uložené ve spěchu, u kterých ještě nevíš,
+// kdo je řekl. Zápis se tím nikdy nezdrží a nic se neztratí.
+async function mapOrphanFacts(owner, limit = 100) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_orphan_facts", {
+      p_owner: owner, p_limit: limit,
+    });
+    if (error) throw error;
+    reportSyncOk();
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("mapOrphanFacts", e);
+    return [];
+  }
+}
+
+// Dodatečné přiřazení člověka k už uloženému záznamu.
+async function mapAssignFact(factId, personId) {
+  try {
+    const { error } = await supabase
+      .from("map_facts")
+      .update({ person_id: personId })
+      .eq("id", factId);
+    if (error) throw error;
+    reportSyncOk();
+    return true;
+  } catch (e) {
+    logServerError("mapAssignFact", e, { factId, personId });
+    return false;
+  }
+}
+
+// Koho mi tenhle člověk představil — opačný směr vazby.
+async function mapIntroducedBy(owner, personId) {
+  if (!owner || !personId) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_introduced_by", {
+      p_owner: owner, p_person_id: personId,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Časová osa jednoho člověka. asc = od začátku, aby byl vidět vývoj vztahu.
+async function mapPersonTimeline(owner, personId, asc = false, limit = 200) {
+  if (!owner || !personId) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_person_timeline", {
+      p_owner: owner, p_person_id: personId, p_limit: limit, p_asc: asc,
+    });
+    if (error) throw error;
+    reportSyncOk();
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("mapPersonTimeline", e);
+    return [];
+  }
+}
+
+// Úprava člověka — poznámka ("bydlí v Miami") a přezdívky.
+async function mapUpdatePerson(id, patch) {
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select("id, name, aliases, note, met_at, contact, introduced_by")
+      .single();
+    if (error) throw error;
+    reportSyncOk();
+    return data;
+  } catch (e) {
+    logServerError("mapUpdatePerson", e, { id, patch });
+    return null;
+  }
+}
+
+// Hledání. Prázdný dotaz vrací poslední záznamy.
+async function mapSearch(owner, query, limit = 50) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_search", {
+      p_owner: owner, p_query: query || "", p_limit: limit,
+    });
+    if (error) throw error;
+    reportSyncOk();
+    return data || [];
+  } catch (e) {
+    if (!isNetworkError(e)) logServerError("mapSearch", e, { query });
+    else reportSyncStale("mapSearch", e);
+    return [];
+  }
+}
+
+// Nápověda při psaní úkolu — "půjčit auto na hory" připomene Tomáše s půjčovnou.
+async function mapSuggestForTask(owner, text, limit = 3) {
+  if (!owner || !text || text.trim().length < 4) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_suggest_for_task", {
+      p_owner: owner, p_text: text, p_limit: limit,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
    COMMENTS API (with offline fallback via cache)
    ═══════════════════════════════════════════════════════ */
 
@@ -13314,6 +13577,802 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
    SEARCH SHEET — full-screen vyhledávání
    ═══════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════
+   🗺️ MAPA — jedno pole na zápis, jedno na hledání
+
+   Záměrně bez kategorií, formulářů a povinných polí. Systémy tohohle typu
+   neumírají na chybějící funkce, ale na to, že zápis trvá moc dlouho.
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Výběr člověka ──
+   Hledá na serveru přes map_people_search, takže najde člověka podle čehokoli,
+   co si o něm pamatuješ: jména, přezdívky, místa seznámení, kontaktu, toho kdo
+   ti ho představil, nebo kterékoli věty, co jsi o něm kdy zapsal.
+   Tohle je odpověď na "nemůžu si vzpomenout na jméno a odkud je". */
+function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeholder = "Kdo? Jméno, místo, cokoli co si pamatuješ…" }) {
+  const [text, setText] = useState("");
+  const [hits, setHits] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const ref = useRef(null);
+
+  useEffect(() => { if (autoFocus) setTimeout(() => ref.current?.focus(), 30); }, [autoFocus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    const id = setTimeout(async () => {
+      const r = await mapPeopleSearch(owner, text, 8);
+      if (!cancelled) { setHits(r); setIdx(0); setBusy(false); }
+    }, text ? 220 : 0);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [owner, text]);
+
+  const choose = (i) => {
+    if (i < hits.length) onPick({ existing: hits[i] });
+    else if (text.trim()) onPick({ newName: text.trim() });
+  };
+
+  return (
+    <div style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
+      <input
+        ref={ref}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Escape") { e.preventDefault(); onCancel?.(); }
+          else if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, hits.length)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
+          else if (e.key === "Enter") { e.preventDefault(); choose(idx); }
+        }}
+        placeholder={placeholder}
+        style={{
+          width: "100%", boxSizing: "border-box", fontSize: "13.5px", padding: "9px 11px",
+          background: theme.inputBg, color: theme.text,
+          border: `1px solid ${theme.accentBorder}`, borderRadius: "8px",
+          outline: "none", fontFamily: FONT,
+        }}
+      />
+      <div style={{
+        marginTop: 5, background: theme.card,
+        border: `1px solid ${theme.cardBorder}`, borderRadius: "8px", overflow: "hidden",
+        maxHeight: "40vh", overflowY: "auto",
+      }}>
+        {hits.map((p, i) => (
+          <div key={p.id}
+            onMouseDown={e => { e.preventDefault(); onPick({ existing: p }); }}
+            onMouseEnter={() => setIdx(i)}
+            style={{
+              padding: "8px 11px", cursor: "pointer", color: theme.text,
+              background: i === idx ? theme.inputBg : "transparent",
+              borderBottom: `1px solid ${theme.cardBorder}`,
+            }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+              <span style={{ fontSize: "13px", fontWeight: 700 }}>{p.name}</span>
+              {(p.aliases || []).length > 0 && (
+                <span style={{ fontSize: "11px", color: theme.textMid }}>{p.aliases.join(", ")}</span>
+              )}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+            </div>
+            {(p.met_at || p.introduced_name || p.contact || p.sample) && (
+              <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2, lineHeight: 1.45 }}>
+                {p.met_at && <span>📍 {p.met_at}</span>}
+                {p.introduced_name && <span>{p.met_at ? " · " : ""}přes {p.introduced_name}</span>}
+                {!p.met_at && !p.introduced_name && p.contact && <span>☎ {p.contact}</span>}
+                {!p.met_at && !p.introduced_name && !p.contact && p.sample && (
+                  <span>{p.sample.slice(0, 60)}</span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+        {text.trim() && (
+          <div
+            onMouseDown={e => { e.preventDefault(); onPick({ newName: text.trim() }); }}
+            onMouseEnter={() => setIdx(hits.length)}
+            style={{
+              padding: "8px 11px", fontSize: "12px", cursor: "pointer",
+              color: theme.green, fontWeight: 600,
+              background: idx === hits.length ? theme.inputBg : "transparent",
+            }}>
+            + nový člověk „{text.trim()}“
+          </div>
+        )}
+        {!text.trim() && hits.length === 0 && !busy && (
+          <div style={{ padding: "9px 11px", fontSize: "12px", color: theme.textMid }}>
+            Zatím nikdo uložený — napiš jméno a založ ho.
+          </div>
+        )}
+        {busy && hits.length === 0 && (
+          <div style={{ padding: "9px 11px", fontSize: "12px", color: theme.textMid }}>Hledám…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MapaSheet({ currentUser, theme, onClose }) {
+  useEscapeKey(onClose);
+  const owner = currentUser?.name;
+
+  const [who, setWho] = useState(null);            // vybraný člověk pro nový zápis
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("vse");
+  const [facts, setFacts] = useState([]);
+  const [peopleHits, setPeopleHits] = useState([]);
+  const [orphanCount, setOrphanCount] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [open, setOpen] = useState(null);
+  const [assigning, setAssigning] = useState(null);
+  const draftRef = useRef(null);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const parsed = useMemo(() => parseFactInput(draft), [draft]);
+
+  useEffect(() => { setPickerOpen(true); }, []);
+
+  // Hledání
+  useEffect(() => {
+    if (open) return;
+    let cancelled = false;
+    setBusy(true);
+    const id = setTimeout(async () => {
+      if (tab === "orphan") {
+        const o = await mapOrphanFacts(owner, 200);
+        if (!cancelled) { setFacts(o); setPeopleHits([]); setOrphanCount(o.length); setBusy(false); }
+        return;
+      }
+      const [f, p, o] = await Promise.all([
+        mapSearch(owner, query, 50),
+        mapPeopleSearch(owner, query, query.trim() ? 8 : 0),
+        mapOrphanFacts(owner, 200),
+      ]);
+      if (!cancelled) { setFacts(f); setPeopleHits(p); setOrphanCount(o.length); setBusy(false); }
+    }, query ? 280 : 0);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [owner, query, reloadKey, open, tab]);
+
+  // Výběr člověka pro nový zápis
+  const pickWho = async (pick) => {
+    let person = pick.existing;
+    if (!person && pick.newName) person = await mapEnsurePerson(owner, pick.newName, []);
+    if (!person) return;
+    setWho(person);
+    setPickerOpen(false);
+    setTimeout(() => draftRef.current?.focus(), 40);
+  };
+
+  const saveFact = async () => {
+    const { content, tags, personName } = parsed;
+    if (!content) return;
+    setSaving(true);
+    try {
+      let pid = who?.id || null;
+      // @jméno ve větě má přednost, kdyby ho někdo napsal rovnou
+      if (personName) {
+        const p = await mapEnsurePerson(owner, personName, []);
+        if (p) pid = p.id;
+      }
+      const happenedAt = draftDate === todayIso
+        ? new Date().toISOString()
+        : new Date(draftDate + "T12:00:00").toISOString();
+      const row = await mapAddFact(owner, { personId: pid, content, tags, happenedAt });
+      if (row) {
+        setDraft("");
+        setDraftDate(todayIso);
+        setReloadKey(k => k + 1);
+      }
+    } finally {
+      setSaving(false);
+      draftRef.current?.focus();
+    }
+  };
+
+  const removeFact = async (id) => {
+    setFacts(prev => prev.filter(r => r.id !== id));
+    const ok = await mapDeleteFact(id);
+    if (!ok) setReloadKey(k => k + 1);
+  };
+
+  const assignPerson = async (factId, pick) => {
+    let person = pick.existing;
+    if (!person && pick.newName) person = await mapEnsurePerson(owner, pick.newName, []);
+    if (!person) return;
+    setAssigning(null);
+    if (await mapAssignFact(factId, person.id)) setReloadKey(k => k + 1);
+  };
+
+  const fmtDate = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const dny = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (dny === 0) return "dnes";
+    if (dny === 1) return "včera";
+    if (dny < 30) return `před ${dny} dny`;
+    return d.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" });
+  };
+
+  const inputStyle = {
+    width: "100%", boxSizing: "border-box",
+    fontSize: "14px", padding: "10px 12px",
+    background: theme.inputBg, color: theme.text,
+    border: `1px solid ${theme.inputBorder}`,
+    borderRadius: "8px", outline: "none", fontFamily: FONT,
+  };
+
+  const chipStyle = (active) => ({
+    ...buttonStyle(),
+    background: active ? theme.accentSoft : "transparent",
+    border: `1px solid ${active ? theme.accentBorder : theme.cardBorder}`,
+    color: active ? theme.accent : theme.textSub,
+    padding: "3px 10px", fontSize: "11px", fontWeight: 600, borderRadius: 12,
+  });
+
+  const openPerson = (p) => setOpen({
+    id: p.id, name: p.name, aliases: p.aliases || [], note: p.note,
+    met_at: p.met_at, contact: p.contact,
+    introduced_by: p.introduced_by, introduced_name: p.introduced_name,
+  });
+
+  const FactCard = (r) => (
+    <div key={r.id} style={{
+      background: theme.card,
+      border: `1px solid ${r.person_name ? theme.cardBorder : theme.yellow + "55"}`,
+      borderRadius: "10px", padding: "10px 12px", marginBottom: "7px",
+    }}>
+      <div style={{ fontSize: "13.5px", color: theme.text, lineHeight: 1.5 }}>{r.content}</div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: "7px", flexWrap: "wrap",
+        marginTop: "6px", fontSize: "11px", color: theme.textMid,
+      }}>
+        {r.person_name ? (
+          <span
+            onClick={() => openPerson({ id: r.person_id, name: r.person_name })}
+            title="Otevřít člověka"
+            style={{
+              background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
+              color: theme.accent, padding: "1px 7px", borderRadius: "10px",
+              fontWeight: 600, cursor: "pointer",
+            }}>{r.person_name}</span>
+        ) : (
+          <button onClick={() => setAssigning(assigning === r.id ? null : r.id)} style={{
+            ...buttonStyle(), background: "transparent",
+            border: `1px dashed ${theme.yellow}88`, color: theme.yellow,
+            padding: "1px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600,
+          }}>+ kdo to řekl?</button>
+        )}
+        {(r.tags || []).map(t => (
+          <span key={t} onClick={() => { setTab("vse"); setQuery(t); }} style={{
+            background: theme.inputBg, color: theme.textSub,
+            padding: "1px 7px", borderRadius: "10px", cursor: "pointer",
+          }}>#{t}</span>
+        ))}
+        <span>{fmtDate(r.happened_at)}</span>
+        <span style={{ flex: 1 }} />
+        <button onClick={() => removeFact(r.id)} title="Smazat záznam" style={{
+          ...buttonStyle(), background: "transparent", color: theme.textDim,
+          fontSize: "13px", padding: "0 4px",
+        }}>×</button>
+      </div>
+      {assigning === r.id && (
+        <div style={{ marginTop: 7 }}>
+          <PersonPicker owner={owner} theme={theme}
+            onPick={(pick) => assignPerson(r.id, pick)}
+            onCancel={() => setAssigning(null)} />
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      animation: "slideUp 0.25s",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "660px", maxHeight: "92vh",
+        marginTop: "20px", background: theme.bg, borderRadius: "16px",
+        overflow: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+        fontFamily: FONT,
+      }}>
+        {open ? (
+          <PersonView
+            person={open}
+            owner={owner}
+            theme={theme}
+            onBack={() => { setOpen(null); setReloadKey(k => k + 1); }}
+            onClose={onClose}
+            onOpenPerson={openPerson}
+            onPersonChanged={(p) => setOpen(prev => ({ ...prev, ...p }))}
+          />
+        ) : (
+          <>
+            {/* ══ Zápis — nejdřív kdo, pak co ══ */}
+            <div style={{
+              position: "sticky", top: 0, zIndex: 3, background: theme.bg,
+              padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                <span style={{ fontSize: "16px" }}>🗺️</span>
+                <div style={{ flex: 1, fontSize: "14px", fontWeight: 700, color: theme.text }}>Mapa</div>
+                <button onClick={onClose} style={{
+                  background: "none", border: "none", fontSize: "20px",
+                  cursor: "pointer", color: theme.textSub, padding: "0 4px",
+                }}>×</button>
+              </div>
+
+              {pickerOpen || !who ? (
+                <PersonPicker
+                  owner={owner} theme={theme}
+                  onPick={pickWho}
+                  onCancel={() => { if (who) setPickerOpen(false); }}
+                />
+              ) : (
+                <>
+                  {/* Vybraný člověk — klikem se mění, šipkou se otevře jeho stránka */}
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 8,
+                    padding: "7px 10px", background: theme.accentSoft,
+                    border: `1px solid ${theme.accentBorder}`, borderRadius: 8,
+                  }}>
+                    <span style={{ fontSize: "13.5px", fontWeight: 700, color: theme.accent }}>
+                      {who.name}
+                    </span>
+                    {who.met_at && (
+                      <span style={{ fontSize: "11px", color: theme.textSub }}>📍 {who.met_at}</span>
+                    )}
+                    <span style={{ flex: 1 }} />
+                    <button onClick={() => openPerson(who)} title="Otevřít stránku člověka" style={{
+                      ...buttonStyle(), background: "transparent", color: theme.accent,
+                      fontSize: "11px", padding: "2px 7px",
+                    }}>historie →</button>
+                    <button onClick={() => setPickerOpen(true)} title="Vybrat jiného" style={{
+                      ...buttonStyle(), background: "transparent", color: theme.textSub,
+                      fontSize: "11px", padding: "2px 7px",
+                    }}>změnit</button>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "7px" }}>
+                    <input
+                      ref={draftRef}
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveFact(); } }}
+                      placeholder={`Co ti ${who.name} řekl… prodává octavii #auto`}
+                      style={inputStyle}
+                    />
+                    <input
+                      type="date" value={draftDate} max={todayIso}
+                      onChange={e => setDraftDate(e.target.value)}
+                      title="Kdy to zaznělo"
+                      style={{
+                        ...inputStyle, width: "auto", flex: "0 0 auto",
+                        padding: "9px 8px", fontSize: "12px",
+                        color: draftDate === todayIso ? theme.textSub : theme.accent,
+                      }}
+                    />
+                    <button onClick={saveFact} disabled={saving || !parsed.content} style={{
+                      ...buttonStyle(), background: theme.accent, color: "#fff",
+                      padding: "0 14px", fontSize: "13px", fontWeight: 700,
+                      opacity: (saving || !parsed.content) ? 0.5 : 1, flex: "0 0 auto",
+                    }}>{saving ? "…" : "+"}</button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* ══ Hledání ══ */}
+            <div style={{ padding: "12px 16px 0" }}>
+              <input
+                type="text" value={query}
+                onChange={(e) => { setQuery(e.target.value); setTab("vse"); }}
+                placeholder="Hledat… octavia, restaurace Praha, letiště, Ivan"
+                style={inputStyle}
+              />
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={() => setTab("vse")} style={chipStyle(tab === "vse")}>Vše</button>
+                <button onClick={() => { setTab("orphan"); setQuery(""); }} style={chipStyle(tab === "orphan")}>
+                  Bez jména{orphanCount > 0 ? ` (${orphanCount})` : ""}
+                </button>
+              </div>
+            </div>
+
+            {/* ══ Lidé ══ */}
+            {tab === "vse" && peopleHits.length > 0 && (
+              <div style={{ padding: "12px 16px 0" }}>
+                <div style={{
+                  fontSize: "10px", color: theme.textMid, letterSpacing: "0.04em",
+                  textTransform: "uppercase", marginBottom: 7, fontWeight: 700,
+                }}>Lidé</div>
+                {peopleHits.map(p => (
+                  <div key={p.id} onClick={() => openPerson(p)} style={{
+                    background: theme.card, border: `1px solid ${theme.accentBorder}`,
+                    borderRadius: "10px", padding: "9px 12px", marginBottom: "6px",
+                    cursor: "pointer",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "13.5px", fontWeight: 700, color: theme.accent }}>{p.name}</span>
+                      {(p.aliases || []).length > 0 && (
+                        <span style={{ fontSize: "11px", color: theme.textMid }}>{p.aliases.join(", ")}</span>
+                      )}
+                      <span style={{ flex: 1 }} />
+                      <span style={{ fontSize: "11px", color: theme.textMid }}>
+                        {p.fact_count} {p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}
+                        {p.last_at ? ` · ${fmtDate(p.last_at)}` : ""}
+                      </span>
+                    </div>
+                    {p.met_at && <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 3 }}>📍 {p.met_at}</div>}
+                    {p.introduced_name && (
+                      <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
+                        🤝 přes {p.introduced_name}
+                      </div>
+                    )}
+                    {p.contact && <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>☎ {p.contact}</div>}
+                    {!p.met_at && !p.introduced_name && p.sample && (
+                      <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 3, lineHeight: 1.45 }}>
+                        {p.sample}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ══ Záznamy ══ */}
+            <div style={{ padding: "12px 16px 20px" }}>
+              <div style={{
+                fontSize: "10px", color: theme.textMid, letterSpacing: "0.04em",
+                textTransform: "uppercase", marginBottom: 7, fontWeight: 700,
+              }}>
+                {busy ? "Hledám…"
+                  : tab === "orphan" ? `Čeká na přiřazení (${facts.length})`
+                  : query.trim() ? `Záznamy (${facts.length})`
+                  : "Poslední záznamy"}
+              </div>
+
+              {facts.length === 0 && !busy && (
+                <div style={{
+                  textAlign: "center", color: theme.textMid, fontSize: "13px",
+                  padding: "32px 0", lineHeight: 1.7,
+                }}>
+                  {tab === "orphan" ? "Všechno je přiřazené."
+                    : query.trim() ? "Nic nenalezeno."
+                    : (
+                      <>
+                        <div style={{ fontSize: 26, marginBottom: 10 }}>🗺️</div>
+                        Vyber člověka a zapiš první větu.
+                      </>
+                    )}
+                </div>
+              )}
+
+              {facts.map(FactCard)}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Stránka člověka ──
+   Nahoře kotva: kde jsem ho poznal, kontakt, kdo mi ho představil a koho
+   mi představil on. Pod tím celá časová osa, aby byl vidět vývoj vztahu. */
+function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, onOpenPerson }) {
+  const [rows, setRows] = useState([]);
+  const [intro, setIntro] = useState([]);        // koho mi tenhle člověk představil
+  const [asc, setAsc] = useState(true);
+  const [busy, setBusy] = useState(true);
+  const [draft, setDraft] = useState("");
+  const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [saving, setSaving] = useState(false);
+  const [editMeta, setEditMeta] = useState(false);
+  const [pickIntro, setPickIntro] = useState(false);
+  const [metAt, setMetAt] = useState(person.met_at || "");
+  const [contact, setContact] = useState(person.contact || "");
+  const [note, setNote] = useState(person.note || "");
+  const [aliases, setAliases] = useState((person.aliases || []).join(", "));
+  const [reloadKey, setReloadKey] = useState(0);
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  useEffect(() => {
+    setMetAt(person.met_at || "");
+    setContact(person.contact || "");
+    setNote(person.note || "");
+    setAliases((person.aliases || []).join(", "));
+  }, [person.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    Promise.all([
+      mapPersonTimeline(owner, person.id, asc, 300),
+      mapIntroducedBy(owner, person.id),
+    ]).then(([r, i]) => {
+      if (!cancelled) { setRows(r); setIntro(i); setBusy(false); }
+    });
+    return () => { cancelled = true; };
+  }, [owner, person.id, asc, reloadKey]);
+
+  const add = async () => {
+    const p = parseFactInput(draft);
+    if (!p.content) return;
+    setSaving(true);
+    try {
+      const happenedAt = draftDate === todayIso
+        ? new Date().toISOString()
+        : new Date(draftDate + "T12:00:00").toISOString();
+      const row = await mapAddFact(owner, {
+        personId: person.id, content: p.content, tags: p.tags, happenedAt,
+      });
+      if (row) { setDraft(""); setDraftDate(todayIso); setReloadKey(k => k + 1); }
+    } finally { setSaving(false); }
+  };
+
+  const remove = async (id) => {
+    setRows(prev => prev.filter(r => r.id !== id));
+    if (!await mapDeleteFact(id)) setReloadKey(k => k + 1);
+  };
+
+  const saveMeta = async () => {
+    const list = aliases.split(",").map(s => s.trim()).filter(Boolean);
+    const updated = await mapUpdatePerson(person.id, {
+      met_at: metAt.trim() || null,
+      contact: contact.trim() || null,
+      note: note.trim() || null,
+      aliases: list,
+    });
+    if (updated) { onPersonChanged?.(updated); setEditMeta(false); }
+  };
+
+  // Kdo mi ho představil
+  const setIntroducer = async (pick) => {
+    let p = pick.existing;
+    if (!p && pick.newName) p = await mapEnsurePerson(owner, pick.newName, []);
+    if (!p || p.id === person.id) { setPickIntro(false); return; }
+    const updated = await mapUpdatePerson(person.id, { introduced_by: p.id });
+    if (updated) onPersonChanged?.({ ...updated, introduced_name: p.name });
+    setPickIntro(false);
+  };
+
+  const clearIntroducer = async () => {
+    const updated = await mapUpdatePerson(person.id, { introduced_by: null });
+    if (updated) onPersonChanged?.({ ...updated, introduced_name: null });
+  };
+
+  const fmtFull = (iso) => new Date(iso).toLocaleDateString("cs-CZ", {
+    day: "numeric", month: "long", year: "numeric",
+  });
+
+  const inputStyle = {
+    width: "100%", boxSizing: "border-box",
+    fontSize: "14px", padding: "10px 12px",
+    background: theme.inputBg, color: theme.text,
+    border: `1px solid ${theme.inputBorder}`,
+    borderRadius: "8px", outline: "none", fontFamily: FONT,
+  };
+  const smallInput = { ...inputStyle, fontSize: "13px", padding: "8px 10px" };
+
+  return (
+    <>
+      <div style={{
+        position: "sticky", top: 0, zIndex: 3, background: theme.bg,
+        padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+          <button onClick={onBack} title="Zpět" style={{
+            ...buttonStyle(), background: "transparent", color: theme.textSub,
+            fontSize: "15px", padding: "2px 6px",
+          }}>←</button>
+          <div style={{ flex: 1, fontSize: "15px", fontWeight: 700, color: theme.text }}>
+            {person.name}
+          </div>
+          <button onClick={() => setEditMeta(v => !v)} title="Upravit" style={{
+            ...buttonStyle(), background: "transparent", color: theme.textSub,
+            fontSize: "13px", padding: "2px 6px",
+          }}>✎</button>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", fontSize: "20px",
+            cursor: "pointer", color: theme.textSub, padding: "0 4px",
+          }}>×</button>
+        </div>
+
+        {editMeta ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 9 }}>
+            <input value={metAt} onChange={e => setMetAt(e.target.value)}
+              placeholder="Kde jsem ho poznal — golf v Berouně, konference"
+              style={smallInput} />
+            <input value={contact} onChange={e => setContact(e.target.value)}
+              placeholder="Kontakt — telefon, mail, firma"
+              style={smallInput} />
+            <input value={aliases} onChange={e => setAliases(e.target.value)}
+              placeholder="Přezdívky oddělené čárkou — Peťa, Petr od aut"
+              style={smallInput} />
+            <input value={note} onChange={e => setNote(e.target.value)}
+              placeholder="Další poznámka" style={smallInput} />
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={saveMeta} style={{
+                ...buttonStyle(), background: theme.accent, color: "#fff",
+                padding: "5px 12px", fontSize: "11px", fontWeight: 700,
+              }}>ULOŽIT</button>
+              <button onClick={() => setEditMeta(false)} style={{
+                ...buttonStyle(), background: "transparent", color: theme.textSub,
+                padding: "5px 10px", fontSize: "11px",
+              }}>Zrušit</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 9, lineHeight: 1.7 }}>
+            {person.met_at
+              ? <div>📍 {person.met_at}</div>
+              : <div onClick={() => setEditMeta(true)} style={{ color: theme.yellow, cursor: "pointer" }}>
+                  + kde jsi ho poznal
+                </div>}
+            {person.contact && <div>☎ {person.contact}</div>}
+            {(person.aliases || []).length > 0 && (
+              <div style={{ color: theme.textMid }}>také: {person.aliases.join(", ")}</div>
+            )}
+
+            {/* Kdo mi ho představil */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span>🤝</span>
+              {person.introduced_name ? (
+                <>
+                  <span>představil
+                    <span onClick={() => onOpenPerson?.({ id: person.introduced_by, name: person.introduced_name })}
+                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                      {" "}{person.introduced_name}
+                    </span>
+                  </span>
+                  <button onClick={clearIntroducer} title="Zrušit vazbu" style={{
+                    ...buttonStyle(), background: "transparent", color: theme.textDim,
+                    fontSize: "12px", padding: "0 3px",
+                  }}>×</button>
+                </>
+              ) : (
+                <span onClick={() => setPickIntro(v => !v)} style={{ color: theme.yellow, cursor: "pointer" }}>
+                  + kdo mi ho představil
+                </span>
+              )}
+            </div>
+            {pickIntro && (
+              <div style={{ marginTop: 5 }}>
+                <PersonPicker owner={owner} theme={theme}
+                  placeholder="Kdo ti ho představil?"
+                  onPick={setIntroducer} onCancel={() => setPickIntro(false)} />
+              </div>
+            )}
+
+            {person.note && <div>{person.note}</div>}
+
+            {/* Koho mi představil on */}
+            {intro.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                <span style={{ color: theme.textMid }}>přes něj znám: </span>
+                {intro.map((p, i) => (
+                  <span key={p.id}>
+                    {i > 0 && ", "}
+                    <span onClick={() => onOpenPerson?.(p)}
+                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                      {p.name}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "7px" }}>
+          <input
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }}
+            placeholder={`Nový záznam k ${person.name}…`}
+            style={inputStyle}
+          />
+          <input
+            type="date" value={draftDate} max={todayIso}
+            onChange={e => setDraftDate(e.target.value)}
+            title="Kdy to zaznělo"
+            style={{
+              ...inputStyle, width: "auto", flex: "0 0 auto",
+              padding: "9px 8px", fontSize: "12px",
+              color: draftDate === todayIso ? theme.textSub : theme.accent,
+            }}
+          />
+          <button onClick={add} disabled={saving || !draft.trim()} style={{
+            ...buttonStyle(), background: theme.accent, color: "#fff",
+            padding: "0 14px", fontSize: "13px", fontWeight: 700,
+            opacity: (saving || !draft.trim()) ? 0.5 : 1, flex: "0 0 auto",
+          }}>{saving ? "…" : "+"}</button>
+        </div>
+      </div>
+
+      <div style={{ padding: "12px 16px 20px" }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+          <div style={{
+            fontSize: "10px", color: theme.textMid, letterSpacing: "0.04em",
+            textTransform: "uppercase", fontWeight: 700,
+          }}>
+            {busy ? "Načítám…" : `${rows.length} ${rows.length === 1 ? "záznam" : rows.length < 5 ? "záznamy" : "záznamů"}`}
+          </div>
+          <span style={{ flex: 1 }} />
+          <button onClick={() => setAsc(v => !v)} style={{
+            ...buttonStyle(), background: "transparent", color: theme.textSub,
+            fontSize: "11px", padding: "3px 8px",
+            border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
+          }}>{asc ? "od začátku ↓" : "nejnovější ↑"}</button>
+        </div>
+
+        {rows.length === 0 && !busy && (
+          <div style={{ textAlign: "center", color: theme.textMid, fontSize: "13px", padding: "28px 0" }}>
+            Zatím žádný záznam.
+          </div>
+        )}
+
+        {rows.map((r, i) => {
+          const prev = rows[i - 1];
+          const rok = new Date(r.happened_at).getFullYear();
+          const novyRok = !prev || new Date(prev.happened_at).getFullYear() !== rok;
+          return (
+            <div key={r.id}>
+              {novyRok && (
+                <div style={{
+                  fontSize: "11px", fontWeight: 700, color: theme.textMid,
+                  margin: i === 0 ? "0 0 8px" : "16px 0 8px",
+                  paddingBottom: 4, borderBottom: `1px solid ${theme.cardBorder}`,
+                }}>{rok}</div>
+              )}
+              <div style={{ display: "flex", gap: 10, paddingBottom: 10 }}>
+                <div style={{
+                  flex: "0 0 auto", width: 8, display: "flex",
+                  flexDirection: "column", alignItems: "center", paddingTop: 5,
+                }}>
+                  <div style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    background: theme.accent, flex: "0 0 auto",
+                  }} />
+                  <div style={{ flex: 1, width: 1, background: theme.cardBorder, marginTop: 2 }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: 2 }}>
+                    {fmtFull(r.happened_at)}
+                  </div>
+                  <div style={{ fontSize: "13.5px", color: theme.text, lineHeight: 1.5 }}>
+                    {r.content}
+                  </div>
+                  {(r.tags || []).length > 0 && (
+                    <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {r.tags.map(t => (
+                        <span key={t} style={{
+                          background: theme.inputBg, color: theme.textSub,
+                          padding: "1px 7px", borderRadius: "10px", fontSize: "11px",
+                        }}>#{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => remove(r.id)} title="Smazat" style={{
+                  ...buttonStyle(), background: "transparent", color: theme.textDim,
+                  fontSize: "13px", padding: "0 4px", flex: "0 0 auto",
+                }}>×</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote }) {
   useEscapeKey(onClose);
   const [query, setQuery] = useState("");
@@ -20514,6 +21573,7 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
+  const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
 
   // 📔 Denní příběh
   const [showStorySheet, setShowStorySheet] = useState(false);
@@ -21289,7 +22349,7 @@ function App() {
       // Pokud je nějaký modal otevřený, neřešíme — modal si Esc zachytí sám
       const anyModalOpen =
         showReminderSheet || showQuickReminder || showNotesSheet ||
-        editingNote !== null || showStatsSheet || showSearchSheet ||
+        editingNote !== null || showStatsSheet || showSearchSheet || showMapaSheet ||
         showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd || showStoryQuickQuote ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
         showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel || showBlockList;
@@ -23491,6 +24551,18 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔍
           </button>
+          {/* 🗺️ Mapa — znalostní báze vztahů */}
+          <button onClick={() => setShowMapaSheet(true)}
+            title="Mapa — co mi kdo řekl"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            🗺️
+          </button>
           {/* 📔 Denní příběh */}
           <button onClick={() => setShowStorySheet(true)}
             title="Denní příběh"
@@ -24586,6 +25658,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           onOpenDay={(d) => setStoryEditorDate(d)}
           onSaved={() => setStoryReloadKey(k => k + 1)}
         />
+
+        {showMapaSheet && (
+          <MapaSheet
+            currentUser={currentUser}
+            theme={theme}
+            onClose={() => setShowMapaSheet(false)}
+          />
+        )}
 
         {showSearchSheet && (
           <SearchSheet
