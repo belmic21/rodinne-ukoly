@@ -46,7 +46,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261003_2000";
+const FILE_VERSION = "261003_2035";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -14805,7 +14805,13 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const [note, setNote] = useState(person.note || "");
   const [aliases, setAliases] = useState((person.aliases || []).join(", "));
   const [reloadKey, setReloadKey] = useState(0);
+  const addRef = useRef(null);
   const todayIso = new Date().toISOString().slice(0, 10);
+
+  // Kurzor rovnou v poli zápisu — stránka člověka slouží hlavně k psaní.
+  useEffect(() => {
+    if (!editMeta) setTimeout(() => addRef.current?.focus(), 80);
+  }, [person.id, editMeta]);
 
   useEffect(() => {
     setName(person.name || "");
@@ -15088,6 +15094,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
 
         <div style={{ display: "flex", gap: "7px" }}>
           <input
+            ref={addRef}
             value={draft}
             onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }}
