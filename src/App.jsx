@@ -3125,6 +3125,35 @@ async function mapAssignFact(factId, personId) {
   }
 }
 
+// Sloučení dvou lidí — oprava překlepu ve jméně. Záznamy se přesunou,
+// chybné jméno zůstane jako přezdívka, vazby se přesměrují.
+async function mapMergePeople(owner, keepId, dropId) {
+  try {
+    const { data, error } = await supabase.rpc("map_merge_people", {
+      p_owner: owner, p_keep: keepId, p_drop: dropId,
+    });
+    if (error) throw error;
+    reportSyncOk();
+    return (data || [])[0] || null;
+  } catch (e) {
+    logServerError("mapMergePeople", e, { keepId, dropId });
+    return null;
+  }
+}
+
+// Dvojice podobných jmen — pravděpodobné duplicity.
+async function mapFindDuplicates(owner) {
+  try {
+    const { data, error } = await supabase.rpc("map_find_duplicates", {
+      p_owner: owner, p_min: 0.55,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
 // Koho mi tenhle člověk představil — opačný směr vazby.
 async function mapIntroducedBy(owner, personId) {
   if (!owner || !personId) return [];
@@ -7968,6 +7997,44 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     setIsEditing(false);
   };
 
+  /* ── Lomítkové zkratky ──
+     Hlavní pole zůstává pro úkoly. Když ale věta začne lomítkem, vyskočí
+     nabídka cílů a text se uloží jinam. Žádné hádání: dokud lomítko
+     nenapíšeš, chová se všechno přesně jako dřív. */
+  const SLASH_CMDS = [
+    { key: "u", dest: "task",  icon: "✅", label: "Úkol",         hint: "běžný úkol (výchozí i bez lomítka)" },
+    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "co kdo řekl — přiřadíš ke člověku" },
+    { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
+    { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
+  ];
+
+  const slash = useMemo(() => {
+    const m = text.match(/^\/([\p{L}]*)(?:\s+([\s\S]*))?$/u);
+    if (!m) return null;
+    const frag = (m[1] || "").toLowerCase();
+    const rest = (m[2] || "").trim();
+    const hits = frag
+      ? SLASH_CMDS.filter(c => c.key === frag || c.label.toLowerCase().startsWith(frag))
+      : SLASH_CMDS;
+    return { frag, rest, hits: hits.length ? hits : SLASH_CMDS };
+  }, [text]);
+
+  const [slashIdx, setSlashIdx] = useState(0);
+  useEffect(() => { setSlashIdx(0); }, [slash?.frag]);
+
+  const runSlash = (cmd) => {
+    const body = slash?.rest || "";
+    if (cmd.dest === "task") {
+      setText(body);                 // jen odstraní prefix, úkol se zadá normálně
+      inputRef.current?.focus();
+      return;
+    }
+    setText("");
+    setIsTypingPersist(false);
+    if (onTypingChange) onTypingChange(false);
+    onRoute?.(cmd.dest, body);
+  };
+
   const labelStyle = {
     fontSize: "10px", color: theme.textMid, fontWeight: 700,
     marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.3px"
@@ -10609,7 +10676,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], visibleCategories = null, onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], visibleCategories = null, onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange, onRoute }) {
   // Fallback na CATEGORIES pokud parent neposlal visibleCategories (defensive)
   const categories = visibleCategories || CATEGORIES;
   const [text, setText] = useState("");
@@ -10866,7 +10933,45 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   ];
 
   return (
-    <div ref={containerRef} style={{ marginBottom: "4px" }}>
+    <div ref={containerRef} style={{ marginBottom: "4px", position: "relative" }}>
+      {/* Nabídka lomítkových zkratek */}
+      {slash && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4,
+          background: theme.card, border: `1px solid ${theme.accentBorder}`,
+          borderRadius: 10, zIndex: 40, overflow: "hidden",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.28)", fontFamily: FONT,
+        }}>
+          {slash.hits.map((c, i) => (
+            <div key={c.key}
+              onMouseDown={e => { e.preventDefault(); runSlash(c); }}
+              onMouseEnter={() => setSlashIdx(i)}
+              style={{
+                display: "flex", alignItems: "center", gap: 9,
+                padding: "8px 11px", cursor: "pointer",
+                background: i === slashIdx ? theme.inputBg : "transparent",
+                borderBottom: i < slash.hits.length - 1 ? `1px solid ${theme.cardBorder}` : "none",
+              }}>
+              <span style={{ fontSize: "15px" }}>{c.icon}</span>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{c.label}</span>
+              <span style={{
+                fontSize: "10.5px", color: theme.textMid, background: theme.inputBg,
+                border: `1px solid ${theme.inputBorder}`, borderRadius: 4, padding: "0 5px",
+              }}>/{c.key}</span>
+              <span style={{ fontSize: "11px", color: theme.textMid, marginLeft: "auto" }}>{c.hint}</span>
+            </div>
+          ))}
+          <div style={{
+            padding: "6px 11px", fontSize: "11px", color: theme.textMid,
+            background: theme.inputBg,
+          }}>
+            {slash.rest
+              ? <>Enter uloží: „{slash.rest}“</>
+              : <>Napiš zkratku a mezeru, pak text. Např. <b>/m Pavel prodává octavii</b></>}
+          </div>
+        </div>
+      )}
+
       {/* Always visible quick input. V complex módu se pole stane "hint" - uživatel zadá název dole.  */}
       <div style={{
         ...cardStyle(theme), padding: "6px 8px",
@@ -10877,7 +10982,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         <input
           ref={inputRef}
           type="text"
-          placeholder={(showFull && type === "complex") ? "↓ Zadej název dole" : "Napiš úkol a stiskni Enter..."}
+          placeholder={(showFull && type === "complex") ? "↓ Zadej název dole" : "Napiš úkol a stiskni Enter…  nebo / pro jinam"}
           value={text}
           onChange={e => {
             setText(e.target.value);
@@ -10903,6 +11008,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           // onBlur záměrně neukončuje typing mode — uživatel může klikat na ikony popoverů.
           // Zavře se jen vědomě (✕ tlačítko), nebo po vytvoření úkolu.
           onKeyDown={e => {
+            if (slash) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx(i => Math.min(i + 1, slash.hits.length - 1)); return; }
+              if (e.key === "ArrowUp")   { e.preventDefault(); setSlashIdx(i => Math.max(i - 1, 0)); return; }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                runSlash(slash.hits[slashIdx] || slash.hits[0]);
+                return;
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               if (showFull) fullSubmit(); else quickSubmit();
             } else if (e.key === "Escape") {
@@ -13626,6 +13740,15 @@ function MapaHelp({ theme, onClose }) {
         pamatuje za tebe — a hlavně si pamatuje, <b>kdo</b> to řekl.
       </P>
 
+      <H>Nejrychlejší cesta sem</H>
+      <P>
+        Nemusíš sem klikat. Do hlavního pole na úvodní obrazovce napiš
+        <K>/m</K>, mezeru a větu — třeba <K>/m prodává octavii</K> — a Mapa
+        se otevře i s textem. Stejně funguje <K>/p</K> pro poznámku,
+        <K>/d</K> pro denní příběh. Samotné <K>/</K> ukáže nabídku.
+        Bez lomítka je to pořád úkol, nic se pro tebe nemění.
+      </P>
+
       <H>Zápis — nejdřív kdo, pak co</H>
       <P>
         Do horního pole napiš, koho se to týká, a vyber ho ze seznamu.
@@ -13677,6 +13800,15 @@ function MapaHelp({ theme, onClose }) {
         <b> Bez jména</b> a přiřadíš je později tlačítkem
         <b> + kdo to řekl?</b>. Používej to jen jako záchranu — přiřazený
         záznam je k nalezení mnohem líp.
+      </P>
+
+      <H>Když se spleteš ve jméně</H>
+      <P>
+        Stane se. Otevři správného člověka, klikni na <b>✎</b> a buď oprav
+        jméno, nebo dole zvol <b>⇄ sloučit s jiným</b> a vyber ten chybný
+        záznam. Jeho poznámky se přesunou sem a chybné jméno zůstane
+        uložené jako přezdívka, takže ho najdeš i podle překlepu.
+        Podobná jména ti aplikace sama nabídne nahoře ke sloučení.
       </P>
 
       <H>Jediné pravidlo, na kterém záleží</H>
@@ -13797,13 +13929,13 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeh
   );
 }
 
-function MapaSheet({ currentUser, theme, onClose }) {
+function MapaSheet({ currentUser, theme, onClose, initialDraft = "" }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
   const [who, setWho] = useState(null);            // vybraný člověk pro nový zápis
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft);
   const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState("vse");
@@ -13815,9 +13947,9 @@ function MapaSheet({ currentUser, theme, onClose }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(null);
   const [assigning, setAssigning] = useState(null);
-  // Nápověda. Zobrazí se sama, dokud není v mapě aspoň jeden člověk —
-  // při prvním otevření za rok tak nemusíš nic hledat.
+  // Nápověda je zavřená; vyvolá se tlačítkem v hlavičce.
   const [showHelp, setShowHelp] = useState(false);
+  const [dupes, setDupes] = useState([]);
   const draftRef = useRef(null);
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -13825,15 +13957,7 @@ function MapaSheet({ currentUser, theme, onClose }) {
 
   useEffect(() => { setPickerOpen(true); }, []);
 
-  // Dokud je mapa prázdná, nápověda se otevře sama. Jakmile v ní někdo je,
-  // drží se zavřená a vyvoláš ji tlačítkem v hlavičce.
-  useEffect(() => {
-    let cancelled = false;
-    mapPeopleSearch(owner, "", 1).then(r => {
-      if (!cancelled && (r || []).length === 0) setShowHelp(true);
-    });
-    return () => { cancelled = true; };
-  }, [owner]);
+
 
   // Hledání
   useEffect(() => {
@@ -13852,6 +13976,7 @@ function MapaSheet({ currentUser, theme, onClose }) {
         mapOrphanFacts(owner, 200),
       ]);
       if (!cancelled) { setFacts(f); setPeopleHits(p); setOrphanCount(o.length); setBusy(false); }
+      mapFindDuplicates(owner).then(d => { if (!cancelled) setDupes(d || []); });
     }, query ? 280 : 0);
     return () => { cancelled = true; clearTimeout(id); };
   }, [owner, query, reloadKey, open, tab]);
@@ -14111,6 +14236,43 @@ function MapaSheet({ currentUser, theme, onClose }) {
               </div>
             </div>
 
+            {/* ══ Možné duplicity ══ */}
+            {/* Překlepy ve jménech se stávají. Dokud na ně někdo neupozorní,
+                zůstanou v mapě dva lidé místo jednoho a záznamy jsou rozdělené. */}
+            {tab === "vse" && !query.trim() && dupes.length > 0 && (
+              <div style={{ padding: "12px 16px 0" }}>
+                <div style={{
+                  background: theme.inputBg, border: `1px solid ${theme.yellow}55`,
+                  borderRadius: 10, padding: "9px 12px",
+                }}>
+                  <div style={{ fontSize: "12px", color: theme.yellow, fontWeight: 700, marginBottom: 5 }}>
+                    Možná dvakrát ten samý člověk
+                  </div>
+                  {dupes.slice(0, 4).map((d, i) => (
+                    <div key={i} style={{
+                      fontSize: "12px", color: theme.textSub, lineHeight: 1.7,
+                      display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+                    }}>
+                      <span onClick={() => openPerson({ id: d.a_id, name: d.a_name })}
+                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                        {d.a_name}
+                      </span>
+                      <span style={{ color: theme.textMid }}>({d.a_count})</span>
+                      <span style={{ color: theme.textMid }}>↔</span>
+                      <span onClick={() => openPerson({ id: d.b_id, name: d.b_name })}
+                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                        {d.b_name}
+                      </span>
+                      <span style={{ color: theme.textMid }}>({d.b_count})</span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: "11px", color: theme.textMid, marginTop: 5, lineHeight: 1.5 }}>
+                    Otevři toho správného, klikni na ✎ a dole zvol „sloučit s jiným“.
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ══ Lidé ══ */}
             {tab === "vse" && peopleHits.length > 0 && (
               <div style={{ padding: "12px 16px 0" }}>
@@ -14202,6 +14364,9 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const [saving, setSaving] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [pickIntro, setPickIntro] = useState(false);
+  const [pickMerge, setPickMerge] = useState(false);
+  const [mergeMsg, setMergeMsg] = useState(null);
+  const [name, setName] = useState(person.name || "");
   const [metAt, setMetAt] = useState(person.met_at || "");
   const [contact, setContact] = useState(person.contact || "");
   const [note, setNote] = useState(person.note || "");
@@ -14210,6 +14375,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const todayIso = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
+    setName(person.name || "");
     setMetAt(person.met_at || "");
     setContact(person.contact || "");
     setNote(person.note || "");
@@ -14251,6 +14417,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const saveMeta = async () => {
     const list = aliases.split(",").map(s => s.trim()).filter(Boolean);
     const updated = await mapUpdatePerson(person.id, {
+      name: name.trim() || person.name,
       met_at: metAt.trim() || null,
       contact: contact.trim() || null,
       note: note.trim() || null,
@@ -14267,6 +14434,33 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
     const updated = await mapUpdatePerson(person.id, { introduced_by: p.id });
     if (updated) onPersonChanged?.({ ...updated, introduced_name: p.name });
     setPickIntro(false);
+  };
+
+  // Sloučení s jiným člověkem. Tenhle (otevřený) zůstane, vybraný zanikne
+  // a všechny jeho záznamy se sem přesunou.
+  const mergeWith = async (pick) => {
+    let other = pick.existing;
+    if (!other && pick.newName) { setPickMerge(false); return; }
+    if (!other || other.id === person.id) { setPickMerge(false); return; }
+    const ok = window.confirm(
+      `Sloučit „${other.name}" do „${person.name}"?\n\n` +
+      `Všechny záznamy se přesunou sem. Jméno „${other.name}" zůstane ` +
+      `uložené jako přezdívka, takže ho najdeš i podle něj.\n\n` +
+      `Tahle operace se nedá vrátit.`
+    );
+    if (!ok) { setPickMerge(false); return; }
+    const res = await mapMergePeople(owner, person.id, other.id);
+    setPickMerge(false);
+    if (res) {
+      setMergeMsg(`Sloučeno — přesunuto ${res.moved_facts} záznamů.`);
+      setTimeout(() => setMergeMsg(null), 6000);
+      setReloadKey(k => k + 1);
+      const fresh = await mapPeopleSearch(owner, person.name, 1);
+      if (fresh[0]) onPersonChanged?.(fresh[0]);
+    } else {
+      setMergeMsg("Sloučení se nepodařilo.");
+      setTimeout(() => setMergeMsg(null), 6000);
+    }
   };
 
   const clearIntroducer = async () => {
@@ -14313,6 +14507,9 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
 
         {editMeta ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 9 }}>
+            <input value={name} onChange={e => setName(e.target.value)}
+              placeholder="Jméno — oprav sem překlep"
+              style={{ ...smallInput, fontWeight: 700 }} />
             <input value={metAt} onChange={e => setMetAt(e.target.value)}
               placeholder="Kde jsem ho poznal — golf v Berouně, konference"
               style={smallInput} />
@@ -14333,7 +14530,23 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                 ...buttonStyle(), background: "transparent", color: theme.textSub,
                 padding: "5px 10px", fontSize: "11px",
               }}>Zrušit</button>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
+                ...buttonStyle(), background: "transparent", color: theme.textSub,
+                padding: "5px 10px", fontSize: "11px",
+                border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
+              }}>⇄ sloučit s jiným</button>
             </div>
+            {pickMerge && (
+              <div style={{ marginTop: 2 }}>
+                <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: 4, lineHeight: 1.5 }}>
+                  Vyber duplicitní záznam. Jeho poznámky se přesunou sem a zanikne.
+                </div>
+                <PersonPicker owner={owner} theme={theme}
+                  placeholder="Který záznam je ten samý člověk?"
+                  onPick={mergeWith} onCancel={() => setPickMerge(false)} />
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 9, lineHeight: 1.7 }}>
@@ -14395,6 +14608,14 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
               </div>
             )}
           </div>
+        )}
+
+        {mergeMsg && (
+          <div style={{
+            fontSize: "12px", color: theme.green, marginBottom: 8,
+            background: theme.inputBg, border: `1px solid ${theme.green}44`,
+            borderRadius: 7, padding: "6px 9px",
+          }}>{mergeMsg}</div>
         )}
 
         <div style={{ display: "flex", gap: "7px" }}>
@@ -19165,7 +19386,7 @@ function StoryDayTags({ story, categories, peopleSuggestions, currentUser, theme
    otevřít i tlačítko + v prohlížeči.
    ═══════════════════════════════════════════════════════ */
 
-function StoryQuickAdd({ open, presetDate, currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onSaved }) {
+function StoryQuickAdd({ open, presetDate, presetText, currentUser, theme, categories, peopleSuggestions, onClose, onOpenDay, onSaved }) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedStory, setSavedStory] = useState(null);
@@ -19181,13 +19402,13 @@ function StoryQuickAdd({ open, presetDate, currentUser, theme, categories, peopl
   useEffect(() => {
     if (!open) return;
     const d = presetDate || todayStoryDate();
-    setText("");
+    setText(presetText || "");   // předvyplnění z lomítkové zkratky /d
     setSavedStory(null);
     setError("");
     setDate(d);
     setTime(storyTimeNow());
     setShowDetails(d !== todayStoryDate());
-  }, [open, presetDate]);
+  }, [open, presetDate, presetText]);
 
   useEffect(() => {
     if (open && !savedStory) {
@@ -21701,6 +21922,8 @@ function App() {
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
+  const [mapaDraft, setMapaDraft] = useState("");             // předvyplnění z /m
+  const [storyQuickText, setStoryQuickText] = useState("");   // předvyplnění z /d
 
   // 📔 Denní příběh
   const [showStorySheet, setShowStorySheet] = useState(false);
@@ -25767,11 +25990,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         <StoryQuickAdd
           open={showStoryQuickAdd}
           presetDate={storyQuickAddDate}
+          presetText={storyQuickText}
           currentUser={currentUser}
           theme={theme}
           categories={storyCategories}
           peopleSuggestions={storyPeople}
-          onClose={() => setShowStoryQuickAdd(false)}
+          onClose={() => { setShowStoryQuickAdd(false); setStoryQuickText(""); }}
           onOpenDay={(d) => setStoryEditorDate(d)}
           onSaved={() => setStoryReloadKey(k => k + 1)}
         />
@@ -25790,7 +26014,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           <MapaSheet
             currentUser={currentUser}
             theme={theme}
-            onClose={() => setShowMapaSheet(false)}
+            initialDraft={mapaDraft}
+            onClose={() => { setShowMapaSheet(false); setMapaDraft(""); }}
           />
         )}
 
@@ -26029,6 +26254,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             currentUser={currentUser}
             users={users}
             onAdd={addTask}
+            onRoute={(dest, body) => {
+              // Lomítkové zkratky z hlavního pole — /m mapa, /p poznámka, /d deník
+              if (dest === "mapa") { setMapaDraft(body); setShowMapaSheet(true); }
+              else if (dest === "note") { setEditingNote(body ? { title: body } : {}); }
+              else if (dest === "story") { setStoryQuickText(body); setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }
+            }}
             theme={theme}
             categoryFilter={categoryFilter}
             onCategoryFilterChange={setCategoryFilter}
