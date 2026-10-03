@@ -46,7 +46,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261003_1930";
+const FILE_VERSION = "261003_2000";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3189,13 +3189,19 @@ async function mapAssignFact(factId, personId) {
 // (záložka "Bez jména"), takže se nedá omylem přijít o obsah.
 async function mapDeletePerson(id) {
   try {
-    const { error } = await supabase.from("map_people").delete().eq("id", id);
+    // .select("id") — bez něj projde i mazání, které nic nesmazalo,
+    // a tlačítko se pak tváří, že nic nedělá.
+    const { data, error } = await supabase
+      .from("map_people").delete().eq("id", id).select("id");
     if (error) throw error;
+    if (!data || data.length === 0) {
+      return { ok: false, reason: "Server nic nesmazal — zkus to znovu." };
+    }
     reportSyncOk();
-    return true;
+    return { ok: true };
   } catch (e) {
     logServerError("mapDeletePerson", e, { id });
-    return false;
+    return { ok: false, reason: e?.message || "Mazání selhalo." };
   }
 }
 
@@ -13988,6 +13994,19 @@ function MapaHelp({ theme, onClose }) {
         <K>#kontakt</K>. Není to povinné — hledání funguje i bez nich.
       </P>
 
+      <H>Hledání z útržků</H>
+      <P>
+        Do hledání můžeš naházet všechno, co si vybavíš, klidně bez
+        souvislosti: <K>letiště morava elektro martin</K>. Každé slovo se
+        hledá zvlášť a nahoře skončí ten, na koho sedí nejvíc z nich.
+        Nemusí sedět všechna.
+      </P>
+      <P>
+        V seznamu je vidět posledních 20 záznamů, níž je tlačítko na
+        načtení dalších. Starší věci se nehledají listováním, ale
+        napsáním útržku.
+      </P>
+
       <H>Když si nemůžeš vzpomenout na jméno</H>
       <P>
         Tohle je ten hlavní trik. Do <b>Hledat</b> napiš cokoli, co si
@@ -14302,6 +14321,9 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // Kolik záznamů se zobrazuje. Při tisících je zbytečné tahat víc než
+  // poslední obrazovku; zbytek se najde hledáním nebo tlačítkem níž.
+  const [visible, setVisible] = useState(20);
   const [open, setOpen] = useState(initialPerson);
   const [assigning, setAssigning] = useState(null);
   const [editingFact, setEditingFact] = useState(null);
@@ -14315,6 +14337,11 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
   }, [showHelp]);
   const [dupes, setDupes] = useState([]);
   const draftRef = useRef(null);
+
+  // Kurzor rovnou v poli zápisu, když je člověk už vybraný — píše se bez klikání.
+  useEffect(() => {
+    if (who && !pickerOpen) setTimeout(() => draftRef.current?.focus(), 60);
+  }, [who, pickerOpen]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const parsed = useMemo(() => parseFactInput(draft), [draft]);
@@ -14335,7 +14362,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
         return;
       }
       const [f, p, o] = await Promise.all([
-        mapSearch(owner, query, 50),
+        mapSearch(owner, query, visible),
         query.trim() ? mapPeopleSearch(owner, query, 8) : Promise.resolve([]),
         mapOrphanFacts(owner, 200),
       ]);
@@ -14343,7 +14370,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
       mapFindDuplicates(owner).then(d => { if (!cancelled) setDupes(d || []); });
     }, query ? 280 : 0);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [owner, query, reloadKey, open, tab]);
+  }, [owner, query, reloadKey, open, tab, visible]);
 
   // Výběr člověka pro nový zápis
   const pickWho = async (pick) => {
@@ -14608,8 +14635,8 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
             <div style={{ padding: "12px 16px 0" }}>
               <input
                 type="text" value={query}
-                onChange={(e) => { setQuery(e.target.value); setTab("vse"); }}
-                placeholder="Hledat… octavia, restaurace Praha, letiště, Ivan"
+                onChange={(e) => { setQuery(e.target.value); setTab("vse"); setVisible(20); }}
+                placeholder="Hledat… klidně útržky: letiště morava elektro martin"
                 style={inputStyle}
               />
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -14727,6 +14754,24 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
               )}
 
               {facts.map(FactCard)}
+
+              {/* Stránkování: server vrací jen tolik, kolik je vidět */}
+              {tab === "vse" && facts.length >= visible && (
+                <button onClick={() => setVisible(v => v + 50)} style={{
+                  ...buttonStyle(), width: "100%", marginTop: 4,
+                  background: "transparent", color: theme.accent,
+                  border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
+                  padding: "8px 0", fontSize: "12px", fontWeight: 600,
+                }}>Načíst dalších 50</button>
+              )}
+              {tab === "vse" && !query.trim() && facts.length >= visible && (
+                <div style={{
+                  fontSize: "11px", color: theme.textMid, textAlign: "center",
+                  marginTop: 7, lineHeight: 1.5,
+                }}>
+                  Starší záznamy najdeš hledáním — stačí útržek, co si pamatuješ.
+                </div>
+              )}
             </div>
           </>
         )}
@@ -14749,6 +14794,9 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   const [editMeta, setEditMeta] = useState(false);
   const [pickIntro, setPickIntro] = useState(false);
   const [pickMerge, setPickMerge] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState(null);
   const [editingFact, setEditingFact] = useState(null);
   const [mergeMsg, setMergeMsg] = useState(null);
   const [name, setName] = useState(person.name || "");
@@ -14827,13 +14875,6 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
     let other = pick.existing;
     if (!other && pick.newName) { setPickMerge(false); return; }
     if (!other || other.id === person.id) { setPickMerge(false); return; }
-    const ok = window.confirm(
-      `Sloučit „${other.name}" do „${person.name}"?\n\n` +
-      `Všechny záznamy se přesunou sem. Jméno „${other.name}" zůstane ` +
-      `uložené jako přezdívka, takže ho najdeš i podle něj.\n\n` +
-      `Tahle operace se nedá vrátit.`
-    );
-    if (!ok) { setPickMerge(false); return; }
     const res = await mapMergePeople(owner, person.id, other.id);
     setPickMerge(false);
     if (res) {
@@ -14916,25 +14957,54 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                 padding: "5px 10px", fontSize: "11px",
               }}>Zrušit</button>
               <span style={{ flex: 1 }} />
-              <button onClick={async () => {
-                const ok = window.confirm(
-                  `Smazat člověka „${person.name}"?\n\n` +
-                  `Jeho záznamy se NESMAŽOU — přejdou mezi nepřiřazené ` +
-                  `(záložka „Bez jména") a můžeš je přiřadit někomu jinému.`
-                );
-                if (!ok) return;
-                if (await mapDeletePerson(person.id)) onBack?.();
-              }} title="Smazat tohoto člověka" style={{
-                ...buttonStyle(), background: "transparent", color: theme.red,
-                padding: "5px 10px", fontSize: "11px",
-                border: `1px solid ${theme.red}44`, borderRadius: 6,
-              }}>🗑 smazat</button>
+              <button onClick={() => { setConfirmDelete(v => !v); setPickMerge(false); }}
+                title="Smazat tohoto člověka" style={{
+                  ...buttonStyle(), background: "transparent", color: theme.red,
+                  padding: "5px 10px", fontSize: "11px",
+                  border: `1px solid ${theme.red}44`, borderRadius: 6,
+                }}>🗑 smazat</button>
               <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
                 ...buttonStyle(), background: "transparent", color: theme.textSub,
                 padding: "5px 10px", fontSize: "11px",
                 border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
               }}>⇄ sloučit s jiným</button>
             </div>
+            {confirmDelete && (
+              <div style={{
+                marginTop: 4, padding: "9px 11px",
+                background: theme.inputBg, border: `1px solid ${theme.red}55`,
+                borderRadius: 8,
+              }}>
+                <div style={{ fontSize: "12px", color: theme.text, lineHeight: 1.5, marginBottom: 7 }}>
+                  Smazat člověka <b>{person.name}</b>?
+                  <div style={{ color: theme.textSub, fontSize: "11.5px", marginTop: 3 }}>
+                    Jeho záznamy se nesmažou — přejdou pod „Bez jména“
+                    a můžeš je přiřadit někomu jinému.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button disabled={deleting} onClick={async () => {
+                    setDeleting(true); setDeleteErr(null);
+                    const res = await mapDeletePerson(person.id);
+                    setDeleting(false);
+                    if (res?.ok) { setConfirmDelete(false); onBack?.(); }
+                    else setDeleteErr(res?.reason || "Nepodařilo se smazat.");
+                  }} style={{
+                    ...buttonStyle(), background: theme.red, color: "#fff",
+                    padding: "5px 12px", fontSize: "11px", fontWeight: 700,
+                    opacity: deleting ? 0.6 : 1,
+                  }}>{deleting ? "MAŽU…" : "ANO, SMAZAT"}</button>
+                  <button onClick={() => { setConfirmDelete(false); setDeleteErr(null); }} style={{
+                    ...buttonStyle(), background: "transparent", color: theme.textSub,
+                    padding: "5px 10px", fontSize: "11px",
+                  }}>Ne</button>
+                  {deleteErr && (
+                    <span style={{ fontSize: "11px", color: theme.red }}>{deleteErr}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {pickMerge && (
               <div style={{ marginTop: 2 }}>
                 <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: 4, lineHeight: 1.5 }}>
