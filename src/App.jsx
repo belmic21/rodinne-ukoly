@@ -42,6 +42,12 @@ function getAppVersion() {
 }
 const APP_VERSION = getAppVersion();
 
+// Označení konkrétního souboru App.jsx. APP_VERSION výše je čas, kdy Vercel
+// provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
+// odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
+// pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
+const FILE_VERSION = "261003_1930";
+
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
   { id: "important", label: "Důležité",    sym: "!",  weight: 1 },
@@ -10973,11 +10979,58 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   const [slashIdx, setSlashIdx] = useState(0);
   useEffect(() => { setSlashIdx(0); }, [slash?.frag]);
 
+  /* Po "/m " se nabídka mění na živé hledání lidí. Píšeš "mar" a rovnou
+     vidíš Martina, Martinu i Marka; dalším písmenem se výběr zužuje.
+     Vybereš ze seznamu, nebo založíš nového — všechno bez otevírání Mapy. */
+  const mapaCmd = !!slash && (slash.hits[slashIdx] || slash.hits[0])?.dest === "mapa";
+  const mapaParts = useMemo(() => {
+    if (!slash || !mapaCmd) return null;
+    const raw = slash.rest || "";
+    const i = raw.indexOf(":");
+    return i > 0
+      ? { name: raw.slice(0, i).trim(), sentence: raw.slice(i + 1).trim() }
+      : { name: raw.trim(), sentence: "" };
+  }, [slash, mapaCmd]);
+
+  const [mapaHits, setMapaHits] = useState([]);
+  const [mapaBusy, setMapaBusy] = useState(false);
+  const mapaName = mapaParts?.name || "";
+
+  useEffect(() => {
+    if (!mapaName) { setMapaHits([]); return; }
+    let cancelled = false;
+    setMapaBusy(true);
+    const id = setTimeout(async () => {
+      const r = await mapPeopleSearch(currentUser?.name, mapaName, 6);
+      if (!cancelled) { setMapaHits(r || []); setMapaBusy(false); }
+    }, 200);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [mapaName, currentUser?.name]);
+
+  useEffect(() => { setSlashIdx(0); }, [mapaName]);
+
+  // Kolik položek má nabídka právě teď — podle toho se pohybují šipky.
+  const slashRows = !slash ? 0
+    : (mapaCmd && mapaName) ? mapaHits.length + 1      // lidé + "nový člověk"
+    : slash.hits.length;
+
+  const pickMapaPerson = (person) => {
+    setText("");
+    setIsTypingPersist(false);
+    if (onTypingChange) onTypingChange(false);
+    onRoute?.("mapa", mapaParts?.sentence || "", { person, newName: person ? null : mapaName });
+  };
+
   const runSlash = (cmd) => {
     const body = slash?.rest || "";
     if (cmd.dest === "task") {
       setText(body);                 // jen odstraní prefix, úkol se zadá normálně
       inputRef.current?.focus();
+      return;
+    }
+    if (cmd.dest === "mapa" && mapaName) {
+      // Člověka vybíráme rovnou tady, ne až v Mapě.
+      pickMapaPerson(slashIdx < mapaHits.length ? mapaHits[slashIdx] : null);
       return;
     }
     setText("");
@@ -11010,43 +11063,98 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           borderRadius: 10, zIndex: 40, overflow: "hidden",
           boxShadow: "0 8px 24px rgba(0,0,0,0.28)", fontFamily: FONT,
         }}>
-          {slash.hits.map((c, i) => (
-            <div key={c.key}
-              onMouseDown={e => { e.preventDefault(); runSlash(c); }}
-              onMouseEnter={() => setSlashIdx(i)}
-              style={{
-                display: "flex", alignItems: "center", gap: 9,
-                padding: "8px 11px", cursor: "pointer",
-                background: i === slashIdx ? theme.inputBg : "transparent",
-                borderBottom: i < slash.hits.length - 1 ? `1px solid ${theme.cardBorder}` : "none",
+          {(mapaCmd && mapaName) ? (
+            <>
+              {/* Živé hledání lidí — píšeš "mar" a vidíš Martina, Martinu, Marka */}
+              <div style={{
+                padding: "6px 11px", fontSize: "10.5px", fontWeight: 700,
+                color: theme.textMid, background: theme.inputBg,
+                textTransform: "uppercase", letterSpacing: "0.04em",
+                display: "flex", alignItems: "center", gap: 6,
               }}>
-              <span style={{ fontSize: "15px" }}>{c.icon}</span>
-              <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{c.label}</span>
-              <span style={{
-                fontSize: "10.5px", color: theme.textMid, background: theme.inputBg,
-                border: `1px solid ${theme.inputBorder}`, borderRadius: 4, padding: "0 5px",
-              }}>/{c.key}</span>
-              <span style={{ fontSize: "11px", color: theme.textMid, marginLeft: "auto" }}>{c.hint}</span>
-            </div>
-          ))}
-          <div style={{
-            padding: "6px 11px", fontSize: "11px", color: theme.textMid,
-            background: theme.inputBg,
-          }}>
-            {(() => {
-              const c = slash.hits[slashIdx] || slash.hits[0];
-              if (!slash.rest) {
-                return <>Napiš zkratku, mezeru a text. U mapy začni jménem: <b>/m Martin: prodává octavii</b></>;
-              }
-              if (c?.dest === "mapa") {
-                const i = slash.rest.indexOf(":");
-                return i > 0
-                  ? <>Enter → Mapa: člověk <b>{slash.rest.slice(0, i).trim()}</b>, záznam „{slash.rest.slice(i + 1).trim()}“</>
-                  : <>Enter → Mapa, vyhledá člověka <b>{slash.rest}</b>. Větu připoj dvojtečkou: <b>{slash.rest}: co řekl</b></>;
-              }
-              return <>Enter uloží: „{slash.rest}“</>;
-            })()}
-          </div>
+                <span>🗺️ Mapa — kdo?</span>
+                <span style={{ flex: 1 }} />
+                {mapaBusy && <span style={{ fontWeight: 400, textTransform: "none" }}>hledám…</span>}
+              </div>
+
+              {mapaHits.map((p, i) => (
+                <div key={p.id}
+                  onMouseDown={e => { e.preventDefault(); pickMapaPerson(p); }}
+                  onMouseEnter={() => setSlashIdx(i)}
+                  style={{
+                    padding: "8px 11px", cursor: "pointer",
+                    background: i === slashIdx ? theme.inputBg : "transparent",
+                    borderBottom: `1px solid ${theme.cardBorder}`,
+                  }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{p.name}</span>
+                    {(p.aliases || []).length > 0 && (
+                      <span style={{ fontSize: "11px", color: theme.textMid }}>{p.aliases.join(", ")}</span>
+                    )}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+                  </div>
+                  {(p.met_at || p.introduced_name || p.contact) && (
+                    <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2 }}>
+                      {p.met_at ? `📍 ${p.met_at}`
+                        : p.introduced_name ? `🤝 přes ${p.introduced_name}`
+                        : `☎ ${p.contact}`}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <div
+                onMouseDown={e => { e.preventDefault(); pickMapaPerson(null); }}
+                onMouseEnter={() => setSlashIdx(mapaHits.length)}
+                style={{
+                  padding: "8px 11px", fontSize: "12px", cursor: "pointer",
+                  color: theme.green, fontWeight: 600,
+                  background: slashIdx === mapaHits.length ? theme.inputBg : "transparent",
+                }}>
+                + nový člověk „{mapaName}“
+              </div>
+
+              <div style={{
+                padding: "6px 11px", fontSize: "11px", color: theme.textMid,
+                background: theme.inputBg,
+              }}>
+                {mapaParts?.sentence
+                  ? <>Záznam: „{mapaParts.sentence}“ — vyber člověka a Enter</>
+                  : <>Šipky vybírají, Enter potvrdí. Záznam připoj dvojtečkou: <b>{mapaName}: co řekl</b></>}
+              </div>
+            </>
+          ) : (
+            <>
+              {slash.hits.map((c, i) => (
+                <div key={c.key}
+                  onMouseDown={e => { e.preventDefault(); runSlash(c); }}
+                  onMouseEnter={() => setSlashIdx(i)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 9,
+                    padding: "8px 11px", cursor: "pointer",
+                    background: i === slashIdx ? theme.inputBg : "transparent",
+                    borderBottom: i < slash.hits.length - 1 ? `1px solid ${theme.cardBorder}` : "none",
+                  }}>
+                  <span style={{ fontSize: "15px" }}>{c.icon}</span>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{c.label}</span>
+                  <span style={{
+                    fontSize: "10.5px", color: theme.textMid, background: theme.inputBg,
+                    border: `1px solid ${theme.inputBorder}`, borderRadius: 4, padding: "0 5px",
+                  }}>/{c.key}</span>
+                  <span style={{ fontSize: "11px", color: theme.textMid, marginLeft: "auto" }}>{c.hint}</span>
+                </div>
+              ))}
+              <div style={{
+                padding: "6px 11px", fontSize: "11px", color: theme.textMid,
+                background: theme.inputBg,
+              }}>
+                {slash.rest
+                  ? <>Enter uloží: „{slash.rest}“</>
+                  : <>Napiš zkratku, mezeru a text. U mapy začni jménem: <b>/m mar</b></>}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -11087,11 +11195,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           // Zavře se jen vědomě (✕ tlačítko), nebo po vytvoření úkolu.
           onKeyDown={e => {
             if (slash) {
-              if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx(i => Math.min(i + 1, slash.hits.length - 1)); return; }
+              if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx(i => Math.min(i + 1, Math.max(0, slashRows - 1))); return; }
               if (e.key === "ArrowUp")   { e.preventDefault(); setSlashIdx(i => Math.max(i - 1, 0)); return; }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
-                runSlash(slash.hits[slashIdx] || slash.hits[0]);
+                runSlash((mapaCmd && mapaName) ? { dest: "mapa" } : (slash.hits[slashIdx] || slash.hits[0]));
                 return;
               }
             }
@@ -11284,6 +11392,34 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                   fontSize: "11px", color: theme.textMid, fontStyle: "italic",
                 }}>
                   Příklad: <code style={codeStyle}>Vynést koš @Pavla +u !zítra ~tyden</code>
+                </div>
+
+                {/* Lomítko na začátku = zápis nejde do úkolů, ale jinam */}
+                <div style={{
+                  marginTop: "10px", paddingTop: "8px",
+                  borderTop: `1px solid ${theme.accent}20`,
+                }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: theme.text, marginBottom: 6 }}>
+                    Lomítko na začátku — zápis jinam než do úkolů
+                  </div>
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "auto 1fr",
+                    gap: "6px 12px", fontSize: "11px", alignItems: "center",
+                  }}>
+                    <code style={codeStyle}>/m mar</code>
+                    <span style={{ color: theme.text }}>🗺️ Mapa — našeptá lidi na „mar“, vybereš</span>
+                    <code style={codeStyle}>/m mar: co řekl</code>
+                    <span style={{ color: theme.text }}>🗺️ Mapa — rovnou i se záznamem</span>
+                    <code style={codeStyle}>/p text</code>
+                    <span style={{ color: theme.text }}>📝 Poznámka</span>
+                    <code style={codeStyle}>/d text</code>
+                    <span style={{ color: theme.text }}>📔 Denní příběh</span>
+                    <code style={codeStyle}>/</code>
+                    <span style={{ color: theme.text }}>ukáže nabídku všech cílů</span>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: "11px", color: theme.textMid, fontStyle: "italic" }}>
+                    Příklad: <code style={codeStyle}>/m mar: prodává octavii</code>
+                  </div>
                 </div>
               </div>
             );
@@ -13821,10 +13957,15 @@ function MapaHelp({ theme, onClose }) {
       <H>Nejrychlejší cesta sem</H>
       <P>
         Nemusíš sem klikat. Do hlavního pole na úvodní obrazovce napiš
-        <K>/m</K>, mezeru a <b>jméno</b> — třeba <K>/m martin š</K> — a Mapa
-        se otevře rovnou s vyhledaným člověkem. Větu můžeš připojit
-        dvojtečkou: <K>/m martin š: prodává octavii</K>. Pak už jen
-        potvrdíš člověka a je hotovo.
+        <K>/m</K>, mezeru a začni psát jméno. Už po <K>/m mar</K> se
+        pod polem objeví Martin, Martina i Marek — každým dalším písmenem
+        se seznam zužuje. Šipkami vybereš, Enter potvrdí a Mapa se otevře
+        s tím člověkem. Když ho v seznamu nemáš, je dole
+        <b>+ nový člověk</b> a založí se.
+      </P>
+      <P>
+        Větu můžeš připojit rovnou dvojtečkou:
+        <K>/m mar: prodává octavii</K> — pak jen vybereš Martina a je hotovo.
       </P>
       <P>
         Stejně funguje <K>/p</K> pro poznámku a <K>/d</K> pro denní příběh.
@@ -14130,11 +14271,11 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initia
   );
 }
 
-function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "", initialPerson = null }) {
+function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "", initialPerson = null, initialWho = null }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
-  const [who, setWho] = useState(null);            // vybraný člověk pro nový zápis
+  const [who, setWho] = useState(initialWho);      // vybraný člověk pro nový zápis
   const [pickerOpen, setPickerOpen] = useState(false);
   /* Text z lomítkové zkratky /m.
      Bez dvojtečky je to jméno člověka — otevře se rovnou výběr s tímhle
@@ -14143,11 +14284,13 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
      To odpovídá pořadí, ve kterém se v Mapě zapisuje: nejdřív kdo, pak co. */
   const slashParts = useMemo(() => {
     const raw = (initialDraft || "").trim();
+    // Když je člověk vybraný už v hlavním poli, je initialDraft čistě věta.
+    if (initialWho) return { who: "", sentence: raw };
     if (!raw) return { who: "", sentence: "" };
     const i = raw.indexOf(":");
     if (i > 0) return { who: raw.slice(0, i).trim(), sentence: raw.slice(i + 1).trim() };
     return { who: raw, sentence: "" };
-  }, [initialDraft]);
+  }, [initialDraft, initialWho]);
 
   const [draft, setDraft] = useState(slashParts.sentence);
   const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -14176,7 +14319,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
   const todayIso = new Date().toISOString().slice(0, 10);
   const parsed = useMemo(() => parseFactInput(draft), [draft]);
 
-  useEffect(() => { if (!initialPerson && !initialQuery) setPickerOpen(true); }, []);  // eslint-disable-line
+  useEffect(() => { if (!initialPerson && !initialQuery && !initialWho) setPickerOpen(true); }, []);  // eslint-disable-line
 
 
 
@@ -15898,7 +16041,7 @@ function LoginScreen({ users, onLogin, themeName }) {
         userSelect: "none",
         fontWeight: 500,
       }}>
-        © Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
+        © Michal Bělohlav · Rodinné úkoly · v{APP_VERSION} · soubor {FILE_VERSION}
       </div>
     </div>
   );
@@ -22278,6 +22421,7 @@ function App() {
   const [mapaDraft, setMapaDraft] = useState("");             // předvyplnění z /m
   const [mapaQuery, setMapaQuery] = useState("");             // otevření z lupy
   const [mapaPerson, setMapaPerson] = useState(null);
+  const [mapaWho, setMapaWho] = useState(null);               // člověk vybraný už v /m
   const [storyQuickText, setStoryQuickText] = useState("");   // předvyplnění z /d
 
   // 📔 Denní příběh
@@ -22865,6 +23009,7 @@ function App() {
 
       const summary = {
         version: APP_VERSION,
+        fileVersion: FILE_VERSION,
         currentUser: currentUser?.name || "(není přihlášen)",
         online: navigator.onLine,
         counts: {
@@ -25837,7 +25982,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               textAlign: "center", lineHeight: 1.4, fontWeight: 500,
             }}>
               © {new Date().getFullYear()} Michal Bělohlav<br/>
-              Rodinné úkoly · v{APP_VERSION}
+              Rodinné úkoly · v{APP_VERSION} · soubor {FILE_VERSION}
             </div>
           </div>
         </>
@@ -26398,9 +26543,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialDraft={mapaDraft}
             initialQuery={mapaQuery}
             initialPerson={mapaPerson}
+            initialWho={mapaWho}
             onClose={() => {
               setShowMapaSheet(false);
-              setMapaDraft(""); setMapaQuery(""); setMapaPerson(null);
+              setMapaDraft(""); setMapaQuery(""); setMapaPerson(null); setMapaWho(null);
             }}
           />
         )}
@@ -26648,9 +26794,19 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             currentUser={currentUser}
             users={users}
             onAdd={addTask}
-            onRoute={(dest, body) => {
+            onRoute={async (dest, body, extra) => {
               // Lomítkové zkratky z hlavního pole — /m mapa, /p poznámka, /d deník
-              if (dest === "mapa") { setMapaDraft(body); setShowMapaSheet(true); }
+              if (dest === "mapa") {
+                // Člověk se vybírá už v hlavním poli; sem přijde hotový,
+                // nebo jméno nového, kterého tu rovnou založíme.
+                let person = extra?.person || null;
+                if (!person && extra?.newName) {
+                  person = await mapEnsurePerson(currentUser?.name, extra.newName, []);
+                }
+                setMapaWho(person);
+                setMapaDraft(body);
+                setShowMapaSheet(true);
+              }
               else if (dest === "note") { setEditingNote(body ? { title: body } : {}); }
               else if (dest === "story") { setStoryQuickText(body); setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }
             }}
@@ -28048,7 +28204,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           userSelect: "none",
           fontWeight: 600,
         }}>
-          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION}
+          © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION} · soubor {FILE_VERSION}
         </div>
       </div>{/* /hlavní sloupec úkolů */}
 
