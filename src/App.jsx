@@ -7997,44 +7997,6 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
     setIsEditing(false);
   };
 
-  /* ── Lomítkové zkratky ──
-     Hlavní pole zůstává pro úkoly. Když ale věta začne lomítkem, vyskočí
-     nabídka cílů a text se uloží jinam. Žádné hádání: dokud lomítko
-     nenapíšeš, chová se všechno přesně jako dřív. */
-  const SLASH_CMDS = [
-    { key: "u", dest: "task",  icon: "✅", label: "Úkol",         hint: "běžný úkol (výchozí i bez lomítka)" },
-    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "co kdo řekl — přiřadíš ke člověku" },
-    { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
-    { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
-  ];
-
-  const slash = useMemo(() => {
-    const m = text.match(/^\/([\p{L}]*)(?:\s+([\s\S]*))?$/u);
-    if (!m) return null;
-    const frag = (m[1] || "").toLowerCase();
-    const rest = (m[2] || "").trim();
-    const hits = frag
-      ? SLASH_CMDS.filter(c => c.key === frag || c.label.toLowerCase().startsWith(frag))
-      : SLASH_CMDS;
-    return { frag, rest, hits: hits.length ? hits : SLASH_CMDS };
-  }, [text]);
-
-  const [slashIdx, setSlashIdx] = useState(0);
-  useEffect(() => { setSlashIdx(0); }, [slash?.frag]);
-
-  const runSlash = (cmd) => {
-    const body = slash?.rest || "";
-    if (cmd.dest === "task") {
-      setText(body);                 // jen odstraní prefix, úkol se zadá normálně
-      inputRef.current?.focus();
-      return;
-    }
-    setText("");
-    setIsTypingPersist(false);
-    if (onTypingChange) onTypingChange(false);
-    onRoute?.(cmd.dest, body);
-  };
-
   const labelStyle = {
     fontSize: "10px", color: theme.textMid, fontWeight: 700,
     marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.3px"
@@ -10916,6 +10878,44 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     setType("simple"); setShowFull(false); setShowFrom("");
     setInitialChecklist([]); setChecklistInput(""); setQuickCategory(null);
     setQuickPriority(null); setQuickAssignees([]);
+  };
+
+  /* ── Lomítkové zkratky ──
+     Hlavní pole zůstává pro úkoly. Když ale věta začne lomítkem, vyskočí
+     nabídka cílů a text se uloží jinam. Žádné hádání: dokud lomítko
+     nenapíšeš, chová se všechno přesně jako dřív. */
+  const SLASH_CMDS = [
+    { key: "u", dest: "task",  icon: "✅", label: "Úkol",         hint: "běžný úkol (výchozí i bez lomítka)" },
+    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "co kdo řekl — přiřadíš ke člověku" },
+    { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
+    { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
+  ];
+
+  const slash = useMemo(() => {
+    const m = text.match(/^\/([\p{L}]*)(?:\s+([\s\S]*))?$/u);
+    if (!m) return null;
+    const frag = (m[1] || "").toLowerCase();
+    const rest = (m[2] || "").trim();
+    const hits = frag
+      ? SLASH_CMDS.filter(c => c.key === frag || c.label.toLowerCase().startsWith(frag))
+      : SLASH_CMDS;
+    return { frag, rest, hits: hits.length ? hits : SLASH_CMDS };
+  }, [text]);
+
+  const [slashIdx, setSlashIdx] = useState(0);
+  useEffect(() => { setSlashIdx(0); }, [slash?.frag]);
+
+  const runSlash = (cmd) => {
+    const body = slash?.rest || "";
+    if (cmd.dest === "task") {
+      setText(body);                 // jen odstraní prefix, úkol se zadá normálně
+      inputRef.current?.focus();
+      return;
+    }
+    setText("");
+    setIsTypingPersist(false);
+    if (onTypingChange) onTypingChange(false);
+    onRoute?.(cmd.dest, body);
   };
 
   const labelStyle = {
