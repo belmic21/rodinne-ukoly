@@ -908,7 +908,12 @@ function processRecurring(tasks) {
   const updates = [];
 
   const processed = tasks.map(task => {
-    if (task.recDays > 0 && task.status === "done" && task.completedAt) {
+    // Smazaný ani archivovaný úkol se neoživuje. Dřív stačilo, že měl
+    // status "done" — jenže zastaralá kopie na jiném zařízení ho pak
+    // vzkřísila i poté, co byl jinde smazaný.
+    if (task.deletedAt || task.archivedAt) return task;
+    if (task.status !== "done") return task;
+    if (task.recDays > 0 && task.completedAt) {
       const nextDue = new Date(task.completedAt);
       nextDue.setDate(nextDue.getDate() + task.recDays);
 
@@ -2249,7 +2254,12 @@ async function flushOfflineQueue() {
       if (action.type === "create_task") {
         result = await supabase.from("tasks").insert(taskToDb(action.task));
       } else if (action.type === "update_task") {
-        result = await supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
+        // Stejná pojistka jako v apiUpdateTask: změna uložená ve frontě může
+        // být stará několik hodin. Pokud mezitím někdo úkol smazal, nesmí ho
+        // odeslání fronty vzkřísit.
+        let q = supabase.from("tasks").update(taskToDb(action.task)).eq("id", action.task.id);
+        if (!action.task.deletedAt) q = q.is("deleted_at", null);
+        result = await q;
       } else if (action.type === "create_user") {
         result = await supabase.from("users").insert({ name: action.user.name, pin: action.user.pin, is_admin: action.user.admin });
       } else if (action.type === "create_comment") {
@@ -2906,7 +2916,21 @@ async function apiCreateTask(task) {
   }
 }
 
-async function apiUpdateTask(task) {
+/**
+ * Zápis úkolu na server.
+ *
+ * Pozor na jednu věc, kvůli které se vracely smazané úkoly:
+ * aplikace posílá VŽDY celý řádek. Když má jiné zařízení v paměti starou
+ * kopii úkolu (telefon, který spal, nebo mu utekla realtime zpráva), jeho
+ * zápis přepíše i stav, který se mezitím změnil jinde — a smazaný úkol
+ * tím obživne. Proto se každý běžný zápis provede jen tehdy, pokud řádek
+ * na serveru ještě není smazaný.
+ *
+ * opts.allowUndelete = true  → vědomé obnovení z koše (tlačítko Obnovit, Vrátit)
+ * opts.onlyIfStatus = "done" → zápis projde jen když server má tenhle stav;
+ *                              používá oživení opakovaného úkolu
+ */
+async function apiUpdateTask(task, opts = {}) {
   // Always update local cache
   const cached = cacheGet(CACHE_TASKS) || [];
   cacheSet(CACHE_TASKS, cached.map(t => t.id === task.id ? task : t));
@@ -2917,16 +2941,26 @@ async function apiUpdateTask(task) {
     if (Array.isArray(task.rejectedBy)) dbRow.rejected_by = task.rejectedBy;
     // Archived_at — pro archiv (nový sloupec)
     if (task.archivedAt !== undefined) dbRow.archived_at = task.archivedAt;
+
+    let q = supabase.from("tasks").update(dbRow).eq("id", task.id);
+    if (!opts.allowUndelete && !task.deletedAt) q = q.is("deleted_at", null);
+    if (opts.onlyIfStatus) q = q.eq("status", opts.onlyIfStatus);
+
     // .select("id") — chceme zpátky potvrzení, že se opravdu změnil nějaký řádek.
-    // Bez toho projde i UPDATE, který kvůli RLS nebo chybějícímu řádku nezměnil nic.
-    const { data, error } = await supabase.from("tasks").update(dbRow).eq("id", task.id).select("id");
+    const { data, error } = await q.select("id");
     if (error) throw error;
     if (!data || data.length === 0) {
+      // Podmínka nesedí — řádek je mezitím smazaný nebo v jiném stavu.
+      // U hlídaných zápisů to není chyba, jen to znamená "neplatí, zahoď".
+      if (opts.allowUndelete === false || opts.onlyIfStatus || !task.deletedAt) {
+        return { ok: false, skipped: true };
+      }
       const noRows = new Error(`Úkol "${task.title || task.id}" se na serveru nezměnil (0 řádků).`);
       noRows.code = "NOROWS";
       throw noRows;
     }
     reportSyncOk();
+    return { ok: true };
   } catch (e) {
     if (isNetworkError(e)) {
       console.warn("apiUpdateTask offline, queued");
@@ -2934,11 +2968,14 @@ async function apiUpdateTask(task) {
     } else {
       logServerError("apiUpdateTask", e, taskToDb(task));
     }
+    return { ok: false };
   }
 }
 
-async function apiUpdateTasks(tasks) {
-  for (const task of tasks) await apiUpdateTask(task);
+async function apiUpdateTasks(tasks, opts = {}) {
+  const results = [];
+  for (const task of tasks) results.push(await apiUpdateTask(task, opts));
+  return results;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -3121,6 +3158,20 @@ async function mapAssignFact(factId, personId) {
     return true;
   } catch (e) {
     logServerError("mapAssignFact", e, { factId, personId });
+    return false;
+  }
+}
+
+// Smazání člověka. Jeho záznamy se nemažou — přejdou mezi nepřiřazené
+// (záložka "Bez jména"), takže se nedá omylem přijít o obsah.
+async function mapDeletePerson(id) {
+  try {
+    const { error } = await supabase.from("map_people").delete().eq("id", id);
+    if (error) throw error;
+    reportSyncOk();
+    return true;
+  } catch (e) {
+    logServerError("mapDeletePerson", e, { id });
     return false;
   }
 }
@@ -10886,7 +10937,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
      nenapíšeš, chová se všechno přesně jako dřív. */
   const SLASH_CMDS = [
     { key: "u", dest: "task",  icon: "✅", label: "Úkol",         hint: "běžný úkol (výchozí i bez lomítka)" },
-    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "co kdo řekl — přiřadíš ke člověku" },
+    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "jméno, nebo jméno: co řekl" },
     { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
     { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
   ];
@@ -10965,9 +11016,19 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             padding: "6px 11px", fontSize: "11px", color: theme.textMid,
             background: theme.inputBg,
           }}>
-            {slash.rest
-              ? <>Enter uloží: „{slash.rest}“</>
-              : <>Napiš zkratku a mezeru, pak text. Např. <b>/m Pavel prodává octavii</b></>}
+            {(() => {
+              const c = slash.hits[slashIdx] || slash.hits[0];
+              if (!slash.rest) {
+                return <>Napiš zkratku, mezeru a text. U mapy začni jménem: <b>/m Martin: prodává octavii</b></>;
+              }
+              if (c?.dest === "mapa") {
+                const i = slash.rest.indexOf(":");
+                return i > 0
+                  ? <>Enter → Mapa: člověk <b>{slash.rest.slice(0, i).trim()}</b>, záznam „{slash.rest.slice(i + 1).trim()}“</>
+                  : <>Enter → Mapa, vyhledá člověka <b>{slash.rest}</b>. Větu připoj dvojtečkou: <b>{slash.rest}: co řekl</b></>;
+              }
+              return <>Enter uloží: „{slash.rest}“</>;
+            })()}
           </div>
         </div>
       )}
@@ -13743,10 +13804,15 @@ function MapaHelp({ theme, onClose }) {
       <H>Nejrychlejší cesta sem</H>
       <P>
         Nemusíš sem klikat. Do hlavního pole na úvodní obrazovce napiš
-        <K>/m</K>, mezeru a větu — třeba <K>/m prodává octavii</K> — a Mapa
-        se otevře i s textem. Stejně funguje <K>/p</K> pro poznámku,
-        <K>/d</K> pro denní příběh. Samotné <K>/</K> ukáže nabídku.
-        Bez lomítka je to pořád úkol, nic se pro tebe nemění.
+        <K>/m</K>, mezeru a <b>jméno</b> — třeba <K>/m martin š</K> — a Mapa
+        se otevře rovnou s vyhledaným člověkem. Větu můžeš připojit
+        dvojtečkou: <K>/m martin š: prodává octavii</K>. Pak už jen
+        potvrdíš člověka a je hotovo.
+      </P>
+      <P>
+        Stejně funguje <K>/p</K> pro poznámku a <K>/d</K> pro denní příběh.
+        Samotné <K>/</K> ukáže nabídku. Bez lomítka je to pořád úkol,
+        nic se pro tebe nemění.
       </P>
 
       <H>Zápis — nejdřív kdo, pak co</H>
@@ -13802,6 +13868,26 @@ function MapaHelp({ theme, onClose }) {
         záznam je k nalezení mnohem líp.
       </P>
 
+      <H>Oprava a mazání</H>
+      <P>
+        Jednotlivý záznam smažeš křížkem na jeho konci. Celého člověka
+        otevřeš, klikneš na <b>✎</b> a dole je <b>🗑 smazat</b> — jeho
+        záznamy se přitom nesmažou, jen přejdou pod <b>Bez jména</b>,
+        odkud je můžeš přiřadit někomu jinému.
+      </P>
+      <P>
+        Do pole <b>Kdo?</b> patří jen jméno. Když tam omylem napíšeš celou
+        větu, aplikace se zeptá, jestli to opravdu má být jméno člověka.
+      </P>
+
+      <H>Hledání odkudkoli</H>
+      <P>
+        Lupa v horní liště hledá napříč celou aplikací — v úkolech,
+        poznámkách, připomínkách i v Mapě. Výsledky z Mapy jsou ve dvou
+        sekcích, lidé a záznamy, a kliknutím se dostaneš rovnou na
+        toho člověka.
+      </P>
+
       <H>Když se spleteš ve jméně</H>
       <P>
         Stane se. Otevři správného člověka, klikni na <b>✎</b> a buď oprav
@@ -13826,8 +13912,8 @@ function MapaHelp({ theme, onClose }) {
    co si o něm pamatuješ: jména, přezdívky, místa seznámení, kontaktu, toho kdo
    ti ho představil, nebo kterékoli věty, co jsi o něm kdy zapsal.
    Tohle je odpověď na "nemůžu si vzpomenout na jméno a odkud je". */
-function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeholder = "Kdo? Jméno, místo, cokoli co si pamatuješ…" }) {
-  const [text, setText] = useState("");
+function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initialText = "", placeholder = "Kdo? Jméno, místo, cokoli co si pamatuješ…" }) {
+  const [text, setText] = useState(initialText);
   const [hits, setHits] = useState([]);
   const [busy, setBusy] = useState(false);
   const [idx, setIdx] = useState(0);
@@ -13845,9 +13931,31 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeh
     return () => { cancelled = true; clearTimeout(id); };
   }, [owner, text]);
 
+  // Pojistka: do pole "Kdo?" se dá omylem napsat celá věta a založit tak
+  // člověka jménem "umí financovat, zná lidi z bank". Dlouhý text proto
+  // vyžaduje potvrzení.
+  const looksLikeSentence = (t) => {
+    const v = (t || "").trim();
+    return v.length > 32 || v.split(/\s+/).length > 4 || /[,.;!?]/.test(v);
+  };
+
+  const createNew = (nameRaw) => {
+    const nm = (nameRaw || "").trim();
+    if (!nm) return;
+    if (looksLikeSentence(nm)) {
+      const ok = window.confirm(
+        `Opravdu založit člověka se jménem:\n\n„${nm}"\n\n` +
+        `Vypadá to spíš jako věta než jako jméno. Do tohohle pole patří ` +
+        `jméno člověka; samotnou větu napíšeš až v dalším kroku.`
+      );
+      if (!ok) return;
+    }
+    onPick({ newName: nm });
+  };
+
   const choose = (i) => {
     if (i < hits.length) onPick({ existing: hits[i] });
-    else if (text.trim()) onPick({ newName: text.trim() });
+    else createNew(text);
   };
 
   return (
@@ -13906,14 +14014,19 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeh
         ))}
         {text.trim() && (
           <div
-            onMouseDown={e => { e.preventDefault(); onPick({ newName: text.trim() }); }}
+            onMouseDown={e => { e.preventDefault(); createNew(text); }}
             onMouseEnter={() => setIdx(hits.length)}
             style={{
               padding: "8px 11px", fontSize: "12px", cursor: "pointer",
-              color: theme.green, fontWeight: 600,
+              color: looksLikeSentence(text) ? theme.yellow : theme.green, fontWeight: 600,
               background: idx === hits.length ? theme.inputBg : "transparent",
             }}>
             + nový člověk „{text.trim()}“
+            {looksLikeSentence(text) && (
+              <div style={{ fontSize: "11px", color: theme.textMid, fontWeight: 400, marginTop: 2 }}>
+                Sem patří jen jméno. Větu napíšeš v dalším kroku.
+              </div>
+            )}
           </div>
         )}
         {!text.trim() && hits.length === 0 && !busy && (
@@ -13929,15 +14042,28 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, placeh
   );
 }
 
-function MapaSheet({ currentUser, theme, onClose, initialDraft = "" }) {
+function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "", initialPerson = null }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
   const [who, setWho] = useState(null);            // vybraný člověk pro nový zápis
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [draft, setDraft] = useState(initialDraft);
+  /* Text z lomítkové zkratky /m.
+     Bez dvojtečky je to jméno člověka — otevře se rovnou výběr s tímhle
+     textem. S dvojtečkou se dělí na člověka a větu:
+        /m martin š: prodává octavii
+     To odpovídá pořadí, ve kterém se v Mapě zapisuje: nejdřív kdo, pak co. */
+  const slashParts = useMemo(() => {
+    const raw = (initialDraft || "").trim();
+    if (!raw) return { who: "", sentence: "" };
+    const i = raw.indexOf(":");
+    if (i > 0) return { who: raw.slice(0, i).trim(), sentence: raw.slice(i + 1).trim() };
+    return { who: raw, sentence: "" };
+  }, [initialDraft]);
+
+  const [draft, setDraft] = useState(slashParts.sentence);
   const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [tab, setTab] = useState("vse");
   const [facts, setFacts] = useState([]);
   const [peopleHits, setPeopleHits] = useState([]);
@@ -13945,7 +14071,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "" }) {
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [open, setOpen] = useState(null);
+  const [open, setOpen] = useState(initialPerson);
   const [assigning, setAssigning] = useState(null);
   // Nápověda je zavřená; vyvolá se tlačítkem v hlavičce.
   const [showHelp, setShowHelp] = useState(false);
@@ -13955,7 +14081,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "" }) {
   const todayIso = new Date().toISOString().slice(0, 10);
   const parsed = useMemo(() => parseFactInput(draft), [draft]);
 
-  useEffect(() => { setPickerOpen(true); }, []);
+  useEffect(() => { if (!initialPerson && !initialQuery) setPickerOpen(true); }, []);  // eslint-disable-line
 
 
 
@@ -14163,6 +14289,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "" }) {
               {pickerOpen || !who ? (
                 <PersonPicker
                   owner={owner} theme={theme}
+                  initialText={slashParts.who}
                   onPick={pickWho}
                   onCancel={() => { if (who) setPickerOpen(false); }}
                 />
@@ -14531,6 +14658,19 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                 padding: "5px 10px", fontSize: "11px",
               }}>Zrušit</button>
               <span style={{ flex: 1 }} />
+              <button onClick={async () => {
+                const ok = window.confirm(
+                  `Smazat člověka „${person.name}"?\n\n` +
+                  `Jeho záznamy se NESMAŽOU — přejdou mezi nepřiřazené ` +
+                  `(záložka „Bez jména") a můžeš je přiřadit někomu jinému.`
+                );
+                if (!ok) return;
+                if (await mapDeletePerson(person.id)) onBack?.();
+              }} title="Smazat tohoto člověka" style={{
+                ...buttonStyle(), background: "transparent", color: theme.red,
+                padding: "5px 10px", fontSize: "11px",
+                border: `1px solid ${theme.red}44`, borderRadius: 6,
+              }}>🗑 smazat</button>
               <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
                 ...buttonStyle(), background: "transparent", color: theme.textSub,
                 padding: "5px 10px", fontSize: "11px",
@@ -14721,7 +14861,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   );
 }
 
-function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote }) {
+function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa }) {
   useEscapeKey(onClose);
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
@@ -14818,9 +14958,27 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
     };
   }, [tasks, comments, reminders, notes, query, currentUser, isSmartQuery, customLists]);
 
+  // Mapa se hledá na serveru, proto zvlášť a asynchronně.
+  const [mapFacts, setMapFacts] = useState([]);
+  const [mapPeople, setMapPeople] = useState([]);
+  useEffect(() => {
+    const q = (query || "").trim();
+    if (q.length < 2 || isSmartQuery) { setMapFacts([]); setMapPeople([]); return; }
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      const [f, p] = await Promise.all([
+        mapSearch(currentUser?.name, q, 15),
+        mapPeopleSearch(currentUser?.name, q, 6),
+      ]);
+      if (!cancelled) { setMapFacts(f || []); setMapPeople(p || []); }
+    }, 280);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [query, currentUser?.name, isSmartQuery]);
+
   const totalResults =
     results.tasks.length + results.comments.length +
-    results.reminders.length + results.notes.length;
+    results.reminders.length + results.notes.length +
+    mapFacts.length + mapPeople.length;
 
   // Pomocná: highlight match v textu
   const highlight = (text, q) => {
@@ -14935,7 +15093,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
               <div style={{ marginBottom: 8 }}>Začni psát pro vyhledávání...</div>
               <div style={{ fontSize: 11, color: theme.textSub }}>
-                Hledá v úkolech, komentářích, připomínkách i poznámkách
+                Hledá v úkolech, komentářích, připomínkách, poznámkách i v Mapě
               </div>
             </div>
           ) : totalResults === 0 ? (
@@ -14947,6 +15105,69 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 600 }}>
                 {totalResults} {totalResults === 1 ? "výsledek" : totalResults < 5 ? "výsledky" : "výsledků"}
               </div>
+
+              {/* ── Mapa: lidé ── */}
+              {mapPeople.length > 0 && (
+                <>
+                  {sectionLabel("🗺️", "Mapa — lidé", mapPeople.length, theme.purple)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {mapPeople.map(p => (
+                      <button key={`mp-${p.id}`}
+                        onClick={() => { onOpenMapa?.({ person: p }); onClose(); }}
+                        style={{
+                          ...buttonStyle(), textAlign: "left", padding: "10px 12px",
+                          background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                          borderRadius: "8px", display: "flex", flexDirection: "column",
+                          gap: "3px", cursor: "pointer",
+                        }}>
+                        <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+                          {highlight(p.name, query)}
+                          <span style={{ fontSize: 11, fontWeight: 400, color: theme.textMid }}>
+                            {"  "}{p.fact_count} {p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}
+                          </span>
+                        </div>
+                        {(p.met_at || p.introduced_name || p.sample) && (
+                          <div style={{ fontSize: 11, color: theme.textMid, lineHeight: 1.45 }}>
+                            {p.met_at ? `📍 ${p.met_at}` : p.introduced_name ? `🤝 přes ${p.introduced_name}` : excerpt(p.sample, query)}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* ── Mapa: záznamy ── */}
+              {mapFacts.length > 0 && (
+                <>
+                  {sectionLabel("🗺️", "Mapa — záznamy", mapFacts.length, theme.purple)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {mapFacts.map(r => (
+                      <button key={`mf-${r.id}`}
+                        onClick={() => {
+                          onOpenMapa?.(r.person_id
+                            ? { person: { id: r.person_id, name: r.person_name } }
+                            : { query });
+                          onClose();
+                        }}
+                        style={{
+                          ...buttonStyle(), textAlign: "left", padding: "10px 12px",
+                          background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                          borderRadius: "8px", display: "flex", flexDirection: "column",
+                          gap: "3px", cursor: "pointer",
+                        }}>
+                        <div style={{ fontSize: "13px", color: theme.text, lineHeight: 1.45 }}>
+                          {highlight(excerpt(r.content, query, 110), query)}
+                        </div>
+                        <div style={{ fontSize: 11, color: theme.textMid }}>
+                          {r.person_name || "bez jména"}
+                          {r.happened_at ? ` · ${new Date(r.happened_at).toLocaleDateString("cs-CZ")}` : ""}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               {/* Tasks section */}
               {results.tasks.length > 0 && (
@@ -18814,7 +19035,7 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
   );
 }
 
-function Snackbar({ message, onUndo, visible, theme }) {
+function Snackbar({ message, onUndo, visible, theme, canUndo = true }) {
   if (!visible) return null;
   return (
     <div style={{
@@ -18829,9 +19050,10 @@ function Snackbar({ message, onUndo, visible, theme }) {
     }}>
       <span style={{ fontSize: "13px", color: theme.text }}>{message}</span>
       <button onClick={onUndo} style={{
-        ...buttonStyle(), background: theme.accent, color: "#fff",
+        ...buttonStyle(), background: canUndo ? theme.accent : "transparent",
+        color: canUndo ? "#fff" : theme.textSub,
         padding: "6px 14px", fontSize: "12px",
-      }}>VRÁTIT</button>
+      }}>{canUndo ? "VRÁTIT" : "OK"}</button>
     </div>
   );
 }
@@ -21923,6 +22145,8 @@ function App() {
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
   const [mapaDraft, setMapaDraft] = useState("");             // předvyplnění z /m
+  const [mapaQuery, setMapaQuery] = useState("");             // otevření z lupy
+  const [mapaPerson, setMapaPerson] = useState(null);
   const [storyQuickText, setStoryQuickText] = useState("");   // předvyplnění z /d
 
   // 📔 Denní příběh
@@ -22724,7 +22948,16 @@ function App() {
     const interval = setInterval(() => {
       setTasks(prev => {
         const { tasks: processed, updates } = processRecurring(prev);
-        if (updates.length > 0) apiUpdateTasks(updates);
+        if (updates.length > 0) {
+          // Hlídaný zápis: projde jen tehdy, má-li server úkol stále jako
+          // splněný. Když ho mezitím někdo smazal nebo oživil z jiného
+          // zařízení, zápis se zahodí a místní stav se dotáhne ze serveru.
+          apiUpdateTasks(updates, { onlyIfStatus: "done" }).then(res => {
+            if ((res || []).some(r => r && r.skipped)) {
+              apiLoadTasks().then(setTasks).catch(() => {});
+            }
+          });
+        }
         return updates.length > 0 ? processed : prev;
       });
       // Keep Supabase project alive
@@ -22737,14 +22970,21 @@ function App() {
 
   const performUndo = useCallback(async () => {
     if (!undoState) return;
+    // Informativní hláška bez možnosti vrácení — jen ji zavři.
+    if (!undoState.previousTasks) {
+      clearTimeout(undoTimerRef.current);
+      setUndoState(null);
+      return;
+    }
     setTasks(undoState.previousTasks);
     const task = undoState.previousTasks.find(t => t.id === undoState.taskId);
-    if (task) apiUpdateTask(task);
+    // Vrátit zpět smí i smazání, proto allowUndelete.
+    if (task) apiUpdateTask(task, { allowUndelete: true });
     clearTimeout(undoTimerRef.current);
     setUndoState(null);
   }, [undoState]);
 
-  const withUndo = useCallback((message, taskId, updater) => {
+  const withUndo = useCallback((message, taskId, updater, opts = {}) => {
     // Echo prevention pro Realtime listener — když naše vlastní změna
     // přijde zpět přes websocket, nepřepíšeme jí lokální stav.
     // 1500ms okno pokrývá round-trip + Supabase Realtime broadcast latency.
@@ -22764,7 +23004,7 @@ function App() {
 
     // Asynchronní zápis na server (fire-and-forget — apiUpdateTask má offline queue fallback)
     if (updatedTask) {
-      apiUpdateTask(updatedTask).then(() => {
+      apiUpdateTask(updatedTask, opts).then(() => {
         // Obnov echo prevention timestamp po dokončení — chrání před pozdním echem
         localEditsRef.current[taskId] = Date.now();
       });
@@ -23078,10 +23318,10 @@ function App() {
         title: `🔁 Opakovaný úkol "${taskTitle}"`,
         message: `Co chceš udělat?`,
         options: [
-          { key: "1", label: "⏭ Smazat tento výskyt", color: "accent",
-            description: "Tento výskyt půjde do koše (30 dní). Příští výskyt se objeví." },
-          { key: "2", label: "⏹ Ukončit opakování + smazat", color: "red",
-            description: "Úkol zmizí a už se nikdy znovu neobjeví. Půjde do koše (30 dní)." },
+          { key: "2", label: "⏹ Zrušit opakování a smazat natrvalo", color: "red",
+            description: "Úkol zmizí a UŽ SE NIKDY NEVRÁTÍ. Tohle chceš, když tě otravuje." },
+          { key: "1", label: "⏭ Přeskočit jen dnešek", color: "accent",
+            description: `Tenhle výskyt zmizí, ale ZA ${task.recDays} DNÍ SE OBJEVÍ ZNOVU. Běžné u pravidelných povinností.` },
         ],
       });
 
@@ -23120,6 +23360,15 @@ function App() {
           completedAt: now,
           completedByUser: currentUser?.name,
         });
+        // Řekni rovnou, kdy se úkol vrátí — ať to není překvapení
+        const back = new Date(Date.now() + (task.recDays || 0) * 86400000);
+        setUndoState({
+          previousTasks: null,
+          taskId,
+          message: `Přeskočeno. Vrátí se ${back.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" })}.`,
+        });
+        clearTimeout(undoTimerRef.current);
+        undoTimerRef.current = setTimeout(() => setUndoState(null), UNDO_MS);
         // Notifikace ostatním (sdílený úkol) — jen pokud byl úkol sdílený
         if ((task.assignedTo || []).length > 1 ||
             (task.createdBy && task.createdBy !== currentUser?.name)) {
@@ -23351,10 +23600,11 @@ function App() {
   }, []);
 
   const restoreTask = useCallback((taskId) => {
+    // Vědomé obnovení z koše — tady se oživení povoluje.
     withUndo("Obnoveno", taskId, prev => prev.map(task => {
       if (task.id !== taskId) return task;
       return { ...task, status: "active", deletedAt: null };
-    }));
+    }), { allowUndelete: true });
   }, [withUndo]);
 
   // Archivovat úkol — přesun do archivu (trvalé uložení, nemaže se po 30 dnech)
@@ -26015,7 +26265,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             currentUser={currentUser}
             theme={theme}
             initialDraft={mapaDraft}
-            onClose={() => { setShowMapaSheet(false); setMapaDraft(""); }}
+            initialQuery={mapaQuery}
+            initialPerson={mapaPerson}
+            onClose={() => {
+              setShowMapaSheet(false);
+              setMapaDraft(""); setMapaQuery(""); setMapaPerson(null);
+            }}
           />
         )}
 
@@ -26036,6 +26291,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onOpenNote={(note) => {
               setShowSearchSheet(false);
               setEditingNote(note);
+            }}
+            onOpenMapa={(opts) => {
+              // Z lupy do Mapy — buď rovnou na člověka, nebo s předaným dotazem
+              setShowSearchSheet(false);
+              setMapaDraft("");
+              setMapaPerson(opts?.person || null);
+              setMapaQuery(opts?.query || "");
+              setShowMapaSheet(true);
             }}
             onNavigate={(taskId) => {
               // Pokud je úkol v jiném view než aktuální, přepneme
@@ -27722,6 +27985,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       <Snackbar
         message={undoState?.message}
         visible={!!undoState}
+        canUndo={!!undoState?.previousTasks}
         onUndo={performUndo}
         theme={theme}
       />
