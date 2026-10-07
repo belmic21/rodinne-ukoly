@@ -46,7 +46,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261007_0900";
+const FILE_VERSION = "261007_1020";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -22807,6 +22807,7 @@ function App() {
   useEffect(() => {
     if (authState !== "dovnitr") return;   // bez přihlášení se nic nenačítá
     (async () => {
+     try {
       // Při startu ověř DB schéma — předejde tichým chybám typu PGRST204
       // (chybějící sloupec → INSERT/UPDATE selhává → změny se neuloží)
       checkDbSchema();
@@ -22845,8 +22846,13 @@ function App() {
 
       // Reminders + Notes loadují se v samostatném effect
       // (vyžadují currentUser?.name, který nemusí být známý při initial mount)
-
-      setLoading(false);
+     } catch (e) {
+       // Když načítání spadne, aplikace se nesmí zaseknout na "Načítám data…".
+       // Radši prázdný seznam s chybovou lištou než mrtvá obrazovka.
+       logServerError("initialLoad", e);
+     } finally {
+       setLoading(false);
+     }
     })();
 
     // Request notification permission
@@ -25567,15 +25573,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
   // ── Render ──
 
-  if (loading) {
-    return (
-      <div style={{
-        minHeight: "100vh", background: "#0c1017",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#506880", fontFamily: FONT,
-      }}>Načítám...</div>
-    );
-  }
+  // POZOR na pořadí: nejdřív přihlášení, teprve potom načítání dat.
+  // Opačně se aplikace zasekne na "Načítám…", protože data se nenačítají,
+  // dokud není uživatel přihlášený, a loading se tím pádem nikdy nevypne.
 
   // Dokud se neví, jestli je někdo přihlášený, nic nezobrazuj — jinak by
   // na okamžik probliklo přihlašovací okno i přihlášenému uživateli.
@@ -25601,6 +25601,17 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         )}
         <AuthLoginScreen themeName={themeName} onSignedIn={() => { /* stav řeší onAuthStateChange */ }} />
       </>
+    );
+  }
+
+  // Přihlášený, ale data se ještě stahují.
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: "100vh", background: THEMES[themeName].bg,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#506880", fontFamily: FONT,
+      }}>Načítám data…</div>
     );
   }
 
