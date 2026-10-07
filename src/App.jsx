@@ -46,7 +46,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261003_2035";
+const FILE_VERSION = "261007_0900";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -16047,6 +16047,99 @@ function SetupScreen({ onDone }) {
   );
 }
 
+/* ── Přihlášení mailem a heslem ──
+   Nahrazuje PIN jako ochranu. PIN chránil jen to, co aplikace zobrazí;
+   data v databázi byla přístupná komukoli. Skutečné přihlášení je základ,
+   na kterém teprve může databáze sama rozhodovat, co komu vydá. */
+function AuthLoginScreen({ themeName, onSignedIn }) {
+  const theme = THEMES[themeName];
+  const [email, setEmail] = useState(() => {
+    try { return localStorage.getItem("ft_last_email") || ""; } catch (e) { return ""; }
+  });
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const passRef = useRef(null);
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (!email.trim() || !password) return;
+    setBusy(true); setErr(null);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(), password,
+      });
+      if (error) throw error;
+      try { localStorage.setItem("ft_last_email", email.trim()); } catch (e2) { /* ignore */ }
+      onSignedIn?.(data.session);
+    } catch (e3) {
+      const m = (e3?.message || "").toLowerCase();
+      setErr(m.includes("invalid") ? "Nesprávný mail nebo heslo."
+        : m.includes("failed to fetch") ? "Nejde se připojit k serveru."
+        : (e3?.message || "Přihlášení se nepodařilo."));
+      setPassword("");
+      setTimeout(() => passRef.current?.focus(), 30);
+    } finally { setBusy(false); }
+  };
+
+  const input = {
+    width: "100%", boxSizing: "border-box",
+    padding: "11px 13px", fontSize: "14px",
+    background: theme.inputBg, color: theme.text,
+    border: `1px solid ${theme.inputBorder}`,
+    borderRadius: 9, outline: "none", fontFamily: FONT,
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: theme.bg, fontFamily: FONT,
+      color: theme.text, display: "flex", alignItems: "center",
+      justifyContent: "center", padding: "20px",
+    }}>
+      <style>{GLOBAL_CSS}</style>
+      <form onSubmit={submit} style={{ width: "320px", animation: "fadeIn 0.4s" }}>
+        <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px", textAlign: "center" }}>
+          Rodinné úkoly
+        </div>
+        <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "26px", textAlign: "center" }}>
+          Přihlas se mailem a heslem
+        </div>
+
+        <input type="email" value={email} autoComplete="username"
+          onChange={e => setEmail(e.target.value)}
+          placeholder="mail" style={{ ...input, marginBottom: 8 }} />
+
+        <input ref={passRef} type="password" value={password} autoComplete="current-password"
+          onChange={e => setPassword(e.target.value)}
+          placeholder="heslo" style={input} />
+
+        {err && (
+          <div style={{
+            marginTop: 10, fontSize: "12px", color: theme.red,
+            background: `${theme.red}12`, border: `1px solid ${theme.red}40`,
+            borderRadius: 8, padding: "8px 10px", lineHeight: 1.5,
+          }}>{err}</div>
+        )}
+
+        <button type="submit" disabled={busy || !email.trim() || !password} style={{
+          ...buttonStyle(), width: "100%", marginTop: 14,
+          background: theme.accent, color: "#fff",
+          padding: "11px 0", fontSize: "14px", fontWeight: 700,
+          opacity: (busy || !email.trim() || !password) ? 0.55 : 1,
+        }}>{busy ? "Přihlašuji…" : "Přihlásit"}</button>
+
+        <div style={{
+          marginTop: 18, fontSize: "11px", color: theme.textMid,
+          textAlign: "center", lineHeight: 1.6,
+        }}>
+          Přihlášení si zařízení zapamatuje.<br />
+          Heslo zapomenuté? Napiš Michalovi.
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function LoginScreen({ users, onLogin, themeName }) {
   const [selected, setSelected] = useState(null);
   const [pin, setPin] = useState("");
@@ -22351,6 +22444,11 @@ function App() {
   useEffect(() => { commentsRef.current = comments; }, [comments]);
   const [users, setUsers] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
+  // ── Přihlášení ──
+  // session drží skutečné přihlášení v Supabase.
+  // authState: "zjistuji" (čeká se na ověření) | "ven" | "dovnitr"
+  const [authState, setAuthState] = useState("zjistuji");
+  const [profileError, setProfileError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
   // PWA install prompt — drží `beforeinstallprompt` event do doby, než user klikne na banner.
@@ -22656,10 +22754,45 @@ function App() {
     try { localStorage.setItem("ft_install_dismissed", "1"); } catch (e) { /* ignore */ }
   }, []);
 
-  // Session restore
-  useEffect(() => {
-    try { const saved = localStorage.getItem("ft_user"); if (saved) setCurrentUser(JSON.parse(saved)); } catch (e) {}
+  /* Přihlášení.
+     Dřív stačil PIN uložený v prohlížeči. Ten ale chránil jen zobrazení —
+     data v databázi byla přístupná komukoli. Teď se identita bere ze
+     skutečné relace a jméno z tabulky profiles, aby zbytek aplikace
+     fungoval úplně stejně jako dřív. */
+  const resolveProfile = useCallback(async (sess) => {
+    if (!sess?.user) { setCurrentUser(null); setAuthState("ven"); return; }
+    try {
+      const { data, error } = await supabase
+        .from("profiles").select("name, is_admin").eq("id", sess.user.id).maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        setProfileError(`Účet ${sess.user.email} není propojený se jménem. Spusť propojení v databázi (Fáze 1, blok 4).`);
+        setAuthState("ven");
+        return;
+      }
+      setProfileError(null);
+      // Realtime jede po vlastním spojení a token si sám nevezme.
+      // Bez tohohle by po zamčení ve Fázi 2 přestaly chodit živé změny.
+      try { supabase.realtime.setAuth(sess.access_token); } catch (e) { /* ignore */ }
+      setCurrentUser({ name: data.name, admin: !!data.is_admin });
+      setAuthState("dovnitr");
+    } catch (e) {
+      setProfileError(e?.message || "Nepodařilo se načíst profil.");
+      setAuthState("ven");
+    }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) resolveProfile(data?.session || null);
+    }).catch(() => { if (!cancelled) setAuthState("ven"); });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      if (!cancelled) resolveProfile(sess);
+    });
+    return () => { cancelled = true; sub?.subscription?.unsubscribe?.(); };
+  }, [resolveProfile]);
   useEffect(() => {
     try {
       if (currentUser) localStorage.setItem("ft_user", JSON.stringify(currentUser));
@@ -22672,6 +22805,7 @@ function App() {
 
   // Initial data load
   useEffect(() => {
+    if (authState !== "dovnitr") return;   // bez přihlášení se nic nenačítá
     (async () => {
       // Při startu ověř DB schéma — předejde tichým chybám typu PGRST204
       // (chybějící sloupec → INSERT/UPDATE selhává → změny se neuloží)
@@ -22755,7 +22889,7 @@ function App() {
         })
         .catch(err => console.warn("SW registration failed:", err));
     }
-  }, []);
+  }, [authState]);
 
   // User-scoped data load — Reminders + Notes
   // Tyto entity vyžadují currentUser pro filtraci. Effect proběhne pokaždé
@@ -25443,12 +25577,31 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     );
   }
 
-  if (!users?.length) {
-    return <SetupScreen onDone={async (user) => { await apiCreateUser(user); setUsers([user]); setCurrentUser(user); }} />;
+  // Dokud se neví, jestli je někdo přihlášený, nic nezobrazuj — jinak by
+  // na okamžik probliklo přihlašovací okno i přihlášenému uživateli.
+  if (authState === "zjistuji") {
+    return (
+      <div style={{
+        minHeight: "100vh", background: THEMES[themeName].bg,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#506880", fontFamily: FONT,
+      }}>Načítám…</div>
+    );
   }
 
-  if (!currentUser) {
-    return <LoginScreen users={users} onLogin={setCurrentUser} themeName={themeName} />;
+  if (authState !== "dovnitr" || !currentUser) {
+    return (
+      <>
+        {profileError && (
+          <div style={{
+            position: "fixed", top: 0, left: 0, right: 0, zIndex: 10,
+            background: THEMES[themeName].red, color: "#fff",
+            fontFamily: FONT, fontSize: 12, padding: "9px 14px", lineHeight: 1.5,
+          }}>{profileError}</div>
+        )}
+        <AuthLoginScreen themeName={themeName} onSignedIn={() => { /* stav řeší onAuthStateChange */ }} />
+      </>
+    );
   }
 
   return (
@@ -26043,7 +26196,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               );
             })}
             <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
-            <button onClick={() => { setCurrentUser(null); setShowUserMenu(false); }}
+            <button onClick={async () => {
+              setShowUserMenu(false);
+              try { await supabase.auth.signOut(); } catch (e) { /* ignore */ }
+              setCurrentUser(null);
+              setAuthState("ven");
+            }}
               style={{
                 ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
                 background: "transparent", color: theme.red, border: "none",
