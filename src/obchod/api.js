@@ -49,6 +49,117 @@ export function aktivni(ciselniky, kind) {
   return (ciselniky?.[kind] || []).filter(x => x.active);
 }
 
+/* ── Úpravy číselníků ────────────────────────────────────
+   Kde se který seznam v datech používá. Podle toho se pozná,
+   jestli jde položka smazat, nebo se má jen vypnout. */
+
+const POUZITI = {
+  typ:           [["deal_projects", "typ"], ["deal_cards", "typy", true]],
+  faze:          [["deal_projects", "faze"], ["deal_cards", "faze_min"]],
+  kraj:          [["deal_projects", "kraj"], ["deal_cards", "kraje", true]],
+  jednotka:      [["deal_projects", "jednotka"], ["deal_cards", "jednotka"]],
+  stav_zakazky:  [["deal_projects", "stav"]],
+  stav_osloveni: [["deal_approaches", "stav"]],
+  forma_dohody:  [["deal_participants", "forma_dohody"]],
+  role:          [["deal_participants", "role"], ["map_people", "role_tagy", true]],
+};
+
+export async function pouzitiCiselniku(owner, kind, key) {
+  let celkem = 0;
+  for (const [tabulka, sloupec, pole] of (POUZITI[kind] || [])) {
+    try {
+      let q = supabase.from(tabulka).select("id", { count: "exact", head: true }).eq("owner", owner);
+      q = pole ? q.contains(sloupec, [key]) : q.eq(sloupec, key);
+      const { count, error } = await q;
+      if (error) throw error;
+      celkem += count || 0;
+    } catch (e) {
+      // Když se počet nepodaří zjistit, tváříme se, že položka použitá je.
+      // Radši nechat smazání nedostupné než něco osiřet.
+      console.warn("[obchod/pouzitiCiselniku]", e?.message || e);
+      return -1;
+    }
+  }
+  return celkem;
+}
+
+// Z popisku udělá neměnný klíč: "Před rekonstrukcí" → "pred_rekonstrukci".
+// Klíč je to, co je zapsané v datech; popisek se dá přejmenovat kdykoli,
+// klíč nikdy.
+export function naKlic(label, obsazene = []) {
+  const zaklad = (label || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+    .slice(0, 40) || "polozka";
+  if (!obsazene.includes(zaklad)) return zaklad;
+  let i = 2;
+  while (obsazene.includes(`${zaklad}_${i}`)) i++;
+  return `${zaklad}_${i}`;
+}
+
+export async function ulozCiselnik(owner, data) {
+  const label = (data?.label || "").trim();
+  if (!owner || !data?.kind || !label) return { ok: false, chyba: "Chybí název." };
+  const telo = {
+    label,
+    skupina: prazdnoNaNull(data.skupina),
+    sort_order: cislo(data.sort_order) ?? 100,
+    active: data.active !== false,
+  };
+  try {
+    const q = data.id
+      ? supabase.from("deal_enums").update(telo).eq("id", data.id)
+      : supabase.from("deal_enums").insert({
+          ...telo, owner, kind: data.kind, key: data.key,
+        });
+    const { data: row, error } = await q.select("*").single();
+    if (error) throw error;
+    return { ok: true, polozka: row };
+  } catch (e) {
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Položka s tímhle klíčem už v seznamu je." };
+    }
+    return selhalo("ulozCiselnik", e);
+  }
+}
+
+export async function smazCiselnik(owner, polozka) {
+  if (!polozka?.id) return { ok: false, chyba: "Chybí ID." };
+  const pouzito = await pouzitiCiselniku(owner, polozka.kind, polozka.key);
+  if (pouzito !== 0) {
+    return {
+      ok: false,
+      chyba: pouzito > 0
+        ? `Používá se u ${pouzito} záznamů. Smazat nejde — vypni ji, zůstane u starých dat a nově ji nepůjde vybrat.`
+        : "Nepodařilo se ověřit, jestli se položka používá. Radši ji jen vypni.",
+    };
+  }
+  try {
+    const { data, error } = await supabase
+      .from("deal_enums").delete().eq("id", polozka.id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazCiselnik", e);
+  }
+}
+
+// Přeskládání: přepíše pořadí celé skupiny najednou, ať v něm
+// nevzniknou díry a shodná čísla.
+export async function prerovnejCiselnik(polozky) {
+  try {
+    for (let i = 0; i < polozky.length; i++) {
+      const { error } = await supabase
+        .from("deal_enums").update({ sort_order: (i + 1) * 10 }).eq("id", polozky[i].id);
+      if (error) throw error;
+    }
+    return { ok: true };
+  } catch (e) {
+    return selhalo("prerovnejCiselnik", e);
+  }
+}
+
 /* ── Panel ───────────────────────────────────────────── */
 
 export async function nactiPanel(owner) {
