@@ -13,13 +13,14 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   nactiCiselniky, nactiPanel, nactiZakazky, zalozZakazku,
-  upravZakazku, smazZakazku, komuToPasuje, popis, aktivni, rozeberVetu,
+  upravZakazku, smazZakazku, popis, aktivni, rozeberVetu,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
   useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno, OBCHOD_VERZE,
 } from "./ui.js";
 import Site from "./Site.jsx";
+import { Retezec, Geneze } from "./Zakazka.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -426,7 +427,6 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
   const [chyba, setChyba] = useState(null);
   const [ulozeno, setUlozeno] = useState(null);
   const [mazu, setMazu] = useState(false);
-  const [pasuje, setPasuje] = useState(null);
   const [kopirovano, setKopirovano] = useState(false);
   const nazevRef = useRef(null);
 
@@ -461,11 +461,6 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
     setMazu(false);
     if (res.ok) onBack();
     else setChyba(res.chyba);
-  };
-
-  const zjistiKomu = async () => {
-    if (!zakazkaId) return;
-    setPasuje(await komuToPasuje(zakazkaId, 30));
   };
 
   const kopirujSlozku = async () => {
@@ -598,10 +593,6 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
             ...btnMain(theme), opacity: uklada ? 0.6 : 1,
           }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
 
-          {zakazkaId && (
-            <button onClick={zjistiKomu} style={btnGhost(theme)}>komu to pasuje</button>
-          )}
-
           <span style={{ flex: 1 }} />
 
           {zakazkaId && (
@@ -615,8 +606,21 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
           </div>
         )}
 
-        {pasuje !== null && (
-          <Pasuje theme={theme} seznam={pasuje} />
+        {zakazkaId && (
+          <>
+            <Retezec theme={theme} owner={owner} ciselniky={ciselniky}
+              projectId={zakazkaId} />
+            <Geneze theme={theme} owner={owner} ciselniky={ciselniky}
+              zakazka={{ id: zakazkaId, nazev: f.nazev }} />
+          </>
+        )}
+
+        {!zakazkaId && (
+          <div style={{
+            fontSize: "11.5px", color: theme.textSub, marginTop: 14, lineHeight: 1.7,
+          }}>
+            Až zakázku uložíš, přibude sem řetězec lidí a seznam oslovených.
+          </div>
         )}
       </div>
     </>
@@ -642,60 +646,5 @@ function Smazat({ theme, mazu, onSmaz }) {
       }}>{mazu ? "MAŽU…" : "ANO"}</button>
       <button onClick={() => setPtam(false)} style={btnGhost(theme)}>Ne</button>
     </span>
-  );
-}
-
-/* ── Komu to pasuje ────────────────────────────────── */
-
-function Pasuje({ theme, seznam }) {
-  if (seznam.length === 0) {
-    return (
-      <div style={{
-        ...card(theme), padding: "14px", marginTop: 12,
-        fontSize: "12px", color: theme.textSub, lineHeight: 1.6,
-      }}>
-        Nikdo z tvé sítě na tohle nesedí. Buď na to zatím nemáš investora,
-        nebo u lidí chybí karta s tím, co hledají.
-      </div>
-    );
-  }
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ ...label(theme), marginBottom: 6 }}>
-        Komu to pasuje ({seznam.length})
-      </div>
-      {seznam.map(r => (
-        <div key={r.card_id} style={{
-          ...card(theme), padding: "9px 11px", marginBottom: 6,
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
-              {r.jmeno}
-              {r.nazev_karty && (
-                <span style={{ fontWeight: 400, color: theme.textSub, fontSize: "11px" }}>
-                  {" "}· {r.nazev_karty}
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: "11px", marginTop: 2 }}>
-              {(r.sedi || []).length > 0 && (
-                <span style={{ color: theme.green }}>sedí: {r.sedi.join(", ")}</span>
-              )}
-              {(r.nesedi || []).length > 0 && (
-                <span style={{ color: theme.yellow }}>
-                  {(r.sedi || []).length > 0 ? "  ·  " : ""}
-                  {r.nesedi.join(", ")}
-                </span>
-              )}
-            </div>
-          </div>
-          <div style={{
-            fontSize: "15px", fontWeight: 700, color: theme.accent,
-            fontVariantNumeric: "tabular-nums",
-          }}>{Number(r.skore)}</div>
-        </div>
-      ))}
-    </div>
   );
 }
