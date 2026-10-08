@@ -33,7 +33,8 @@ const ZA_DNI = (n) => {
    SEKCE V DETAILU ZAKÁZKY
    ════════════════════════════════════════════════════════ */
 
-export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOsobu }) {
+export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOsobu,
+  spravce = false }) {
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [edituji, setEdituji] = useState(null);
@@ -100,7 +101,8 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
       )}
 
       {videt.map(t => (
-        <TerminRadek key={t.id} t={t} theme={theme}
+        <TerminRadek key={t.id} t={t} theme={theme} owner={owner}
+          moje={spravce || !t.owner || t.owner === owner}
           onUprav={() => setEdituji({ ...t, pripomenout: !!t.reminder_id })}
           onZmena={nacti} onOtevriOsobu={onOtevriOsobu} />
       ))}
@@ -108,7 +110,7 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
   );
 }
 
-function TerminRadek({ t, theme, onUprav, onZmena, onOtevriOsobu }) {
+function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = true }) {
   const [pracuji, setPracuji] = useState(false);
   const hotovo = !!t.hotovo_at;
   const zbyva = Math.round(
@@ -138,11 +140,13 @@ function TerminRadek({ t, theme, onUprav, onZmena, onOtevriOsobu }) {
       borderLeft: `3px solid ${barva}`,
       opacity: hotovo ? 0.5 : 1,
     }}>
-      <button onClick={prepni} disabled={pracuji}
-        title={hotovo ? "Vrátit mezi nesplněné" : "Hotovo"}
+      <button onClick={prepni} disabled={pracuji || !moje}
+        title={!moje ? `Termín zapsal ${t.owner}, odškrtnout si ho musí sám`
+          : hotovo ? "Vrátit mezi nesplněné" : "Hotovo"}
         style={{
           ...btn(), background: "transparent", fontSize: "14px",
           padding: "0 2px", color: hotovo ? theme.green : theme.textDim,
+          cursor: moje ? "pointer" : "default",
         }}>{hotovo ? "☑" : "☐"}</button>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -162,6 +166,11 @@ function TerminRadek({ t, theme, onUprav, onZmena, onOtevriOsobu }) {
           {t.reminder_id && !hotovo && " · ⏰"}
           {t.poznamka ? ` · ${t.poznamka}` : ""}
         </div>
+        {t.owner && t.owner !== owner && (
+          <div style={{ fontSize: "10.5px", color: theme.purple, marginTop: 2 }}>
+            zapsal {t.owner}
+          </div>
+        )}
       </div>
 
       {!hotovo && (
@@ -170,14 +179,18 @@ function TerminRadek({ t, theme, onUprav, onZmena, onOtevriOsobu }) {
         }}>{n.popis}</span>
       )}
 
-      <button onClick={onUprav} style={{
-        ...btn(), background: "transparent", color: theme.textSub,
-        fontSize: "12px", padding: "2px 4px",
-      }}>✎</button>
-      <button onClick={smaz} disabled={pracuji} title="Smazat" style={{
-        ...btn(), background: "transparent", color: theme.textDim,
-        fontSize: "14px", padding: "2px 4px",
-      }}>×</button>
+      {moje && (
+        <>
+          <button onClick={onUprav} style={{
+            ...btn(), background: "transparent", color: theme.textSub,
+            fontSize: "12px", padding: "2px 4px",
+          }}>✎</button>
+          <button onClick={smaz} disabled={pracuji} title="Smazat" style={{
+            ...btn(), background: "transparent", color: theme.textDim,
+            fontSize: "14px", padding: "2px 4px",
+          }}>×</button>
+        </>
+      )}
     </div>
   );
 }

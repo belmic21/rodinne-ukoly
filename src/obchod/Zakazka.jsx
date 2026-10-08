@@ -25,7 +25,10 @@ import {
    ŘETĚZEC
    ════════════════════════════════════════════════════════ */
 
-export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu }) {
+/* `spravce` = přihlášený je správce. Smí měnit i cizí řádky.
+   Jinak platí: co jsem zapsal já, měním já. Cizí řádek vidím,
+   ale needituji — proto se u něj tužka vůbec nezobrazí. */
+export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu, spravce = false }) {
   const [lide, setLide] = useState([]);
   const [busy, setBusy] = useState(true);
   const [pridavam, setPridavam] = useState(false);
@@ -114,19 +117,24 @@ export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu }) {
                 : "forma dohody neuvedena"}
               {u.poznamka ? ` · ${u.poznamka}` : ""}
             </div>
+            <Zapsal theme={theme} kdo={u.owner} owner={owner} />
           </div>
           <div style={{
             fontSize: "13px", fontWeight: 700, color: theme.text,
             fontVariantNumeric: "tabular-nums",
           }}>{u.podil != null ? `${u.podil} %` : "—"}</div>
-          <button onClick={() => setEdituji(u)} style={{
-            ...btn(), background: "transparent", color: theme.textSub,
-            fontSize: "12px", padding: "2px 5px",
-          }}>✎</button>
-          <button onClick={() => smazat(u.id)} title="Odebrat" style={{
-            ...btn(), background: "transparent", color: theme.textDim,
-            fontSize: "14px", padding: "2px 5px",
-          }}>×</button>
+          {smimMenit(u, owner, spravce) && (
+            <>
+              <button onClick={() => setEdituji(u)} style={{
+                ...btn(), background: "transparent", color: theme.textSub,
+                fontSize: "12px", padding: "2px 5px",
+              }}>✎</button>
+              <button onClick={() => smazat(u.id)} title="Odebrat" style={{
+                ...btn(), background: "transparent", color: theme.textDim,
+                fontSize: "14px", padding: "2px 5px",
+              }}>×</button>
+            </>
+          )}
         </div>
       ))}
 
@@ -207,7 +215,7 @@ function UcastnikEditor({ theme, ciselniky, u, onUloz, onZrus }) {
 
 const KONEC = ["odmitl", "ticho"];
 
-export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu }) {
+export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu, spravce = false }) {
   const projectId = zakazka?.id;
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
@@ -293,13 +301,14 @@ export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu }) {
 
       {serazene.map(r => (
         <OsloveniRadek key={r.id} r={r} theme={theme} owner={owner}
-          ciselniky={ciselniky} onZmena={nacti} onOtevriOsobu={onOtevriOsobu} />
+          ciselniky={ciselniky} onZmena={nacti} onOtevriOsobu={onOtevriOsobu}
+          moje={smimMenit(r, owner, spravce)} />
       ))}
     </Sekce>
   );
 }
 
-function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu }) {
+function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu, moje = true }) {
   const [otevreno, setOtevreno] = useState(false);
   const [f, setF] = useState({
     id: r.id, stav: r.stav, aktualne: r.aktualne || "",
@@ -364,6 +373,7 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu }) {
               : `osloveno ${datumKratce(r.odeslano_at)}`}
             {r.cena_jednana ? ` · jednáme ${penizeKratce(r.cena_jednana)}` : ""}
           </div>
+          <Zapsal theme={theme} kdo={r.owner} owner={owner} />
         </div>
         {r.pripominka_at && (
           <span title="Připomínka" style={{
@@ -377,7 +387,35 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu }) {
         }}>{popis(ciselniky, "stav_osloveni", r.stav)}</span>
       </div>
 
-      {otevreno && (
+      {/* Cizí záznam se jen čte. Tlačítko ULOŽIT by stejně neprošlo —
+          databáze cizí řádek přepsat nenechá — a zbytečně by to mátlo. */}
+      {otevreno && !moje && (
+        <div style={{
+          marginTop: 10, borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 10,
+          fontSize: "12px", color: theme.text, lineHeight: 1.9,
+        }}>
+          {r.kanal && <div><span style={{ color: theme.textSub }}>oslovil ho </span>{r.kanal}</div>}
+          {r.cena_jednana != null && (
+            <div><span style={{ color: theme.textSub }}>jednaná cena </span>
+              {penizeKratce(r.cena_jednana)}</div>
+          )}
+          {r.aktualne && (
+            <div><span style={{ color: theme.textSub }}>teď </span>{r.aktualne}</div>
+          )}
+          {r.pripominka_at && (
+            <div><span style={{ color: theme.textSub }}>ozve se mu </span>
+              {datumKratce(r.pripominka_at)}</div>
+          )}
+          {r.poznamka && (
+            <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{r.poznamka}</div>
+          )}
+          <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 6 }}>
+            Zapsal {r.owner}. Měnit to může jen on — ty si můžeš přidat vlastní záznam.
+          </div>
+        </div>
+      )}
+
+      {otevreno && moje && (
         <div style={{ marginTop: 10, borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 10 }}>
           <div style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))",
@@ -658,6 +696,26 @@ function VyberKohoOslovit({ theme, owner, ciselniky, projectId, jizOsloveni, onO
 }
 
 /* ── Společné drobnosti ────────────────────────────── */
+
+/* Smím ten řádek měnit? Vlastní ano, cizí ne — ledaže jsem správce.
+   Řádky bez vyplněného vlastníka jsou staré záznamy z doby, kdy
+   se sloupec nenačítal; ty se chovají jako moje. */
+export function smimMenit(radek, owner, spravce) {
+  if (spravce) return true;
+  if (!radek?.owner) return true;
+  return radek.owner === owner;
+}
+
+/* Podpis pod cizím záznamem. U vlastních se nic nepíše —
+   bylo by to na každém řádku a k ničemu. */
+function Zapsal({ theme, kdo, owner }) {
+  if (!kdo || kdo === owner) return null;
+  return (
+    <div style={{ fontSize: "10.5px", color: theme.purple, marginTop: 2 }}>
+      zapsal {kdo}
+    </div>
+  );
+}
 
 function Sekce({ theme, nadpis, akce, children }) {
   return (

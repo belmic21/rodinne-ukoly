@@ -223,11 +223,29 @@ export async function nactiPanel(owner) {
 /* ── Zakázky ─────────────────────────────────────────── */
 
 const SLOUPCE = `
-  id, cislo, kod, nazev, typ, velikost, jednotka,
+  id, owner, cislo, kod, nazev, typ, velikost, jednotka,
   zeme, kraj, mesto, lokalita_text, faze, cena, mena,
   odmena, stav, souhrn, slozka_odkaz, navazuje_na,
   created_at, updated_at
 `;
+
+/* Jsem správce? Ptáme se databáze, ne přihlášení — příznak
+   v aplikaci by se dal podvrhnout, odpověď funkce ne.
+
+   Schválně se neukládá do paměti modulu. Odpověď patří
+   přihlášenému, a kdyby se v jedné záložce někdo odhlásil
+   a přihlásil druhý, zdědil by cizí práva. Je to jeden dotaz
+   při otevření okna, ne nic, na čem by se dalo šetřit. */
+export async function jsemSpravce() {
+  try {
+    const { data, error } = await supabase.rpc("je_spravce");
+    if (error) throw error;
+    return !!data;
+  } catch (e) {
+    selhalo("jsemSpravce", e);
+    return false;
+  }
+}
 
 export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
   if (!owner) return [];
@@ -568,8 +586,10 @@ export async function osaZakazky(owner, projectId, limit = 100) {
   try {
     const { data, error } = await supabase
       .from("map_facts")
-      .select("id, content, context, happened_at, person_id, osoba:map_people (id, name)")
-      .eq("owner", owner)
+      .select("id, owner, content, context, happened_at, person_id, osoba:map_people (id, name)")
+      // Schválně bez filtru na vlastníka: u sdílené zakázky patří na osu
+      // i to, co zapsal partner. Pravidla v databázi hlídají, že se sem
+      // nedostane nic z jiné zakázky.
       .eq("project_id", projectId)
       .order("happened_at", { ascending: false })
       .limit(limit);
@@ -586,7 +606,7 @@ export async function osaZakazky(owner, projectId, limit = 100) {
    tohle je "kdo na tom je", oslovení je "koho jsem zkoušel". */
 
 const UCASTNIK = `
-  id, project_id, person_id, role, podil, poradi,
+  id, owner, project_id, person_id, role, podil, poradi,
   forma_dohody, poznamka, created_at,
   osoba:map_people (id, name)
 `;
@@ -651,7 +671,7 @@ export async function smazUcastnika(id) {
 /* ── Oslovení ────────────────────────────────────────── */
 
 const OSLOVENI = `
-  id, project_id, person_id, stav, aktualne, aktualne_at,
+  id, owner, project_id, person_id, stav, aktualne, aktualne_at,
   kanal, odeslano_at, cena_jednana, pripominka_at, poznamka,
   created_at, updated_at,
   osoba:map_people (id, name, contact)
@@ -759,7 +779,7 @@ export async function smazOsloveni(id) {
    je nakonec vždycky jen „kolik času zbývá“. */
 
 const TERMIN = `
-  id, project_id, person_id, nazev, datum, poznamka,
+  id, owner, project_id, person_id, nazev, datum, poznamka,
   hotovo_at, reminder_id, created_at,
   osoba:map_people (id, name)
 `;
@@ -1033,10 +1053,11 @@ export const SABLONY = {
   "Jen projekt":      { vidi_souhrn: true, vidi_stav: true },
   "Investor po NDA":  { vidi_souhrn: true, vidi_stav: true, vidi_podklady: true, vidi_cenu: true },
   "Parťák":           { vidi_souhrn: true, vidi_stav: true, vidi_podklady: true, vidi_cenu: true, vidi_jmena: true },
+  "Spolupráce":       { spolupracuje: true },
 };
 
 export function zeSablony(nazev) {
-  const zaklad = {};
+  const zaklad = { spolupracuje: false };
   for (const p of PREPINACE) zaklad[p.k] = false;
   return { ...zaklad, ...(SABLONY[nazev] || {}), sablona: nazev };
 }
@@ -1059,7 +1080,11 @@ export async function ulozSdileni(owner, data) {
   if (!owner || !data?.project_id || !data?.grantee) {
     return { ok: false, chyba: "Chybí zakázka nebo komu." };
   }
-  const telo = { sablona: data.sablona || null, poznamka: data.poznamka || null };
+  const telo = {
+    sablona: data.sablona || null,
+    poznamka: data.poznamka || null,
+    spolupracuje: !!data.spolupracuje,
+  };
   for (const p of PREPINACE) telo[p.k] = !!data[p.k];
   try {
     const q = data.id

@@ -13,7 +13,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
-  upravZakazku, smazZakazku, popis, aktivni, rozeberVetu,
+  upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
@@ -51,7 +51,16 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
   // Schválně: co máš rozepsané v zakázce, zůstane pod ním nedotčené.
   const [osobaId, setOsobaId] = useState(initialOsoba);
+  // Správce se ptáme databáze, ne přihlášení. Rozhoduje o tom, jestli
+  // smíš sáhnout i na to, co zapsal někdo jiný.
+  const [spravce, setSpravce] = useState(false);
   const hledatRef = useRef(null);
+
+  useEffect(() => {
+    let zrus = false;
+    jsemSpravce().then(v => { if (!zrus) setSpravce(v); });
+    return () => { zrus = true; };
+  }, []);
 
   const KROK = 25;
   const [kolik, setKolik] = useState(KROK);
@@ -190,13 +199,13 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           </>
         ) : nova ? (
           <Detail
-            theme={theme} owner={owner} ciselniky={ciselniky}
+            theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
             predvyplneno={nova} onBack={zavri} onClose={onClose}
             onOtevriOsobu={setOsobaId}
           />
         ) : otevrena ? (
           <Detail
-            theme={theme} owner={owner} ciselniky={ciselniky}
+            theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
             zakazka={otevrena} onBack={zavri} onClose={onClose}
             onOtevriOsobu={setOsobaId}
           />
@@ -290,7 +299,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
               <TerminyPrehled theme={theme} owner={owner}
                 onOtevriZakazku={otevriZakazku} onOtevriOsobu={setOsobaId} />
             ) : zalozka === "sdilene" ? (
-              <SdilenoSeMnou theme={theme} ciselniky={ciselniky} />
+              <SdilenoSeMnou theme={theme} ciselniky={ciselniky}
+                onOtevriSpolupraci={otevriZakazku} />
             ) : (
               /* ══ Seznam zakázek ══ */
               <div style={{ padding: "10px 16px 18px" }}>
@@ -554,8 +564,12 @@ function Prazdno({ theme, children }) {
 /* ── Detail zakázky ────────────────────────────────── */
 
 function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
-  onBack, onClose, onOtevriOsobu }) {
+  onBack, onClose, onOtevriOsobu, spravce = false }) {
   const novy = !zakazka;
+  // Zakázka, kterou se mnou někdo sdílí ve spolupráci. Hlavička je jeho,
+  // do průběhu zapisovat můžu. Správce může i hlavičku.
+  const cizi = !novy && !!zakazka?.owner && zakazka.owner !== owner;
+  const smimHlavicku = !cizi || spravce;
   const [f, setF] = useState(() => {
     const z = {
       nazev: "", typ: "", velikost: "", jednotka: "byt",
@@ -649,6 +663,23 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
       </div>
 
       <div style={{ padding: "14px 16px 20px" }}>
+        {cizi && (
+          <div style={{
+            border: `1px solid ${theme.green}55`, background: `${theme.green}10`,
+            borderRadius: 9, padding: "9px 12px", marginBottom: 12,
+            fontSize: "11.5px", color: theme.textSub, lineHeight: 1.6,
+          }}>
+            <strong style={{ color: theme.green }}>Spolupráce.</strong>{" "}
+            Zakázku vede {zakazka.owner}. {smimHlavicku
+              ? "Jako správce můžeš měnit i jeho zápisy."
+              : "Průběh sem zapisovat můžeš — oslovení, termíny, poznámky. Hlavičku mění jen on."}
+          </div>
+        )}
+
+        {!smimHlavicku ? (
+          <JenCist theme={theme} ciselniky={ciselniky} z={zakazka} />
+        ) : (
+        <>
         <div style={{ marginBottom: 10 }}>
           <span style={label(theme)}>Název</span>
           <input ref={nazevRef} value={f.nazev || ""} onChange={e => uprav("nazev", e.target.value)}
@@ -753,16 +784,23 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           </div>
         )}
 
+        </>
+        )}
+
         {zakazkaId && (
           <>
-            <Retezec theme={theme} owner={owner} ciselniky={ciselniky}
+            <Retezec theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
               projectId={zakazkaId} onOtevriOsobu={onOtevriOsobu} />
-            <Geneze theme={theme} owner={owner} ciselniky={ciselniky}
+            <Geneze theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
               zakazka={{ id: zakazkaId, nazev: f.nazev }}
               onOtevriOsobu={onOtevriOsobu} />
-            <TerminySekce theme={theme} owner={owner} projectId={zakazkaId}
+            <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
               nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
-            <SdileniZakazky theme={theme} owner={owner} projectId={zakazkaId} />
+            {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
+                tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
+            {!cizi && (
+              <SdileniZakazky theme={theme} owner={owner} projectId={zakazkaId} />
+            )}
           </>
         )}
 
@@ -774,6 +812,51 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+/* Hlavička cizí zakázky. Stejná data, jen k přečtení — formulář
+   by sliboval uložení, které by databáze stejně odmítla. */
+function JenCist({ theme, ciselniky, z }) {
+  const Radek = ({ popisek, hodnota }) => hodnota ? (
+    <div style={{ display: "flex", gap: 10, marginBottom: 5 }}>
+      <span style={{ fontSize: "11px", color: theme.textSub, minWidth: 96 }}>{popisek}</span>
+      <span style={{ fontSize: "12.5px", color: theme.text }}>{hodnota}</span>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <div style={{ ...card(theme), padding: "12px 14px", marginBottom: 10 }}>
+        <Radek popisek="Typ"      hodnota={popis(ciselniky, "typ", z.typ)} />
+        <Radek popisek="Velikost" hodnota={z.velikost
+          ? `${z.velikost} ${popis(ciselniky, "jednotka", z.jednotka)}` : null} />
+        <Radek popisek="Lokalita" hodnota={[z.mesto, popis(ciselniky, "kraj", z.kraj)]
+          .filter(Boolean).join(", ")} />
+        <Radek popisek="Podrobně" hodnota={z.lokalita_text} />
+        <Radek popisek="Fáze"     hodnota={popis(ciselniky, "faze", z.faze)} />
+        <Radek popisek="Cena"     hodnota={z.cena != null ? penizeKratce(z.cena) : null} />
+        <Radek popisek="Odměna"   hodnota={z.odmena} />
+        <Radek popisek="Stav"     hodnota={popis(ciselniky, "stav_zakazky", z.stav)} />
+      </div>
+
+      {z.souhrn && (
+        <div style={{ ...card(theme), padding: "12px 14px", marginBottom: 10 }}>
+          <div style={{ ...label(theme), marginBottom: 5 }}>Souhrn</div>
+          <div style={{
+            fontSize: "12.5px", color: theme.text, lineHeight: 1.7, whiteSpace: "pre-wrap",
+          }}>{z.souhrn}</div>
+        </div>
+      )}
+
+      {z.slozka_odkaz && (
+        <a href={z.slozka_odkaz} target="_blank" rel="noreferrer" style={{
+          ...card(theme), padding: "10px 14px", marginBottom: 10,
+          display: "block", color: theme.accent, fontSize: "12.5px",
+          textDecoration: "none", fontWeight: 600,
+        }}>📂 otevřít podklady →</a>
+      )}
     </>
   );
 }

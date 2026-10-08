@@ -1,13 +1,23 @@
 /* ═══════════════════════════════════════════════════════
    OBCHOD — sdílení a uživatelé
 
-   Sdílí se zakázka, nic jiného. Kontakty, karty investorů
-   ani mapa se nesdílí nikdy — to nejsou přepínače, to je
-   dané tím, co funkce v databázi umí vrátit.
+   Sdílí se zakázka, nic jiného. Každé sdílení má vlastní
+   nastavení. S někým, koho zatím neznáš a čekáš na NDA,
+   sdílíš míň než s parťákem.
 
-   Každé sdílení má vlastní nastavení. S Davidem, který je
-   napůl parťák, můžeš sdílet víc než s někým, koho zatím
-   neznáš a čekáš na podepsané NDA.
+   Dvě úrovně, ne jedna:
+
+   1) Přepínače — druhá strana si zakázku jen prohlíží.
+      Co nemá povolené, jí databáze vůbec nevrátí. Kontakty,
+      karty investorů ani Mapa se takhle nesdílí nikdy.
+
+   2) Spolupráce — děláte na zakázce spolu. Vidí ji celou
+      včetně lidí na ní a smí zapisovat průběh. Pořád ale
+      jen tuhle zakázku: zbytek tvého prostředí, karty
+      investorů a úkolník zůstávají tvoje.
+
+   V obou případech platí, že cizí záznam nikdo nepřepíše.
+   Co zapsal David, mění David. Správce může cokoliv.
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect } from "react";
@@ -102,16 +112,26 @@ export function SdileniZakazky({ theme, owner, projectId }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text }}>
               {s.grantee}
-              {s.sablona && (
+              {s.spolupracuje && (
+                <span style={{
+                  marginLeft: 6, fontSize: "9.5px", fontWeight: 700, letterSpacing: "0.04em",
+                  color: theme.green, border: `1px solid ${theme.green}55`,
+                  borderRadius: 5, padding: "1px 5px",
+                }}>SPOLUPRÁCE</span>
+              )}
+              {!s.spolupracuje && s.sablona && (
                 <span style={{ fontWeight: 400, color: theme.textSub, fontSize: "11px" }}>
                   {" "}· {s.sablona}
                 </span>
               )}
             </div>
             <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2, lineHeight: 1.5 }}>
-              vidí: {PREPINACE.filter(p => s[p.k]).map(p => p.t.toLowerCase()).join(", ") || "jen název a lokalitu"}
+              {s.spolupracuje
+                ? "spolupráce — vidí zakázku celou včetně lidí a může do ní zapisovat"
+                : "vidí: " + (PREPINACE.filter(p => s[p.k]).map(p => p.t.toLowerCase()).join(", ")
+                   || "jen název a lokalitu")}
             </div>
-            {(s.vidi_retezec || s.vidi_ceny_jednani) && (
+            {!s.spolupracuje && (s.vidi_retezec || s.vidi_ceny_jednani) && (
               <div style={{ fontSize: "10.5px", color: theme.yellow, marginTop: 2 }}>
                 Pozor: vidí i to, jak se obchod dělí.
               </div>
@@ -154,10 +174,40 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
         </div>
       )}
 
-      <div style={{ marginBottom: 9 }}>
+      {/* Spolupráce je jiná liga než přepínače pod ní. Buď někomu
+          zakázku jen ukazuješ, nebo na ní spolu děláte. */}
+      <div onClick={() => setF(p => ({
+        ...p, spolupracuje: !p.spolupracuje, sablona: !p.spolupracuje ? "Spolupráce" : "vlastní",
+      }))} style={{
+        display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer",
+        border: `1px solid ${f.spolupracuje ? `${theme.green}66` : theme.cardBorder}`,
+        background: f.spolupracuje ? `${theme.green}10` : "transparent",
+        borderRadius: 9, padding: "9px 11px", marginBottom: 10,
+      }}>
+        <span style={{ fontSize: "15px", lineHeight: 1.2 }}>{f.spolupracuje ? "☑" : "☐"}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: "12.5px", fontWeight: 700,
+            color: f.spolupracuje ? theme.green : theme.text,
+          }}>Spolupracujeme na ní</div>
+          <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2, lineHeight: 1.6 }}>
+            {f.spolupracuje
+              ? "Vidí zakázku celou — lidi na ní, řetězec, oslovení, termíny i poznámky k obchodu. Smí zapisovat průběh. Co zapíšeš ty, přepsat nemůže. Hlavičku zakázky needituje."
+              : "Zapni, když na zakázce děláte spolu a jeden má umět zastoupit druhého. Vypnuto = platí jednotlivé přepínače níž."}
+          </div>
+          {f.spolupracuje && (
+            <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 4, lineHeight: 1.6 }}>
+              Pořád nevidí: tvoje ostatní zakázky, zbytek Mapy, karty investorů
+              ani tvůj úkolník.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 9, opacity: f.spolupracuje ? 0.4 : 1 }}>
         <span style={label(theme)}>Šablona</span>
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-          {Object.keys(SABLONY).map(n => {
+          {Object.keys(SABLONY).filter(n => n !== "Spolupráce").map(n => {
             const zap = f.sablona === n;
             return (
               <button key={n} onClick={() => vyberSablonu(n)} style={{
@@ -176,8 +226,13 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 9 }}>
+      <div style={{ marginBottom: 9, opacity: f.spolupracuje ? 0.4 : 1 }}>
         <span style={label(theme)}>Co uvidí</span>
+        {f.spolupracuje && (
+          <div style={{ fontSize: "11px", color: theme.textSub, padding: "2px 0 4px" }}>
+            Při spolupráci se tyhle přepínače neuplatňují — vidí všechno.
+          </div>
+        )}
         {PREPINACE.map(p => {
           const citlive = p.k === "vidi_retezec" || p.k === "vidi_ceny_jednani";
           return (
@@ -218,7 +273,7 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
    SDÍLENO SE MNOU
    ════════════════════════════════════════════════════════ */
 
-export function SdilenoSeMnou({ theme, ciselniky }) {
+export function SdilenoSeMnou({ theme, ciselniky, onOtevriSpolupraci }) {
   const [zakazky, setZakazky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [otevrena, setOtevrena] = useState(null);
@@ -244,16 +299,33 @@ export function SdilenoSeMnou({ theme, ciselniky }) {
         </Tise>
       )}
       {zakazky.map(z => (
-        <div key={z.id} onClick={() => setOtevrena(z)} style={{
-          ...card(theme), padding: "10px 12px", marginBottom: 7, cursor: "pointer",
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
+        <div key={z.id}
+          onClick={() => {
+            // Zakázka ve spolupráci se otevře jako plná zakázka, ne jako
+            // náhled — jinak by na ní partner nemohl pracovat.
+            if (z.spolupracuje && onOtevriSpolupraci) onOtevriSpolupraci(z);
+            else setOtevrena(z);
+          }}
+          style={{
+            ...card(theme), padding: "10px 12px", marginBottom: 7, cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 10,
+            borderColor: z.spolupracuje ? `${theme.green}44` : theme.cardBorder,
+          }}>
           <div style={{
             fontSize: "10px", fontWeight: 700, color: theme.textSub,
             whiteSpace: "nowrap",
           }}>{z.kod}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{z.nazev}</div>
+            <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+              {z.nazev}
+              {z.spolupracuje && (
+                <span style={{
+                  marginLeft: 6, fontSize: "9.5px", fontWeight: 700, letterSpacing: "0.04em",
+                  color: theme.green, border: `1px solid ${theme.green}55`,
+                  borderRadius: 5, padding: "1px 5px",
+                }}>SPOLUPRÁCE</span>
+              )}
+            </div>
             <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
               {[
                 popis(ciselniky, "typ", z.typ),
