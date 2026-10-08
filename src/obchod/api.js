@@ -49,6 +49,52 @@ export function aktivni(ciselniky, kind) {
   return (ciselniky?.[kind] || []).filter(x => x.active);
 }
 
+/* ── Člověk ze všech stran ───────────────────────────────
+   Davidovi volá klient. Potřebuje za pár vteřin vidět, co
+   s ním běží, kdy naposledy a za kolik — nezávisle na tom,
+   jestli je to majitel, prostředník nebo investor.
+
+   Role se v řetězci posouvá: klient je pro Davida majitel,
+   David je pro tebe prostředník. Proto se u každé zakázky
+   ukazuje role, kterou tam má, ne jedna role napevno. */
+
+export async function osobaPrehled(owner, personId) {
+  if (!owner || !personId) return null;
+  const prazdne = { osoba: null, ucast: [], osloveni: [], karty: [], zaznamy: [] };
+  try {
+    const projekt = "projekt:deal_projects (id, kod, nazev, typ, kraj, mesto, cena, stav, faze)";
+    const [osoba, ucast, osloveni, karty, zaznamy] = await Promise.all([
+      supabase.from("map_people")
+        .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
+        .eq("id", personId).maybeSingle(),
+      supabase.from("deal_participants")
+        .select(`id, role, podil, poradi, forma_dohody, poznamka, ${projekt}`)
+        .eq("owner", owner).eq("person_id", personId),
+      supabase.from("deal_approaches")
+        .select(`id, stav, aktualne, aktualne_at, odeslano_at, cena_jednana,
+                 pripominka_at, poznamka, ${projekt}`)
+        .eq("owner", owner).eq("person_id", personId).is("deleted_at", null),
+      supabase.from("deal_cards")
+        .select("id, smer, nazev, typy, kraje, cena_od, cena_do, velikost_od, jednotka, aktivni, poznamka")
+        .eq("owner", owner).eq("person_id", personId),
+      supabase.from("map_facts")
+        .select("id, content, context, happened_at, projekt:deal_projects (kod, nazev)")
+        .eq("owner", owner).eq("person_id", personId)
+        .order("happened_at", { ascending: false }).limit(60),
+    ]);
+    return {
+      osoba: osoba.data || null,
+      ucast: ucast.data || [],
+      osloveni: osloveni.data || [],
+      karty: karty.data || [],
+      zaznamy: zaznamy.data || [],
+    };
+  } catch (e) {
+    selhalo("osobaPrehled", e);
+    return prazdne;
+  }
+}
+
 /* ── Úpravy číselníků ────────────────────────────────────
    Kde se který seznam v datech používá. Podle toho se pozná,
    jestli jde položka smazat, nebo se má jen vypnout. */
