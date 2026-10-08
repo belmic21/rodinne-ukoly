@@ -51,6 +51,7 @@ import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { ObchodUOsoby } from "./obchod/Osoba.jsx";
+import { KontaktEditor } from "./obchod/Site.jsx";
 import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -97,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_2125";
+const FILE_VERSION = "261008_2145";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -11022,16 +11023,17 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
     { key: "z", dest: "obchod", icon: "💼", label: "Zakázka",      hint: "rodinný dům Beroun 3,5 mil" },
     { key: "k", dest: "kdo",    icon: "👤", label: "Kdo",          hint: "jméno nebo telefon — co s ním běží" },
+    { key: "?", dest: "hledat", icon: "🔍", label: "Hledat",       hint: "napříč vším — úkoly, poznámky, lidi, zakázky" },
   ];
 
   const slash = useMemo(() => {
-    const m = text.match(/^\/([\p{L}]*)(?:\s+([\s\S]*))?$/u);
+    const m = text.match(/^\/([\p{L}]*|\?)(?:\s+([\s\S]*))?$/u);
     if (!m) return null;
     const frag = (m[1] || "").toLowerCase();
     const rest = (m[2] || "").trim();
     const hits = frag
       ? SLASH_CMDS.filter(c => c.key === frag || c.label.toLowerCase().startsWith(frag))
-      : SLASH_CMDS;
+      : SLASH_CMDS.filter(c => c.key !== "?");   // otazník se nabízí, až ho napíšeš
     return { frag, rest, hits: hits.length ? hits : SLASH_CMDS };
   }, [text]);
 
@@ -15020,42 +15022,35 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
 
         {editMeta ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 9 }}>
-            <input value={name} onChange={e => setName(e.target.value)}
-              placeholder="Jméno — oprav sem překlep"
-              style={{ ...smallInput, fontWeight: 700 }} />
-            <input value={metAt} onChange={e => setMetAt(e.target.value)}
-              placeholder="Kde jsem ho poznal — golf v Berouně, konference"
-              style={smallInput} />
-            <input value={contact} onChange={e => setContact(e.target.value)}
-              placeholder="Kontakt — telefon, mail, firma"
-              style={smallInput} />
-            <input value={aliases} onChange={e => setAliases(e.target.value)}
-              placeholder="Přezdívky oddělené čárkou — Peťa, Petr od aut"
-              style={smallInput} />
-            <input value={note} onChange={e => setNote(e.target.value)}
-              placeholder="Další poznámka" style={smallInput} />
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={saveMeta} style={{
-                ...buttonStyle(), background: theme.accent, color: "#fff",
-                padding: "5px 12px", fontSize: "11px", fontWeight: 700,
-              }}>ULOŽIT</button>
-              <button onClick={() => setEditMeta(false)} style={{
-                ...buttonStyle(), background: "transparent", color: theme.textSub,
-                padding: "5px 10px", fontSize: "11px",
-              }}>Zrušit</button>
-              <span style={{ flex: 1 }} />
-              <button onClick={() => { setConfirmDelete(v => !v); setPickMerge(false); }}
-                title="Smazat tohoto člověka" style={{
-                  ...buttonStyle(), background: "transparent", color: theme.red,
-                  padding: "5px 10px", fontSize: "11px",
-                  border: `1px solid ${theme.red}44`, borderRadius: 6,
-                }}>🗑 smazat</button>
-              <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
-                ...buttonStyle(), background: "transparent", color: theme.textSub,
-                padding: "5px 10px", fontSize: "11px",
-                border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
-              }}>⇄ sloučit s jiným</button>
-            </div>
+            {/* Jeden editor pro celou aplikaci. Dřív tu byl vlastní,
+                a jako jediný neuměl role — kontakt zadaný tudy se pak
+                v Síti neobjevil pod "investor". */}
+            <KontaktEditor
+              theme={theme}
+              owner={owner}
+              osoba={person}
+              onHotovo={(o) => {
+                setEditMeta(false);
+                onPersonChanged?.(o);
+              }}
+              onZrus={() => setEditMeta(false)}
+              extra={
+                <>
+                  <span style={{ flex: 1 }} />
+                  <button onClick={() => { setConfirmDelete(v => !v); setPickMerge(false); }}
+                    title="Smazat tohoto člověka" style={{
+                      ...buttonStyle(), background: "transparent", color: theme.red,
+                      padding: "5px 10px", fontSize: "11px",
+                      border: `1px solid ${theme.red}44`, borderRadius: 6,
+                    }}>🗑 smazat</button>
+                  <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
+                    ...buttonStyle(), background: "transparent", color: theme.textSub,
+                    padding: "5px 10px", fontSize: "11px",
+                    border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
+                  }}>⇄ sloučit s jiným</button>
+                </>
+              }
+            />
             {confirmDelete && (
               <div style={{
                 marginTop: 4, padding: "9px 11px",
@@ -15307,9 +15302,9 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   );
 }
 
-function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa, onOpenZakazka }) {
+function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa, onOpenZakazka, initialQuery = "" }) {
   useEscapeKey(onClose);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -22797,6 +22792,7 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
+  const [searchDraft, setSearchDraft] = useState("");   // dotaz předaný z „/?“
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
   // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
   const [showObchodSheet, setShowObchodSheet] = useState(false);
@@ -25867,7 +25863,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           {/* Search ikona */}
-          <button onClick={() => setShowSearchSheet(true)}
+          <button onClick={() => { setSearchDraft(""); setShowSearchSheet(true); }}
             title="Hledat"
             style={{
               background: "none", border: "none", cursor: "pointer",
@@ -27046,6 +27042,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
         {showSearchSheet && (
           <SearchSheet
+            initialQuery={searchDraft}
             tasks={tasks}
             comments={comments}
             reminders={reminders}
@@ -27053,7 +27050,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             currentUser={currentUser}
             customLists={customLists}
             theme={theme}
-            onClose={() => setShowSearchSheet(false)}
+            onClose={() => { setShowSearchSheet(false); setSearchDraft(""); }}
             onOpenReminder={() => {
               setShowSearchSheet(false);
               setShowReminderSheet(true);
@@ -27312,6 +27309,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               else if (dest === "kdo") {
                 setObchodOsoba(extra?.person?.id || null);
                 setShowObchodSheet(true);
+              }
+              else if (dest === "hledat") {
+                // /? otevře lupu rovnou s dotazem. Stejné hledání,
+                // jen se k němu nemusí sahat myší.
+                setSearchDraft(body || "");
+                setShowSearchSheet(true);
               }
             }}
             theme={theme}
