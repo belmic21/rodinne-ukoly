@@ -795,7 +795,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
               zakazka={{ id: zakazkaId, nazev: f.nazev }}
               onOtevriOsobu={onOtevriOsobu} />
             <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
-              nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
+              ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
             {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
                 tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
             {!cizi && (

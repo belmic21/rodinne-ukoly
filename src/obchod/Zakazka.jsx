@@ -67,7 +67,7 @@ export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu, spr
         <button onClick={() => setPridavam(true)} style={btnGhost(theme)}>+ člověk</button>
       }>
       {pridavam && (
-        <VyberOsoby theme={theme} owner={owner}
+        <VyberOsoby theme={theme} owner={owner} ciselniky={ciselniky}
           onZrus={() => setPridavam(false)}
           onVyber={(o) => {
             setPridavam(false);

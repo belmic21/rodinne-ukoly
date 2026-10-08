@@ -34,7 +34,7 @@ const ZA_DNI = (n) => {
    ════════════════════════════════════════════════════════ */
 
 export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOsobu,
-  spravce = false }) {
+  ciselniky, spravce = false }) {
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [edituji, setEdituji] = useState(null);
@@ -85,7 +85,7 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
       )}
 
       {edituji && (
-        <TerminEditor theme={theme} owner={owner} t={edituji}
+        <TerminEditor theme={theme} owner={owner} ciselniky={ciselniky} t={edituji}
           onUloz={uloz} onZrus={() => { setEdituji(null); setChyba(null); }} />
       )}
 
@@ -195,7 +195,7 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
   );
 }
 
-function TerminEditor({ theme, owner, t, onUloz, onZrus }) {
+function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
   const [f, setF] = useState({
     id: t.id, nazev: t.nazev || "", datum: t.datum || ZA_DNI(7),
     person_id: t.person_id || null, osoba: t.osoba || null,
@@ -236,7 +236,7 @@ function TerminEditor({ theme, owner, t, onUloz, onZrus }) {
       <div style={{ marginBottom: 8 }}>
         <span style={label(theme)}>S kým — nepovinné</span>
         {vybiram ? (
-          <VyberOsoby theme={theme} owner={owner}
+          <VyberOsoby theme={theme} owner={owner} ciselniky={ciselniky}
             onZrus={() => setVybiram(false)}
             onVyber={(o) => {
               setF(p => ({ ...p, person_id: o.id, osoba: o }));
