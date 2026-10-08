@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Component } from "react";
 import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
+import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -46,7 +47,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261007_1020";
+const FILE_VERSION = "261008_0600";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -10969,6 +10970,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "jméno, nebo jméno: co řekl" },
     { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
     { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
+    { key: "z", dest: "obchod", icon: "💼", label: "Zakázka",      hint: "rodinný dům Beroun 3,5 mil" },
   ];
 
   const slash = useMemo(() => {
@@ -22593,6 +22595,9 @@ function App() {
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
+  // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
+  const [showObchodSheet, setShowObchodSheet] = useState(false);
+  const [obchodDraft, setObchodDraft] = useState("");
   const [mapaDraft, setMapaDraft] = useState("");             // předvyplnění z /m
   const [mapaQuery, setMapaQuery] = useState("");             // otevření z lupy
   const [mapaPerson, setMapaPerson] = useState(null);
@@ -23416,7 +23421,7 @@ function App() {
       // Pokud je nějaký modal otevřený, neřešíme — modal si Esc zachytí sám
       const anyModalOpen =
         showReminderSheet || showQuickReminder || showNotesSheet ||
-        editingNote !== null || showStatsSheet || showSearchSheet || showMapaSheet ||
+        editingNote !== null || showStatsSheet || showSearchSheet || showMapaSheet || showObchodSheet ||
         showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd || showStoryQuickQuote ||
         showCalendar || showFocus || showCreateList || editingList !== null ||
         showAdmin || updatesPanelOpen || showNotificationPrefs || showNotifPanel || showBlockList;
@@ -25680,6 +25685,18 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🗺️
           </button>
+          {/* 💼 Obchod — zakázky a investoři */}
+          <button onClick={() => { setObchodDraft(""); setShowObchodSheet(true); }}
+            title="Obchod — zakázky a investoři"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            💼
+          </button>
           {/* 📔 Denní příběh */}
           <button onClick={() => setShowStorySheet(true)}
             title="Denní příběh"
@@ -26797,6 +26814,15 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           />
         )}
 
+        {showObchodSheet && (
+          <ObchodSheet
+            currentUser={currentUser}
+            theme={theme}
+            initialDraft={obchodDraft}
+            onClose={() => { setShowObchodSheet(false); setObchodDraft(""); }}
+          />
+        )}
+
         {showSearchSheet && (
           <SearchSheet
             tasks={tasks}
@@ -27055,6 +27081,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               }
               else if (dest === "note") { setEditingNote(body ? { title: body } : {}); }
               else if (dest === "story") { setStoryQuickText(body); setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }
+              else if (dest === "obchod") { setObchodDraft(body); setShowObchodSheet(true); }
             }}
             theme={theme}
             categoryFilter={categoryFilter}
