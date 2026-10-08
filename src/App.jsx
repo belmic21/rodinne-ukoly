@@ -1,3 +1,51 @@
+/* ═══════════════════════════════════════════════════════════════
+   RODINNÉ ÚKOLY — hlavní soubor aplikace
+
+   Co je uvnitř: úkoly, poznámky, připomínky, denní příběh, mapa
+   vztahů, kalendář, hledání, nastavení, přihlášení. Zkrátka všechno
+   kromě obchodního modulu, který je samostatně v src/obchod/.
+
+   Je to přes 28 tisíc řádků a je to historický dluh, ne záměr. Jednou
+   nás to stálo výpadek — úprava trefila špatné místo, protože stejný
+   kus kódu byl v souboru dvakrát, a kontrola syntaxe to nechytila.
+   Proto platí dvě pravidla:
+
+     1. Při úpravě si vždycky ověř, že hledaný kus kódu je v souboru
+        právě jednou. Jinak oprava přistane jinde, než čekáš.
+     2. Nové větší celky se sem už nepřidávají. Staví se jako modul
+        vedle, stejně jako obchod, a tenhle soubor si ho jen zavolá.
+
+   Jak to celé do sebe zapadá — architektura, databáze, bezpečnost
+   a proč jsou věci udělané zrovna takhle — je v README.md.
+
+   ── Orientace v souboru ──────────────────────────────────────────
+   Soubor je rozdělený nadpisy v rámečku z ═. Hledej je takhle:
+
+     CONFIGURATION            konstanty, verze, priority, kategorie
+     HELPERS, THEMES          drobné funkce a barevné motivy
+     ATTACHMENTS — …          přílohy: upload, náhledy, galerie, lightbox
+     OFFLINE CACHE & QUEUE    co se stane, když vypadne síť
+     ERROR CLASSIFICATION     rozlišení dočasné a trvalé chyby — tohle
+                              je oprava mizejících úkolů, nesahat bez
+                              rozmyslu
+     SYNC HEALTH              viditelný stav ukládání
+     API (…)                  dotazy do databáze, apiLoad* / apiUpdate*
+     COMMENTS / REMINDERS /   API a obrazovky jednotlivých oblastí
+     NOTES API
+     QUICK ADD BAR            hlavní pole včetně lomítkových zkratek
+     TASK DETAIL, TASK CARD   úkoly
+     MAPA                     znalostní báze vztahů
+
+   Nadpisů je přes čtyřicet; tohle jsou ty, u kterých se nejčastěji
+   začíná. Celý seznam projdeš vyhledáním řetězce "═══" v souboru.
+
+   ── Verze ───────────────────────────────────────────────────────
+   FILE_VERSION níž odpovídá názvu dodaného souboru App_RRMMDD_HHMM.jsx.
+   APP_VERSION ve spodní liště je čas sestavení ve Vercelu — ta dvě
+   čísla se neshodují nikdy a je to v pořádku. Obchodní modul má svoji
+   vlastní verzi v obchod/ui.js.
+   ═══════════════════════════════════════════════════════════════ */
+
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Component } from "react";
 import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
@@ -48,7 +96,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_1620";
+const FILE_VERSION = "261008_1545";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
