@@ -23,6 +23,7 @@ import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
 import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 import Ciselniky from "./Ciselniky.jsx";
+import Osoba from "./Osoba.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -45,6 +46,9 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   const [vicFiltru, setVicFiltru] = useState(false);
   const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
+  // Přehled člověka se otevírá jako překryv nad vším ostatním.
+  // Schválně: co máš rozepsané v zakázce, zůstane pod ním nedotčené.
+  const [osobaId, setOsobaId] = useState(null);
   const hledatRef = useRef(null);
 
   const KROK = 25;
@@ -170,11 +174,13 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
           <Detail
             theme={theme} owner={owner} ciselniky={ciselniky}
             predvyplneno={nova} onBack={zavri} onClose={onClose}
+            onOtevriOsobu={setOsobaId}
           />
         ) : otevrena ? (
           <Detail
             theme={theme} owner={owner} ciselniky={ciselniky}
             zakazka={otevrena} onBack={zavri} onClose={onClose}
+            onOtevriOsobu={setOsobaId}
           />
         ) : (
           <>
@@ -259,7 +265,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
 
             {zalozka === "sit" ? (
               <Site theme={theme} owner={owner} ciselniky={ciselniky}
-                onOtevriZakazku={otevriZakazku} />
+                onOtevriOsobu={setOsobaId} />
             ) : zalozka === "sdilene" ? (
               <SdilenoSeMnou theme={theme} ciselniky={ciselniky} />
             ) : (
@@ -289,6 +295,23 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
           </>
         )}
       </div>
+
+      {osobaId && (
+        <div onClick={(e) => { e.stopPropagation(); setOsobaId(null); }} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+          zIndex: 1001, display: "flex", justifyContent: "center", alignItems: "flex-start",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            width: "100%", maxWidth: "720px", maxHeight: "88vh", marginTop: "26px",
+            background: theme.bg, borderRadius: "16px", overflow: "auto",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.25)", fontFamily: FONT,
+          }}>
+            <Osoba theme={theme} owner={owner} personId={osobaId} ciselniky={ciselniky}
+              onZpet={() => setOsobaId(null)}
+              onOtevriZakazku={(p) => { setOsobaId(null); otevriZakazku(p); }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -472,7 +495,8 @@ function Prazdno({ theme, children }) {
 
 /* ── Detail zakázky ────────────────────────────────── */
 
-function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, onBack, onClose }) {
+function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
+  onBack, onClose, onOtevriOsobu }) {
   const novy = !zakazka;
   const [f, setF] = useState(() => {
     const z = {
@@ -674,9 +698,10 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
         {zakazkaId && (
           <>
             <Retezec theme={theme} owner={owner} ciselniky={ciselniky}
-              projectId={zakazkaId} />
+              projectId={zakazkaId} onOtevriOsobu={onOtevriOsobu} />
             <Geneze theme={theme} owner={owner} ciselniky={ciselniky}
-              zakazka={{ id: zakazkaId, nazev: f.nazev }} />
+              zakazka={{ id: zakazkaId, nazev: f.nazev }}
+              onOtevriOsobu={onOtevriOsobu} />
             <SdileniZakazky theme={theme} owner={owner} projectId={zakazkaId} />
           </>
         )}
