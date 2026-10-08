@@ -20,11 +20,9 @@ import {
   card, input, btn, btnMain, btnGhost, label,
   penizeKratce, penizePresne, parsePenize,
 } from "./ui.js";
-import Osoba from "./Osoba.jsx";
 
-export default function Site({ theme, owner, ciselniky, onOtevriZakazku }) {
+export default function Site({ theme, owner, ciselniky, onOtevriOsobu }) {
   const [smer, setSmer] = useState("poptavka");   // poptavka | nabidka | lide
-  const [osobaId, setOsobaId] = useState(null);
   const [filtrTyp, setFiltrTyp] = useState("");
   const [filtrKraj, setFiltrKraj] = useState("");
   const [hledat, setHledat] = useState("");
@@ -56,13 +54,6 @@ export default function Site({ theme, owner, ciselniky, onOtevriZakazku }) {
     );
   }, [karty, hledat]);
 
-  if (osobaId) {
-    return (
-      <Osoba theme={theme} owner={owner} personId={osobaId} ciselniky={ciselniky}
-        onZpet={() => setOsobaId(null)} onOtevriZakazku={onOtevriZakazku} />
-    );
-  }
-
   if (edituji) {
     return (
       <KartaEditor
@@ -88,7 +79,7 @@ export default function Site({ theme, owner, ciselniky, onOtevriZakazku }) {
       </div>
 
       {smer === "lide" && (
-        <HledaniLidi theme={theme} owner={owner} onOtevri={setOsobaId} />
+        <HledaniLidi theme={theme} owner={owner} onOtevri={onOtevriOsobu} />
       )}
 
       {smer !== "lide" && (
@@ -135,7 +126,7 @@ export default function Site({ theme, owner, ciselniky, onOtevriZakazku }) {
       {smer !== "lide" && videt.map(k => (
         <KartaRadek key={k.id} k={k} theme={theme} ciselniky={ciselniky}
           onOpen={() => setEdituji(k)}
-          onOpenOsoba={() => setOsobaId(k.person_id)} />
+          onOpenOsoba={() => onOtevriOsobu?.(k.person_id)} />
       ))}
 
       {filtrKraj && smer === "poptavka" && videt.length > 0 && (
