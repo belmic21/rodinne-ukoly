@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  hledejLidi, nactiKarty, ulozKartu, smazKartu, ulozRole,
+  hledejLidi, nactiKarty, ulozKartu, smazKartu, ulozRole, zalozOsobu,
   popis, aktivni,
 } from "./api.js";
 import {
@@ -228,6 +228,9 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
   const [q, setQ] = useState("");
   const [lidi, setLidi] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [zakladam, setZakladam] = useState(false);
+  const [kontakt, setKontakt] = useState("");
+  const [chyba, setChyba] = useState(null);
   const ref = useRef(null);
 
   useEffect(() => { setTimeout(() => ref.current?.focus(), 60); }, []);
@@ -242,23 +245,38 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
     return () => { zrus = true; clearTimeout(id); };
   }, [owner, q]);
 
+  // Nového člověka založíme rovnou tady. Dřív se muselo odskočit
+  // do Mapy a vrátit se — uprostřed zadávání zakázky je to otrava.
+  const zaloz = async () => {
+    setChyba(null);
+    const res = await zalozOsobu(owner, q, kontakt);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    onVyber(res.osoba);
+  };
+
+  const presnaShoda = lidi.some(
+    o => o.name.trim().toLowerCase() === q.trim().toLowerCase()
+  );
+  const lzeZalozit = q.trim().length >= 2 && !presnaShoda;
+
   return (
     <div style={{ ...card(theme), padding: "10px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        <input ref={ref} value={q} onChange={e => setQ(e.target.value)}
-          placeholder="Komu kartu přidat? Piš jméno…"
+        <input ref={ref} value={q}
+          onChange={e => { setQ(e.target.value); setChyba(null); }}
+          onKeyDown={e => {
+            if (e.key === "Enter" && lzeZalozit && zakladam) zaloz();
+            if (e.key === "Enter" && lidi.length === 1 && !zakladam) onVyber(lidi[0]);
+          }}
+          placeholder="Koho hledáš? Piš jméno…"
           style={{ ...input(theme), flex: 1 }} />
         <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
       </div>
+
       {busy && lidi.length === 0 && (
         <div style={{ fontSize: "11px", color: theme.textSub }}>hledám…</div>
       )}
-      {!busy && lidi.length === 0 && (
-        <div style={{ fontSize: "11.5px", color: theme.textSub, lineHeight: 1.6 }}>
-          Nikdo takový v Mapě není. Založ ho nejdřív tam — přes ikonu 🗺️
-          nebo zkratkou <strong>/m</strong> — a pak se sem vrať.
-        </div>
-      )}
+
       {lidi.map(o => (
         <div key={o.id} onClick={() => onVyber(o)} style={{
           padding: "7px 8px", cursor: "pointer", borderRadius: 7,
@@ -273,6 +291,41 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
           )}
         </div>
       ))}
+
+      {chyba && (
+        <div style={{ fontSize: "11.5px", color: theme.red, margin: "6px 2px" }}>{chyba}</div>
+      )}
+
+      {lzeZalozit && !zakladam && (
+        <button onClick={() => setZakladam(true)} style={{
+          ...btnGhost(theme), marginTop: 6,
+          color: theme.accent, borderColor: theme.accentBorder,
+        }}>+ založit „{q.trim()}“ jako nového</button>
+      )}
+
+      {zakladam && (
+        <div style={{ marginTop: 8, borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 8 }}>
+          <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 6 }}>
+            Zakládám <strong style={{ color: theme.text }}>{q.trim()}</strong>.
+            Přibude i do Mapy, takže ho příště najdeš i tam.
+          </div>
+          <input value={kontakt} onChange={e => setKontakt(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") zaloz(); }}
+            placeholder="Telefon, mail nebo firma — nepovinné"
+            style={{ ...input(theme), marginBottom: 7 }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={zaloz} style={btnMain(theme)}>ZALOŽIT A POUŽÍT</button>
+            <button onClick={() => { setZakladam(false); setChyba(null); }}
+              style={btnGhost(theme)}>zpět</button>
+          </div>
+        </div>
+      )}
+
+      {!busy && lidi.length === 0 && !q.trim() && (
+        <div style={{ fontSize: "11.5px", color: theme.textSub, lineHeight: 1.6 }}>
+          Začni psát jméno. Koho nenajdeš, můžeš rovnou založit.
+        </div>
+      )}
     </div>
   );
 }
