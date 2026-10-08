@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_2145";
+const FILE_VERSION = "261008_2140";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -11316,7 +11316,17 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             takes focus away from the input, so Enter no longer submits. */}
         {text.trim() && (
           <button
-            onClick={() => { if (showFull) fullSubmit(); else quickSubmit(); }}
+            onClick={() => {
+              // Zelená fajfka musí poslouchat lomítko stejně jako Enter.
+              // Dřív ne — a "/? dav" se uložilo jako úkol s tím názvem.
+              if (slash) {
+                runSlash((lidiCmd && mapaName)
+                  ? { dest: kdoCmd ? "kdo" : "mapa" }
+                  : (slash.hits[slashIdx] || slash.hits[0]));
+                return;
+              }
+              if (showFull) fullSubmit(); else quickSubmit();
+            }}
             title="Přidat úkol"
             style={{
               ...buttonStyle(), width: "32px", height: "32px",
@@ -11500,6 +11510,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     <span style={{ color: theme.text }}>📝 Poznámka</span>
                     <code style={codeStyle}>/d text</code>
                     <span style={{ color: theme.text }}>📔 Denní příběh</span>
+                    <code style={codeStyle}>/z rodinný dům Beroun 3,5 mil</code>
+                    <span style={{ color: theme.text }}>💼 Zakázka — předvyplní, co z věty přečte</span>
+                    <code style={codeStyle}>/k david</code>
+                    <span style={{ color: theme.text }}>👤 Kdo — co s tím člověkem běží</span>
+                    <code style={codeStyle}>/? david</code>
+                    <span style={{ color: theme.text }}>🔍 Hledat napříč vším — úkoly, poznámky, lidi, zakázky</span>
                     <code style={codeStyle}>/</code>
                     <span style={{ color: theme.text }}>ukáže nabídku všech cílů</span>
                   </div>
