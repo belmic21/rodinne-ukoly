@@ -567,6 +567,187 @@ export async function kdoToSezene(owner, typy = [], kraje = [], limit = 30) {
   }
 }
 
+/* ── Uživatelé ───────────────────────────────────────── */
+
+export async function nactiUzivatele() {
+  try {
+    const { data, error } = await supabase
+      .from("profiles").select("id, name, is_admin").order("name");
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiUzivatele", e);
+    return [];
+  }
+}
+
+export async function nactiPozvanky() {
+  try {
+    const { data, error } = await supabase
+      .from("pozvanky")
+      .select("email, jmeno, is_admin, pozval, poznamka, created_at, pouzito_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    // Nesprávce sem nevidí; to není chyba, jen prázdno.
+    return [];
+  }
+}
+
+export async function pozviUzivatele(owner, { email, jmeno, is_admin, poznamka }) {
+  const mail = (email || "").trim().toLowerCase();
+  const kdo = (jmeno || "").trim();
+  if (!mail || !mail.includes("@")) return { ok: false, chyba: "Chybí platný e-mail." };
+  if (!kdo) return { ok: false, chyba: "Chybí jméno." };
+  try {
+    const { data, error } = await supabase
+      .from("pozvanky")
+      .insert({ email: mail, jmeno: kdo, is_admin: !!is_admin, pozval: owner, poznamka: poznamka || null })
+      .select("email, jmeno, is_admin, created_at, pouzito_at")
+      .single();
+    if (error) throw error;
+    return { ok: true, pozvanka: data };
+  } catch (e) {
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Tenhle e-mail nebo jméno už pozvánku má." };
+    }
+    if (String(e?.code) === "42501") {
+      return { ok: false, chyba: "Zvát můžou jen správci." };
+    }
+    return selhalo("pozviUzivatele", e);
+  }
+}
+
+export async function zrusPozvanku(email) {
+  if (!email) return { ok: false, chyba: "Chybí e-mail." };
+  try {
+    const { data, error } = await supabase
+      .from("pozvanky").delete().eq("email", email).select("email");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Pozvánka se nenašla." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("zrusPozvanku", e);
+  }
+}
+
+/* ── Sdílení ─────────────────────────────────────────────
+   Přepínače jsou uložené u každého sdílení zvlášť. S Davidem
+   můžeš sdílet víc než s někým, koho zatím neznáš. */
+
+export const PREPINACE = [
+  { k: "vidi_souhrn",       t: "Souhrn projektu" },
+  { k: "vidi_podklady",     t: "Podklady a odkaz na složku" },
+  { k: "vidi_cenu",         t: "Akviziční cena" },
+  { k: "vidi_stav",         t: "Stav jednání" },
+  { k: "vidi_jmena",        t: "Jména oslovených (bez kontaktů)" },
+  { k: "vidi_retezec",      t: "Provizní řetězec" },
+  { k: "vidi_ceny_jednani", t: "Vyjednané ceny a podíly" },
+];
+
+export const SABLONY = {
+  "Jen projekt":      { vidi_souhrn: true, vidi_stav: true },
+  "Investor po NDA":  { vidi_souhrn: true, vidi_stav: true, vidi_podklady: true, vidi_cenu: true },
+  "Parťák":           { vidi_souhrn: true, vidi_stav: true, vidi_podklady: true, vidi_cenu: true, vidi_jmena: true },
+};
+
+export function zeSablony(nazev) {
+  const zaklad = {};
+  for (const p of PREPINACE) zaklad[p.k] = false;
+  return { ...zaklad, ...(SABLONY[nazev] || {}), sablona: nazev };
+}
+
+export async function nactiSdileni(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("deal_shares").select("*").eq("project_id", projectId)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiSdileni", e);
+    return [];
+  }
+}
+
+export async function ulozSdileni(owner, data) {
+  if (!owner || !data?.project_id || !data?.grantee) {
+    return { ok: false, chyba: "Chybí zakázka nebo komu." };
+  }
+  const telo = { sablona: data.sablona || null, poznamka: data.poznamka || null };
+  for (const p of PREPINACE) telo[p.k] = !!data[p.k];
+  try {
+    const q = data.id
+      ? supabase.from("deal_shares").update(telo).eq("id", data.id)
+      : supabase.from("deal_shares").insert({
+          ...telo, owner, project_id: data.project_id, grantee: data.grantee,
+        });
+    const { data: row, error } = await q.select("*").single();
+    if (error) throw error;
+    return { ok: true, sdileni: row };
+  } catch (e) {
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "S tímhle člověkem už tahle zakázka sdílená je." };
+    }
+    return selhalo("ulozSdileni", e);
+  }
+}
+
+export async function zrusSdileni(id) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_shares").delete().eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("zrusSdileni", e);
+  }
+}
+
+/* Co sdílí někdo se mnou. Čte se přes funkci, ne z tabulky —
+   nepovolené sloupce se z databáze vůbec nevrátí. */
+
+export async function sdileneSeMnou() {
+  try {
+    const { data, error } = await supabase.rpc("deal_sdilene_se_mnou");
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("sdileneSeMnou", e);
+    return [];
+  }
+}
+
+export async function sdileneOsloveni(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase.rpc("deal_sdilene_osloveni", {
+      p_project_id: projectId,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export async function sdilenyRetezec(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase.rpc("deal_sdileny_retezec", {
+      p_project_id: projectId,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
 /* ── Rychlé zadání ───────────────────────────────────────
    Z věty "rodinný dům Beroun 3,5 mil" vytáhne, co umí, a zbytek
    nechá na tobě. Schválně nic nehádá do databáze — jen předvyplní
