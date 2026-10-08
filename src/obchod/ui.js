@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261008_1000";
+export const OBCHOD_VERZE = "261008_1310";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -146,4 +146,12 @@ export function jakDavno(iso) {
   if (dni === 1) return "včera";
   if (dni < 5) return `před ${dni} dny`;
   return `před ${dni} dny`;
+}
+
+/* Počet s českým tvarem: 1 položka, 2 položky, 5 položek. */
+export function pocet(n, jedna, dve, pet) {
+  const x = Number(n) || 0;
+  if (x === 1) return `${x} ${jedna}`;
+  if (x >= 2 && x <= 4) return `${x} ${dve}`;
+  return `${x} ${pet}`;
 }
