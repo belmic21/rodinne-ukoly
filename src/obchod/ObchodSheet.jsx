@@ -30,7 +30,8 @@ const PRAZDNY_FILTR = {
   cenaOd: null, cenaDo: null, velikostOd: null, hledat: "",
 };
 
-export default function ObchodSheet({ currentUser, theme, initialDraft = "", onClose }) {
+export default function ObchodSheet({ currentUser, theme, initialDraft = "",
+  initialOsoba = null, initialZakazka = null, onClose }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
@@ -48,7 +49,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
   // Schválně: co máš rozepsané v zakázce, zůstane pod ním nedotčené.
-  const [osobaId, setOsobaId] = useState(null);
+  const [osobaId, setOsobaId] = useState(initialOsoba);
   const hledatRef = useRef(null);
 
   const KROK = 25;
@@ -106,6 +107,14 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   );
 
   const zavri = () => { setOtevrena(null); setNova(null); setObnov(k => k + 1); };
+
+  // Zakázka otevřená zvenku (z lupy). Načítá se celá, ne zkráceně.
+  useEffect(() => {
+    if (!initialZakazka) return;
+    let zrus = false;
+    nactiZakazku(initialZakazka).then(z => { if (!zrus && z) setOtevrena(z); });
+    return () => { zrus = true; };
+  }, [initialZakazka]);
 
   // Z přehledu člověka na zakázku. Načítáme ji celou — v přehledu
   // je jen zkrácená, a kdyby se uložila takhle, přepsala by
