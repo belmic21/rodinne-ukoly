@@ -1104,6 +1104,107 @@ export async function zrusPozvanku(email) {
   }
 }
 
+/* ── Úkoly a poznámky u zakázky ──────────────────────────
+   Nevzniká tu žádná nová tabulka. Úkol je pořád úkol v úkolníku
+   a poznámka pořád poznámka — jen mají vyplněnou zakázku. Díky
+   tomu je uvidíš na obou místech a v úkolníku si je vyfiltruješ.
+
+   Čte se přes funkce, ne z tabulky: úkolník se sdílením zakázky
+   neotvírá. Každý vidí svoje, správce všechno. */
+
+export async function ukolyZakazky(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase.rpc("ukoly_zakazky", { p_project: projectId });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("ukolyZakazky", e);
+    return [];
+  }
+}
+
+export async function poznamkyZakazky(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase.rpc("poznamky_zakazky", { p_project: projectId });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("poznamkyZakazky", e);
+    return [];
+  }
+}
+
+/* Založí úkol v úkolníku a rovnou ho přiváže k zakázce.
+   `komu` je jméno z profilů — úkol se dá zadat i někomu jinému. */
+export async function ukolKZakazce(owner, projectId, nazev, komu = null) {
+  const t = (nazev || "").trim();
+  if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
+  if (!t) return { ok: false, chyba: "Napiš, co je potřeba udělat." };
+  try {
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert({
+        title: t,
+        created_by: owner,
+        project_id: projectId,
+        assigned_to: komu && komu !== owner ? [komu] : [],
+        status: "active",
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return { ok: true, ukol: data };
+  } catch (e) {
+    return selhalo("ukolKZakazce", e);
+  }
+}
+
+export async function poznamkaKZakazce(owner, projectId, text, nadpis = "") {
+  const t = (text || "").trim();
+  if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
+  if (!t) return { ok: false, chyba: "Poznámka je prázdná." };
+  try {
+    const { data, error } = await supabase
+      .from("notes")
+      .insert({
+        title: (nadpis || "").trim() || null,
+        content: t,
+        created_by: owner,
+        project_id: projectId,
+        shared_with: [],
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return { ok: true, poznamka: data };
+  } catch (e) {
+    return selhalo("poznamkaKZakazce", e);
+  }
+}
+
+/* Odškrtnutí úkolu rovnou od zakázky. Vrací nový stav. */
+export async function prepniUkol(id, hotovo) {
+  if (!id) return { ok: false, chyba: "Chybí úkol." };
+  try {
+    const { data, error } = await supabase
+      .from("tasks")
+      .update({
+        status: hotovo ? "done" : "active",
+        completed_at: hotovo ? new Date().toISOString() : null,
+      })
+      .eq("id", id).select("id, status");
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return { ok: false, chyba: "Tenhle úkol měnit nemůžeš — není tvůj." };
+    }
+    return { ok: true };
+  } catch (e) {
+    return selhalo("prepniUkol", e);
+  }
+}
+
 /* ── Statistika ──────────────────────────────────────────
    Datum zadání se ukládalo od začátku, jen se nikde nečetlo.
    Obě funkce počítají v databázi — stahovat kvůli součtu

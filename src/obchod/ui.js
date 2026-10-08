@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261008_2200";
+export const OBCHOD_VERZE = "261008_2240";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 

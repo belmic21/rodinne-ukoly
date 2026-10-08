@@ -208,10 +208,15 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
         <span style={label(theme)}>Šablona</span>
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
           {Object.keys(SABLONY).filter(n => n !== "Spolupráce").map(n => {
+            // Při spolupráci se šablony neuplatňují, tak se ani nedají
+            // zmáčknout. Ztlumené, ale klikatelné tlačítko spolupráci
+            // tiše vypínalo.
             const zap = f.sablona === n;
             return (
-              <button key={n} onClick={() => vyberSablonu(n)} style={{
+              <button key={n} disabled={f.spolupracuje}
+                onClick={() => { if (!f.spolupracuje) vyberSablonu(n); }} style={{
                 ...btnGhost(theme),
+                cursor: f.spolupracuje ? "default" : "pointer",
                 background: zap ? theme.accentSoft : "transparent",
                 color: zap ? theme.accent : theme.textSub,
                 borderColor: zap ? theme.accentBorder : theme.cardBorder,
@@ -236,9 +241,9 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
         {PREPINACE.map(p => {
           const citlive = p.k === "vidi_retezec" || p.k === "vidi_ceny_jednani";
           return (
-            <div key={p.k} onClick={() => prepni(p.k)} style={{
+            <div key={p.k} onClick={() => { if (!f.spolupracuje) prepni(p.k); }} style={{
               display: "flex", alignItems: "center", gap: 8,
-              padding: "5px 2px", cursor: "pointer",
+              padding: "5px 2px", cursor: f.spolupracuje ? "default" : "pointer",
             }}>
               <span style={{ fontSize: "14px" }}>{f[p.k] ? "☑" : "☐"}</span>
               <span style={{

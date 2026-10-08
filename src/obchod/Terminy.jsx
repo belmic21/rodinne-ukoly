@@ -17,7 +17,7 @@
 import { useState, useEffect } from "react";
 import {
   nactiTerminy, prehledTerminu, ulozTermin, splnTermin, smazTermin,
-  nalehavost, barvaTerminu,
+  nalehavost, barvaTerminu, nactiZakazky,
 } from "./api.js";
 import { VyberOsoby } from "./Site.jsx";
 import { card, input, btn, btnMain, btnGhost, label, datumKratce } from "./ui.js";
@@ -267,7 +267,8 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
       }}>
         <span style={{ fontSize: "14px" }}>{f.pripomenout ? "☑" : "☐"}</span>
         <span style={{ fontSize: "12px", color: f.pripomenout ? theme.text : theme.textSub }}>
-          Připomenout — ozve se ráno v den termínu, i když aplikaci neotevřeš
+          Připomenout — objeví se mezi připomínkami v den termínu.
+          Upozornění na zavřený telefon zatím systém neposílá.
         </span>
       </div>
 
@@ -283,17 +284,19 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
    PŘEHLED PŘES VŠECHNY ZAKÁZKY
    ════════════════════════════════════════════════════════ */
 
-export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu }) {
+export function TerminyPrehled({ theme, owner, ciselniky, onOtevriZakazku, onOtevriOsobu }) {
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [rozsah, setRozsah] = useState(30);
+  const [pridavam, setPridavam] = useState(false);
+  const [obnov, setObnov] = useState(0);
 
   useEffect(() => {
     let zrus = false;
     setBusy(true);
     prehledTerminu(owner, rozsah).then(r => { if (!zrus) { setRadky(r); setBusy(false); } });
     return () => { zrus = true; };
-  }, [owner, rozsah]);
+  }, [owner, rozsah, obnov]);
 
   const skupiny = [
     { klic: "po",    nadpis: "Po termínu" },
@@ -323,7 +326,20 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu })
             }}>{v.t}</button>
           );
         })}
+        <span style={{ flex: 1 }} />
+        {!pridavam && (
+          <button onClick={() => setPridavam(true)} style={btnMain(theme)}>+ termín</button>
+        )}
       </div>
+
+      {/* Termín jde zadat rovnou tady. Dřív sem patřila jen věta
+          "zadávají se u zakázky" — pravdivá, ale k ničemu, když
+          člověk stojí nad prázdným seznamem termínů. */}
+      {pridavam && (
+        <NovyTermin theme={theme} owner={owner} ciselniky={ciselniky}
+          onHotovo={() => { setPridavam(false); setObnov(k => k + 1); }}
+          onZrus={() => setPridavam(false)} />
+      )}
 
       {busy && radky.length === 0 && (
         <div style={{ fontSize: "12px", color: theme.textSub }}>Načítám…</div>
@@ -334,8 +350,8 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu })
           ...card(theme), padding: "20px 16px", textAlign: "center",
           color: theme.textSub, fontSize: "12px", lineHeight: 1.7,
         }}>
-          Žádný termín v tomhle rozsahu. Termíny se zadávají u zakázky —
-          otevři ji a najdeš je pod seznamem oslovených.
+          Žádný termín v tomhle rozsahu. Zadej ho tlačítkem nahoře,
+          nebo v detailu zakázky v sekci Termíny.
         </div>
       )}
 
@@ -381,6 +397,82 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu })
           })}
         </div>
       ))}
+    </div>
+  );
+}
+
+
+/* Nový termín z přehledu. Zakázku vybereš ze seznamu, zbytek
+   vyplní stejný editor jako v detailu zakázky — ať se stejná věc
+   nezadává na dvou místech dvěma způsoby. */
+function NovyTermin({ theme, owner, ciselniky, onHotovo, onZrus }) {
+  const [zakazky, setZakazky] = useState([]);
+  const [vybrana, setVybrana] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [chyba, setChyba] = useState(null);
+
+  useEffect(() => {
+    let zrus = false;
+    nactiZakazky(owner, {}, 100, 0).then(z => {
+      if (zrus) return;
+      setZakazky(z);
+      if (z.length === 1) setVybrana(z[0]);
+      setBusy(false);
+    });
+    return () => { zrus = true; };
+  }, [owner]);
+
+  const uloz = async (data) => {
+    setChyba(null);
+    const res = await ulozTermin(owner, { ...data, project_id: vybrana.id }, vybrana.nazev);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    onHotovo();
+  };
+
+  if (busy) {
+    return (
+      <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10,
+        fontSize: "12px", color: theme.textSub }}>Načítám zakázky…</div>
+    );
+  }
+
+  if (zakazky.length === 0) {
+    return (
+      <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
+        <div style={{ fontSize: "12px", color: theme.textSub, lineHeight: 1.7, marginBottom: 8 }}>
+          Termín patří k zakázce a zatím žádnou nemáš. Založ ji v záložce
+          Zakázky a termín pak přidáš tady nebo rovnou u ní.
+        </div>
+        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
+      <div style={{ marginBottom: 9 }}>
+        <span style={label(theme)}>Ke které zakázce</span>
+        <select value={vybrana?.id || ""}
+          onChange={e => setVybrana(zakazky.find(z => z.id === e.target.value) || null)}
+          style={{ ...input(theme), cursor: "pointer" }}>
+          <option value="">— vyber zakázku —</option>
+          {zakazky.map(z => (
+            <option key={z.id} value={z.id}>{z.kod} · {z.nazev}</option>
+          ))}
+        </select>
+      </div>
+
+      {chyba && (
+        <div style={{ fontSize: "11.5px", color: theme.red, marginBottom: 8 }}>{chyba}</div>
+      )}
+
+      {vybrana ? (
+        <TerminEditor theme={theme} owner={owner} ciselniky={ciselniky}
+          t={{ datum: ZA_DNI(7), pripomenout: true }}
+          onUloz={uloz} onZrus={onZrus} />
+      ) : (
+        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
+      )}
     </div>
   );
 }

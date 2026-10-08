@@ -27,6 +27,7 @@ import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 import Ciselniky from "./Ciselniky.jsx";
 import Osoba from "./Osoba.jsx";
 import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
+import Prilepene from "./Prilepene.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -349,7 +350,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
               <Site theme={theme} owner={owner} ciselniky={ciselniky}
                 onOtevriOsobu={setOsobaId} />
             ) : zalozka === "terminy" ? (
-              <TerminyPrehled theme={theme} owner={owner}
+              <TerminyPrehled theme={theme} owner={owner} ciselniky={ciselniky}
                 onOtevriZakazku={otevriZakazku} onOtevriOsobu={setOsobaId} />
             ) : zalozka === "sdilene" ? (
               <SdilenoSeMnou theme={theme} ciselniky={ciselniky}
@@ -994,6 +995,8 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
               onOtevriOsobu={onOtevriOsobu} />
             <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
               ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
+            <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
+              kod={kod} spravce={spravce} />
             {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
                 tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
             {!cizi && (
@@ -1006,7 +1009,8 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           <div style={{
             fontSize: "11.5px", color: theme.textSub, marginTop: 14, lineHeight: 1.7,
           }}>
-            Až zakázku uložíš, přibude sem řetězec lidí a seznam oslovených.
+            Až zakázku uložíš, přibude sem řetězec lidí, seznam oslovených,
+            termíny, úkoly s poznámkami a nastavení sdílení.
           </div>
         )}
       </div>

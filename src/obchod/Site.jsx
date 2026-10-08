@@ -14,7 +14,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   hledejLidi, nactiLidi, nactiKarty, ulozKartu, smazKartu, zalozOsobu, ulozOsobu,
-  nactiCiselniky, popis, aktivni,
+  nactiCiselniky, nactiOsobu, popis, aktivni,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label,
@@ -343,9 +343,40 @@ export function VyberOsoby({ theme, owner, ciselniky, onVyber, onZrus }) {
    oknu — mazání a slučování v Mapě.
    ════════════════════════════════════════════════════════ */
 
+function predvypln(o, zalozniJmeno) {
+  return {
+    name: o?.name || zalozniJmeno || "",
+    contact: o?.contact || "",
+    met_at: o?.met_at || "",
+    note: o?.note || "",
+    aliases: Array.isArray(o?.aliases) ? o.aliases.join(", ") : (o?.aliases || ""),
+    role_tagy: o?.role_tagy || [],
+  };
+}
+
 export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = null,
   predvyplnenoJmeno = "", onHotovo, onZrus, extra = null, autoFocus = true }) {
   const novy = !osoba?.id;
+
+  /* Osobu si vždycky dočteme z databáze podle id, i když nám ji
+     volající předal. Některá místa v aplikaci otevírají člověka jen
+     jako { id, name } — formulář by se pak ukázal s prázdným
+     kontaktem a poznámkou a ULOŽIT by je smazalo. Jedno krátké
+     čtení je levnější než ztracená data. */
+  const [plna, setPlna] = useState(osoba);
+  const [ctu, setCtu] = useState(!!osoba?.id);
+  useEffect(() => {
+    if (!osoba?.id) { setCtu(false); return; }
+    let zrus = false;
+    setCtu(true);
+    nactiOsobu(osoba.id).then(o => {
+      if (zrus) return;
+      if (o) { setPlna(o); setF(predvypln(o, "")); }
+      setCtu(false);
+    });
+    return () => { zrus = true; };
+  }, [osoba?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Číselníky si umí načíst sám. Karta v Mapě o nich nic neví,
   // a bez nich by chyběly role — přesně ta věc, která tam chyběla dřív.
   const [vlastniC, setVlastniC] = useState({});
@@ -358,14 +389,7 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
     nactiCiselniky(owner).then(c => { if (!zrus) setVlastniC(c); });
     return () => { zrus = true; };
   }, [owner, ciselnikyProp]);
-  const [f, setF] = useState(() => ({
-    name: osoba?.name || predvyplnenoJmeno || "",
-    contact: osoba?.contact || "",
-    met_at: osoba?.met_at || "",
-    note: osoba?.note || "",
-    aliases: Array.isArray(osoba?.aliases) ? osoba.aliases.join(", ") : (osoba?.aliases || ""),
-    role_tagy: osoba?.role_tagy || [],
-  }));
+  const [f, setF] = useState(() => predvypln(osoba, predvyplnenoJmeno));
   const [chyba, setChyba] = useState(null);
   const [uklada, setUklada] = useState(false);
   const ref = useRef(null);
@@ -384,13 +408,20 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
 
   const uloz = async () => {
     setUklada(true); setChyba(null);
-    const res = novy ? await zalozOsobu(owner, f) : await ulozOsobu(osoba.id, f);
+    const res = novy ? await zalozOsobu(owner, f) : await ulozOsobu(plna?.id || osoba.id, f);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
     onHotovo?.(res.osoba);
   };
 
   const naEnter = (e) => { if (e.key === "Enter") uloz(); };
+
+  if (ctu) {
+    return (
+      <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10,
+        fontSize: "12px", color: theme.textSub }}>Načítám kontakt…</div>
+    );
+  }
 
   return (
     <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>

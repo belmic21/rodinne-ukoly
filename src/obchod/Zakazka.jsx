@@ -262,6 +262,18 @@ export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu, spravc
   const oslov = async (vybrani) => {
     const res = await oslovHromadne(owner, projectId, vybrani, zakazka?.nazev);
     if (!res.ok) { setChyba(res.chyba); return; }
+    // Kdo tu jednou byl a byl odebraný, se znovu nevloží — v databázi
+    // po něm zůstává skrytý řádek. Dřív se v takovém případě nestalo
+    // nic a okno se jen zavřelo, jako by se povedlo.
+    const pridano = Number(res.pridano ?? vybrani.length);
+    if (pridano === 0) {
+      setChyba(
+        "Nikdo nepřibyl. Tyhle lidi jsi u téhle zakázky nejspíš už jednou " +
+        "oslovil a pak odebral — jejich záznam je skrytý, ne smazaný. " +
+        "Napiš mi to a doplním možnost ho vrátit."
+      );
+      return;
+    }
     setParovani(null);
     nacti();
   };
@@ -450,7 +462,7 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu, moj
           </div>
 
           <div style={{ marginBottom: 8 }}>
-            <span style={label(theme)}>Kdy se mu ozvat</span>
+            <span style={label(theme)}>Kdy se mu ozvat — jen barevná značka, neupozorní</span>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               <input type="date" value={f.pripominka_at}
                 onChange={e => uprav("pripominka_at", e.target.value)}

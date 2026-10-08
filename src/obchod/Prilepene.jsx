@@ -1,0 +1,215 @@
+/* ═══════════════════════════════════════════════════════
+   OBCHOD — úkoly a poznámky u zakázky
+
+   Nic nového se tu neskladuje. Úkol je pořád úkol v úkolníku,
+   poznámka pořád poznámka v poznámkách — jen mají vyplněnou
+   zakázku. Díky tomu je vidíš na obou místech a v úkolníku si
+   je vyfiltruješ podle čísla zakázky.
+
+   Proč to takhle: u obchodu vznikají úkoly přirozeně ("sehnat
+   výpis z katastru", "zavolat na stavební úřad") a dřív se
+   zapisovaly bokem, bez vazby. Za měsíc se pak nedalo zjistit,
+   co k té zakázce vlastně běželo.
+
+   Úkolník se sdílením zakázky NEOTVÍRÁ. Partner tu vidí svoje
+   úkoly a poznámky, ne tvoje. Správce vidí obojí — jinak by
+   zástup nedával smysl.
+   ═══════════════════════════════════════════════════════ */
+
+import { useState, useEffect } from "react";
+import {
+  ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce, prepniUkol,
+} from "./api.js";
+import { card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno } from "./ui.js";
+
+export default function Prilepene({ theme, owner, projectId, kod, spravce = false }) {
+  const [ukoly, setUkoly] = useState([]);
+  const [poznamky, setPoznamky] = useState([]);
+  const [busy, setBusy] = useState(true);
+  const [novyUkol, setNovyUkol] = useState("");
+  const [novaPozn, setNovaPozn] = useState("");
+  const [pisuPozn, setPisuPozn] = useState(false);
+  const [chyba, setChyba] = useState(null);
+  const [uklada, setUklada] = useState(false);
+  const [ukazHotove, setUkazHotove] = useState(false);
+
+  const nacti = async () => {
+    setBusy(true);
+    const [u, p] = await Promise.all([ukolyZakazky(projectId), poznamkyZakazky(projectId)]);
+    setUkoly(u); setPoznamky(p); setBusy(false);
+  };
+  useEffect(() => { if (projectId) nacti(); }, [projectId]);  // eslint-disable-line
+
+  const pridejUkol = async () => {
+    if (!novyUkol.trim()) return;
+    setUklada(true); setChyba(null);
+    const res = await ukolKZakazce(owner, projectId, novyUkol);
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    setNovyUkol("");
+    nacti();
+  };
+
+  const pridejPoznamku = async () => {
+    if (!novaPozn.trim()) return;
+    setUklada(true); setChyba(null);
+    const res = await poznamkaKZakazce(owner, projectId, novaPozn);
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    setNovaPozn(""); setPisuPozn(false);
+    nacti();
+  };
+
+  const odskrtni = async (t) => {
+    const hotovo = (t.status || "") === "done";
+    const res = await prepniUkol(t.id, !hotovo);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    nacti();
+  };
+
+  const otevrene = ukoly.filter(t => (t.status || "") !== "done");
+  const hotove = ukoly.filter(t => (t.status || "") === "done");
+  const videt = ukazHotove ? [...otevrene, ...hotove] : otevrene;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+        <span style={{ ...label(theme), marginBottom: 0, flex: 1 }}>
+          Úkoly a poznámky k zakázce
+        </span>
+        {hotove.length > 0 && (
+          <button onClick={() => setUkazHotove(v => !v)} style={{
+            ...btn(), background: "transparent", color: theme.textSub,
+            fontSize: "11px", padding: "2px 5px",
+          }}>{ukazHotove ? "skrýt hotové" : `hotové (${hotove.length})`}</button>
+        )}
+      </div>
+
+      {chyba && (
+        <div style={{
+          background: `${theme.red}18`, border: `1px solid ${theme.red}44`,
+          borderRadius: 8, padding: "7px 10px", fontSize: "11.5px",
+          color: theme.red, marginBottom: 8,
+        }}>{chyba}</div>
+      )}
+
+      {/* Zadání úkolu je jednořádkové schválně. Když u telefonu
+          padne "sežeň výpis z katastru", nemá se vyplňovat formulář. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <input value={novyUkol}
+          onChange={e => { setNovyUkol(e.target.value); setChyba(null); }}
+          onKeyDown={e => { if (e.key === "Enter") pridejUkol(); }}
+          placeholder="Co je potřeba udělat — Enter přidá úkol"
+          style={{ ...input(theme), flex: 1 }} />
+        <button onClick={pridejUkol} disabled={!novyUkol.trim() || uklada} style={{
+          ...btnMain(theme), opacity: novyUkol.trim() && !uklada ? 1 : 0.5,
+        }}>+ úkol</button>
+        {!pisuPozn && (
+          <button onClick={() => setPisuPozn(true)} style={btnGhost(theme)}>+ poznámka</button>
+        )}
+      </div>
+
+      {pisuPozn && (
+        <div style={{ ...card(theme), padding: "10px 12px", marginBottom: 8 }}>
+          <textarea value={novaPozn}
+            onChange={e => { setNovaPozn(e.target.value); setChyba(null); }}
+            rows={3} placeholder="Co padlo, na co nezapomenout, co se domluvilo."
+            style={{ ...input(theme), resize: "vertical", lineHeight: 1.6, marginBottom: 7 }} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={pridejPoznamku} disabled={!novaPozn.trim() || uklada} style={{
+              ...btnMain(theme), opacity: novaPozn.trim() && !uklada ? 1 : 0.5,
+            }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT POZNÁMKU"}</button>
+            <button onClick={() => { setPisuPozn(false); setNovaPozn(""); setChyba(null); }}
+              style={btnGhost(theme)}>zrušit</button>
+          </div>
+        </div>
+      )}
+
+      {busy && ukoly.length === 0 && poznamky.length === 0 && (
+        <Tise theme={theme}>Načítám…</Tise>
+      )}
+
+      {!busy && otevrene.length === 0 && poznamky.length === 0 && !pisuPozn && (
+        <Tise theme={theme}>
+          Zatím nic. Co sem napíšeš, se založí ve tvém úkolníku a v poznámkách
+          {kod ? ` pod ${kod}` : ""} — uvidíš to tady i tam.
+        </Tise>
+      )}
+
+      {videt.map(t => {
+        const hotovo = (t.status || "") === "done";
+        const cizi = t.created_by && t.created_by !== owner;
+        return (
+          <div key={t.id} style={{
+            ...card(theme), padding: "8px 11px", marginBottom: 6,
+            display: "flex", alignItems: "flex-start", gap: 9,
+            opacity: hotovo ? 0.55 : 1,
+          }}>
+            <button onClick={() => odskrtni(t)}
+              title={hotovo ? "Vrátit mezi nesplněné" : "Hotovo"}
+              style={{
+                ...btn(), background: "transparent", fontSize: "14px",
+                padding: "0 2px", color: hotovo ? theme.green : theme.textDim,
+              }}>{hotovo ? "☑" : "☐"}</button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{
+                fontSize: "12.5px", fontWeight: 600, color: theme.text,
+                textDecoration: hotovo ? "line-through" : "none",
+              }}>{t.title}</div>
+              <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 2 }}>
+                {[
+                  kod,
+                  t.created_at ? `zadáno ${jakDavno(t.created_at)}` : null,
+                  (t.assigned_to || []).length ? `pro ${t.assigned_to.join(", ")}` : null,
+                  cizi ? `zapsal ${t.created_by}` : null,
+                ].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {poznamky.map(n => {
+        const cizi = n.created_by && n.created_by !== owner;
+        return (
+          <div key={n.id} style={{
+            ...card(theme), padding: "9px 11px", marginBottom: 6,
+            borderLeft: `3px solid ${theme.yellow}66`,
+          }}>
+            {n.title && (
+              <div style={{ fontSize: "12px", fontWeight: 700, color: theme.text, marginBottom: 2 }}>
+                {n.title}
+              </div>
+            )}
+            <div style={{
+              fontSize: "12.5px", color: theme.text, lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+            }}>{n.content}</div>
+            <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 4 }}>
+              {[
+                kod,
+                datumKratce(n.updated_at || n.created_at),
+                cizi ? `zapsal ${n.created_by}` : null,
+              ].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+        );
+      })}
+
+      {(ukoly.length > 0 || poznamky.length > 0) && (
+        <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 6, lineHeight: 1.6 }}>
+          Tyhle úkoly a poznámky jsou i ve tvém úkolníku a v poznámkách.
+          {spravce ? " Jako správce tu vidíš i to, co zapsal partner." : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tise({ theme, children }) {
+  return (
+    <div style={{
+      fontSize: "11.5px", color: theme.textSub, lineHeight: 1.7, padding: "8px 2px",
+    }}>{children}</div>
+  );
+}
