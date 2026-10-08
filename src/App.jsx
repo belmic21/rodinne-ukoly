@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_2240";
+const FILE_VERSION = "261009_0030";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -11166,7 +11166,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                       <span style={{ fontSize: "11px", color: theme.textMid }}>{p.aliases.join(", ")}</span>
                     )}
                     <span style={{ flex: 1 }} />
-                    <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+                    {p.fact_count > 0 && (
+                      <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+                    )}
                   </div>
                   {(p.met_at || p.introduced_name || p.contact) && (
                     <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2 }}>
@@ -14342,7 +14344,9 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initia
                 <span style={{ fontSize: "11px", color: theme.textMid }}>{p.aliases.join(", ")}</span>
               )}
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+              {p.fact_count > 0 && (
+                      <span style={{ fontSize: "10.5px", color: theme.textMid }}>{p.fact_count}×</span>
+                    )}
             </div>
             {(p.met_at || p.introduced_name || p.contact || p.sample) && (
               <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2, lineHeight: 1.45 }}>
@@ -14802,7 +14806,9 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                       )}
                       <span style={{ flex: 1 }} />
                       <span style={{ fontSize: "11px", color: theme.textMid }}>
-                        {p.fact_count} {p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}
+                        {p.fact_count > 0
+                          ? `${p.fact_count} ${p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}`
+                          : "bez záznamů"}
                         {p.last_at ? ` · ${fmtDate(p.last_at)}` : ""}
                       </span>
                     </div>
@@ -15625,7 +15631,9 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                         <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
                           {highlight(p.name, query)}
                           <span style={{ fontSize: 11, fontWeight: 400, color: theme.textMid }}>
-                            {"  "}{p.fact_count} {p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}
+                            {p.fact_count > 0
+                              ? `  ${p.fact_count} ${p.fact_count === 1 ? "záznam" : p.fact_count < 5 ? "záznamy" : "záznamů"}`
+                              : ""}
                           </span>
                         </div>
                         {(p.met_at || p.introduced_name || p.sample) && (
