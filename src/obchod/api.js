@@ -1160,7 +1160,29 @@ export async function poznamkyZakazky(projectId) {
 
 /* Založí úkol v úkolníku a rovnou ho přiváže k zakázce.
    `komu` je jméno z profilů — úkol se dá zadat i někomu jinému. */
-export async function ukolKZakazce(owner, projectId, nazev, komu = null) {
+/* Kód zakázky se píše na začátek názvu. Je to schválně — díky tomu
+   úkol i poznámku najdeš kdekoli prostým napsáním "MB-10002",
+   v úkolníku, v poznámkách i v lupě. Vazba přes project_id je sice
+   přesnější, ale ta není vidět a nedá se do ní napsat. */
+function sKodem(kod, text) {
+  const t = (text || "").trim();
+  if (!kod) return t;
+  if (t.toUpperCase().startsWith(String(kod).toUpperCase())) return t;
+  return `${kod} ${t}`;
+}
+
+/* Kód zpátky pryč — v detailu zakázky by stál na každém řádku zbytečně. */
+export function bezKodu(kod, text) {
+  const t = (text || "").trim();
+  if (!kod) return t;
+  const k = String(kod);
+  if (t.toUpperCase().startsWith(k.toUpperCase())) {
+    return t.slice(k.length).replace(/^[\s—·:-]+/, "");
+  }
+  return t;
+}
+
+export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = null) {
   const t = (nazev || "").trim();
   if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
   if (!t) return { ok: false, chyba: "Napiš, co je potřeba udělat." };
@@ -1168,7 +1190,7 @@ export async function ukolKZakazce(owner, projectId, nazev, komu = null) {
     const { data, error } = await supabase
       .from("tasks")
       .insert({
-        title: t,
+        title: sKodem(kod, t),
         created_by: owner,
         project_id: projectId,
         assigned_to: komu && komu !== owner ? [komu] : [],
@@ -1183,19 +1205,25 @@ export async function ukolKZakazce(owner, projectId, nazev, komu = null) {
   }
 }
 
-export async function poznamkaKZakazce(owner, projectId, text, nadpis = "") {
+export async function poznamkaKZakazce(owner, projectId, text, kod = "") {
   const t = (text || "").trim();
   if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
   if (!t) return { ok: false, chyba: "Poznámka je prázdná." };
+  // Titulek je v tabulce povinný. Prázdný řetězec projde, null ne —
+  // na tomhle poznámka u zakázky poprvé spadla.
+  const prvniRadek = t.split("\n")[0].slice(0, 60);
   try {
     const { data, error } = await supabase
       .from("notes")
       .insert({
-        title: (nadpis || "").trim() || null,
+        title: sKodem(kod, prvniRadek) || (kod || "Poznámka"),
         content: t,
         created_by: owner,
         project_id: projectId,
         shared_with: [],
+        is_shared: false,
+        pinned: false,
+        archived_by: {},
       })
       .select("*")
       .single();
@@ -1207,14 +1235,17 @@ export async function poznamkaKZakazce(owner, projectId, text, nadpis = "") {
 }
 
 /* Odškrtnutí úkolu rovnou od zakázky. Vrací nový stav. */
-export async function prepniUkol(id, hotovo) {
+export async function prepniUkol(id, hotovo, kdo = null) {
   if (!id) return { ok: false, chyba: "Chybí úkol." };
   try {
+    // Stejná pole jako když úkol odškrtneš v úkolníku — jinak by se
+    // tam tvářil jako nedokončený a opakování by se nespustilo.
     const { data, error } = await supabase
       .from("tasks")
       .update({
         status: hotovo ? "done" : "active",
         completed_at: hotovo ? new Date().toISOString() : null,
+        completed_by_user: hotovo ? kdo : null,
       })
       .eq("id", id).select("id, status");
     if (error) throw error;

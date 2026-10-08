@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import {
-  ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce, prepniUkol,
+  ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce, prepniUkol, bezKodu,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno, ODZNAKY,
@@ -56,7 +56,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
   const pridejUkol = async () => {
     if (!novyUkol.trim()) return;
     setUklada(true); setChyba(null);
-    const res = await ukolKZakazce(owner, projectId, novyUkol);
+    const res = await ukolKZakazce(owner, projectId, novyUkol, kod);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
     setNovyUkol("");
@@ -66,7 +66,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
   const pridejPoznamku = async () => {
     if (!novaPozn.trim()) return;
     setUklada(true); setChyba(null);
-    const res = await poznamkaKZakazce(owner, projectId, novaPozn);
+    const res = await poznamkaKZakazce(owner, projectId, novaPozn, kod);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
     setNovaPozn(""); setPisuPozn(false);
@@ -75,7 +75,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
 
   const odskrtni = async (t) => {
     const hotovo = (t.status || "") === "done";
-    const res = await prepniUkol(t.id, !hotovo);
+    const res = await prepniUkol(t.id, !hotovo, owner);
     if (!res.ok) { setChyba(res.chyba); return; }
     nacti();
   };
@@ -168,7 +168,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
               <div style={{
                 fontSize: "12.5px", fontWeight: 600, color: theme.text,
                 textDecoration: hotovo ? "line-through" : "none",
-              }}>{t.title}</div>
+              }}>{bezKodu(kod, t.title)}</div>
               <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 2 }}>
                 {[
                   kod,
@@ -191,7 +191,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
           }}>
             {n.title && (
               <div style={{ fontSize: "12px", fontWeight: 700, color: theme.text, marginBottom: 2 }}>
-                {n.title}
+                {bezKodu(kod, n.title)}
               </div>
             )}
             <div style={{
@@ -211,7 +211,8 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
 
       {(ukoly.length > 0 || poznamky.length > 0) && (
         <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 6, lineHeight: 1.6 }}>
-          Tyhle úkoly a poznámky jsou i ve tvém úkolníku a v poznámkách.
+          Zakládají se s číslem zakázky v názvu, takže je kdekoli najdeš
+          napsáním {kod || "čísla zakázky"} — v úkolníku, v poznámkách i v lupě.
           {spravce ? " Jako správce tu vidíš i to, co zapsal partner." : ""}
         </div>
       )}
