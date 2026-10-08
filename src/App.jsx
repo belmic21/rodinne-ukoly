@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_2140";
+const FILE_VERSION = "261008_2240";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -15222,6 +15222,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
           personId={person.id}
           sOsou={false}
           onOtevriZakazku={onOpenZakazka}
+          onNacteno={(o) => { if (o) onPersonChanged?.(o); }}
         />
       </div>
 
@@ -15526,7 +15527,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hledat napříč: úkoly, komentáře, připomínky, poznámky"
+            placeholder="Hledat napříč: úkoly, komentáře, připomínky, poznámky, zakázky"
             style={{
               flex: 1, fontSize: "14px", padding: "8px 10px",
               background: theme.inputBg, color: theme.text,
@@ -15563,7 +15564,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
               <div style={{ marginBottom: 8 }}>Začni psát pro vyhledávání...</div>
               <div style={{ fontSize: 11, color: theme.textSub }}>
-                Hledá v úkolech, komentářích, připomínkách, poznámkách i v Mapě
+                Hledá v úkolech, komentářích, připomínkách, poznámkách, zakázkách i v Mapě
               </div>
             </div>
           ) : totalResults === 0 ? (
