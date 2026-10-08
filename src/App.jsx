@@ -96,7 +96,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_1545";
+const FILE_VERSION = "261008_1715";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -19063,31 +19063,31 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
         );
       })}
 
-      <div style={{ display: "flex", gap: "6px", marginTop: "12px" }}>
-        <input placeholder="Jméno" value={name} onChange={e => setName(e.target.value)}
-          style={{ ...inputStyle(theme), flex: 1 }} />
-        <input placeholder="PIN" value={pin}
-          onChange={e => { if (/^\d{0,4}$/.test(e.target.value)) setPin(e.target.value); }}
-          type="tel" inputMode="numeric" maxLength={4}
-          style={{ ...inputStyle(theme), width: "70px", textAlign: "center", letterSpacing: "4px" }} />
-        <button onClick={async () => {
-          const trimmedName = name.trim();
-          if (!trimmedName || pin.length !== 4) return;
-          // Case-insensitive duplicate check (klient strana — DB má UNIQUE constraint na name).
-          const exists = users.find(u => (u.name || "").toLowerCase() === trimmedName.toLowerCase());
-          if (exists) {
-            alert(`Uživatel "${exists.name}" už existuje. Vyber unikátní jméno.`);
-            return;
-          }
-          const result = await onAdd({ name: trimmedName, pin, admin: false });
-          // Reset jen po úspěchu (onAdd vrací true/false z apiCreateUser výsledku)
-          if (result !== false) {
-            setName(""); setPin("");
-          }
-        }} style={{
-          ...buttonStyle(), padding: "8px 14px",
-          background: theme.accent, color: "#fff", fontSize: "14px",
-        }}>+</button>
+      {/* Zakládání uživatelů se sem už nepatří.
+
+          Dřív stačilo jméno a PIN — PIN byl zámek jen na obrazovce,
+          data v databázi stejně viděl kdokoli. Dnes má každý skutečný
+          účet s mailem a heslem a zakládá se pozvánkou v Obchodu.
+
+          Formulář tady zůstat nemůže: vytvořil by řádek v téhle staré
+          tabulce, ale žádný účet. Uživatel by se nepřihlásil a nešlo
+          by s ním nic sdílet. */}
+      <div style={{
+        marginTop: "14px", padding: "12px 14px",
+        background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+        borderRadius: "10px", fontSize: "12px", color: theme.textSub,
+        lineHeight: 1.7,
+      }}>
+        <div style={{ fontWeight: 700, color: theme.text, marginBottom: 4 }}>
+          Nového uživatele přidáš v Obchodu
+        </div>
+        Klikni na 💼 v horní liště, pak na ozubené kolo a na záložku
+        Uživatelé. Tam zadáš jméno a e-mail a vznikne pozvánka —
+        heslo si dotyčný zvolí sám při registraci.
+        <div style={{ marginTop: 6, color: theme.textMid }}>
+          Tenhle seznam ukazuje jména používaná u starších úkolů.
+          Kdo tu je bez účtu, se nepřihlásí.
+        </div>
       </div>
 
       {/* Delete user confirmation dialog */}
