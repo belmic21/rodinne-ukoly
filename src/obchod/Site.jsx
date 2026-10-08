@@ -20,9 +20,11 @@ import {
   card, input, btn, btnMain, btnGhost, label,
   penizeKratce, penizePresne, parsePenize,
 } from "./ui.js";
+import Osoba from "./Osoba.jsx";
 
-export default function Site({ theme, owner, ciselniky }) {
-  const [smer, setSmer] = useState("poptavka");
+export default function Site({ theme, owner, ciselniky, onOtevriZakazku }) {
+  const [smer, setSmer] = useState("poptavka");   // poptavka | nabidka | lide
+  const [osobaId, setOsobaId] = useState(null);
   const [filtrTyp, setFiltrTyp] = useState("");
   const [filtrKraj, setFiltrKraj] = useState("");
   const [hledat, setHledat] = useState("");
@@ -33,7 +35,7 @@ export default function Site({ theme, owner, ciselniky }) {
   const [vybiram, setVybiram] = useState(false);  // výběr člověka pro novou kartu
 
   useEffect(() => {
-    if (!owner) return;
+    if (!owner || smer === "lide") return;
     let zrus = false;
     setBusy(true);
     nactiKarty(owner, { smer, typ: filtrTyp, kraj: filtrKraj }).then(k => {
@@ -54,6 +56,13 @@ export default function Site({ theme, owner, ciselniky }) {
     );
   }, [karty, hledat]);
 
+  if (osobaId) {
+    return (
+      <Osoba theme={theme} owner={owner} personId={osobaId} ciselniky={ciselniky}
+        onZpet={() => setOsobaId(null)} onOtevriZakazku={onOtevriZakazku} />
+    );
+  }
+
   if (edituji) {
     return (
       <KartaEditor
@@ -70,11 +79,19 @@ export default function Site({ theme, owner, ciselniky }) {
         <Prepinac theme={theme} hodnota={smer} onZmena={setSmer} volby={[
           { k: "poptavka", t: "Kdo co hledá" },
           { k: "nabidka",  t: "Kdo co má" },
+          { k: "lide",     t: "Lidé" },
         ]} />
         <span style={{ flex: 1 }} />
-        <button onClick={() => setVybiram(true)} style={btnMain(theme)}>+ karta</button>
+        {smer !== "lide" && (
+          <button onClick={() => setVybiram(true)} style={btnMain(theme)}>+ karta</button>
+        )}
       </div>
 
+      {smer === "lide" && (
+        <HledaniLidi theme={theme} owner={owner} onOtevri={setOsobaId} />
+      )}
+
+      {smer !== "lide" && (
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={hledat} onChange={e => setHledat(e.target.value)}
           placeholder="Jméno nebo slovo z poznámky…"
@@ -94,6 +111,7 @@ export default function Site({ theme, owner, ciselniky }) {
           ))}
         </select>
       </div>
+      )}
 
       {vybiram && (
         <VyberOsoby theme={theme} owner={owner}
@@ -104,9 +122,9 @@ export default function Site({ theme, owner, ciselniky }) {
           onZrus={() => setVybiram(false)} />
       )}
 
-      {busy && videt.length === 0 && <Info theme={theme}>Načítám…</Info>}
+      {smer !== "lide" && busy && videt.length === 0 && <Info theme={theme}>Načítám…</Info>}
 
-      {!busy && videt.length === 0 && (
+      {smer !== "lide" && !busy && videt.length === 0 && (
         <Info theme={theme}>
           {smer === "poptavka"
             ? "Zatím tu není nikdo, kdo by něco hledal. Tlačítkem nahoře přidej první kartu — třeba Martinovi, že shání retail parky."
@@ -114,9 +132,10 @@ export default function Site({ theme, owner, ciselniky }) {
         </Info>
       )}
 
-      {videt.map(k => (
+      {smer !== "lide" && videt.map(k => (
         <KartaRadek key={k.id} k={k} theme={theme} ciselniky={ciselniky}
-          onOpen={() => setEdituji(k)} />
+          onOpen={() => setEdituji(k)}
+          onOpenOsoba={() => setOsobaId(k.person_id)} />
       ))}
 
       {filtrKraj && smer === "poptavka" && videt.length > 0 && (
@@ -131,7 +150,7 @@ export default function Site({ theme, owner, ciselniky }) {
 
 /* ── Řádek karty ───────────────────────────────────── */
 
-function KartaRadek({ k, theme, ciselniky, onOpen }) {
+function KartaRadek({ k, theme, ciselniky, onOpen, onOpenOsoba }) {
   const typy = (k.typy || []).map(t => popis(ciselniky, "typ", t));
   const kraje = (k.kraje || []).map(t => popis(ciselniky, "kraj", t));
   const rozsah = [
@@ -146,7 +165,9 @@ function KartaRadek({ k, theme, ciselniky, onOpen }) {
       opacity: k.aktivni && !propadla ? 1 : 0.5,
     }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-        <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+        <div onClick={(e) => { e.stopPropagation(); onOpenOsoba?.(); }}
+          title="Ukázat všechno, co s ním běží"
+          style={{ fontSize: "13px", fontWeight: 700, color: theme.accent, cursor: "pointer" }}>
           {k.osoba?.name || "—"}
         </div>
         {k.nazev && (
@@ -588,6 +609,69 @@ function Chipy({ theme, polozky, vybrano = [], onPrepni, skupiny = false }) {
                 }}>{p.label}</button>
               );
             })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Hledání člověka ───────────────────────────────────
+   Jméno, přezdívka, telefon i slovo z poznámky. Kontakt je
+   součástí indexu, takže "777" najde člověka podle čísla. */
+
+function HledaniLidi({ theme, owner, onOtevri }) {
+  const [q, setQ] = useState("");
+  const [lidi, setLidi] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => { setTimeout(() => ref.current?.focus(), 60); }, []);
+
+  useEffect(() => {
+    let zrus = false;
+    setBusy(true);
+    const id = setTimeout(async () => {
+      const r = await hledejLidi(owner, q, 25);
+      if (!zrus) { setLidi(r); setBusy(false); }
+    }, q ? 250 : 0);
+    return () => { zrus = true; clearTimeout(id); };
+  }, [owner, q]);
+
+  return (
+    <div>
+      <input ref={ref} value={q} onChange={e => setQ(e.target.value)}
+        placeholder="Jméno, telefon, nebo co o něm víš…"
+        style={{ ...input(theme), marginBottom: 10 }} />
+
+      {busy && lidi.length === 0 && <Info theme={theme}>Hledám…</Info>}
+
+      {!busy && lidi.length === 0 && (
+        <Info theme={theme}>
+          {q.trim()
+            ? "Nikdo takový. Zkus přezdívku, část čísla nebo slovo z poznámky."
+            : "Začni psát. Hledá i podle telefonu a podle toho, co máš u člověka zapsané."}
+        </Info>
+      )}
+
+      {lidi.map(o => (
+        <div key={o.id} onClick={() => onOtevri(o.id)} style={{
+          ...card(theme), padding: "9px 11px", marginBottom: 6, cursor: "pointer",
+        }}>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+            {o.name}
+            {o.contact && (
+              <span style={{ fontWeight: 400, color: theme.textSub, fontSize: "11.5px" }}>
+                {" "}· {o.contact}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
+            {[
+              o.met_at,
+              o.fact_count ? `${o.fact_count} záznamů` : null,
+              o.sample,
+            ].filter(Boolean).join(" · ")}
           </div>
         </div>
       ))}
