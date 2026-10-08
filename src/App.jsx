@@ -96,7 +96,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_1740";
+const FILE_VERSION = "261008_1715";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -16180,13 +16180,37 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [hotovo, setHotovo] = useState(null);
+  // "prihlaseni" | "registrace" — nový uživatel si tu zvolí heslo.
+  // Projde jen ten, koho správce pozval; hlídá to databáze, ne tahle
+  // obrazovka. Bez registrace by pozvánka nedávala smysl, protože
+  // pozvaný by neměl kde začít.
+  const [rezim, setRezim] = useState("prihlaseni");
   const passRef = useRef(null);
 
   const submit = async (e) => {
     e?.preventDefault?.();
     if (!email.trim() || !password) return;
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setHotovo(null);
     try {
+      if (rezim === "registrace") {
+        if (password.length < 6) {
+          setErr("Heslo musí mít aspoň 6 znaků.");
+          setBusy(false); return;
+        }
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(), password,
+        });
+        if (error) throw error;
+        try { localStorage.setItem("ft_last_email", email.trim()); } catch (e2) { /* ignore */ }
+        if (data?.session) { onSignedIn?.(data.session); return; }
+        // Když je v Supabase zapnuté potvrzování mailem, relace nevznikne
+        // hned a přijde potvrzovací odkaz.
+        setHotovo("Účet je založený. Pokud ti přišel potvrzovací mail, klikni na odkaz v něm a pak se přihlas.");
+        setRezim("prihlaseni");
+        setPassword("");
+        return;
+      }
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(), password,
       });
@@ -16195,9 +16219,16 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
       onSignedIn?.(data.session);
     } catch (e3) {
       const m = (e3?.message || "").toLowerCase();
-      setErr(m.includes("invalid") ? "Nesprávný mail nebo heslo."
+      // Hlášku z databáze o chybějící pozvánce ukážeme srozumitelně.
+      setErr(
+        m.includes("pozv") ? "Tenhle mail nemá pozvánku. Požádej Michala, ať tě přidá."
+        : m.includes("already registered") || m.includes("user already") ?
+            "Na tenhle mail už účet existuje — přepni na přihlášení."
+        : m.includes("invalid") ? "Nesprávný mail nebo heslo."
         : m.includes("failed to fetch") ? "Nejde se připojit k serveru."
-        : (e3?.message || "Přihlášení se nepodařilo."));
+        : m.includes("signups not allowed") || m.includes("signup is disabled") ?
+            "Registrace je v nastavení databáze vypnutá. Napiš Michalovi."
+        : (e3?.message || "Nepodařilo se to."));
       setPassword("");
       setTimeout(() => passRef.current?.focus(), 30);
     } finally { setBusy(false); }
@@ -16222,17 +16253,49 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
         <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px", textAlign: "center" }}>
           Rodinné úkoly
         </div>
-        <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "26px", textAlign: "center" }}>
-          Přihlas se mailem a heslem
+        <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "18px", textAlign: "center" }}>
+          {rezim === "registrace"
+            ? "Zvol si heslo k mailu, na který máš pozvánku"
+            : "Přihlas se mailem a heslem"}
+        </div>
+
+        <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+          {[
+            { k: "prihlaseni", t: "Přihlásit se" },
+            { k: "registrace", t: "Mám pozvánku" },
+          ].map(v => {
+            const zap = rezim === v.k;
+            return (
+              <button key={v.k} type="button"
+                onClick={() => { setRezim(v.k); setErr(null); setHotovo(null); }}
+                style={{
+                  ...buttonStyle(), flex: 1, padding: "7px 0", fontSize: "12.5px",
+                  background: zap ? theme.accentSoft : "transparent",
+                  border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+                  color: zap ? theme.accent : theme.textSub,
+                  fontWeight: zap ? 700 : 600,
+                }}>{v.t}</button>
+            );
+          })}
         </div>
 
         <input type="email" value={email} autoComplete="username"
           onChange={e => setEmail(e.target.value)}
           placeholder="mail" style={{ ...input, marginBottom: 8 }} />
 
-        <input ref={passRef} type="password" value={password} autoComplete="current-password"
+        <input ref={passRef} type="password" value={password}
+          autoComplete={rezim === "registrace" ? "new-password" : "current-password"}
           onChange={e => setPassword(e.target.value)}
-          placeholder="heslo" style={input} />
+          placeholder={rezim === "registrace" ? "nové heslo, aspoň 6 znaků" : "heslo"}
+          style={input} />
+
+        {hotovo && (
+          <div style={{
+            marginTop: 10, fontSize: "12px", color: theme.green,
+            background: `${theme.green}12`, border: `1px solid ${theme.green}40`,
+            borderRadius: 8, padding: "8px 10px", lineHeight: 1.5,
+          }}>{hotovo}</div>
+        )}
 
         {err && (
           <div style={{
@@ -16247,14 +16310,17 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
           background: theme.accent, color: "#fff",
           padding: "11px 0", fontSize: "14px", fontWeight: 700,
           opacity: (busy || !email.trim() || !password) ? 0.55 : 1,
-        }}>{busy ? "Přihlašuji…" : "Přihlásit"}</button>
+        }}>{busy
+          ? (rezim === "registrace" ? "Zakládám…" : "Přihlašuji…")
+          : (rezim === "registrace" ? "Založit účet" : "Přihlásit")}</button>
 
         <div style={{
           marginTop: 18, fontSize: "11px", color: theme.textMid,
           textAlign: "center", lineHeight: 1.6,
         }}>
-          Přihlášení si zařízení zapamatuje.<br />
-          Heslo zapomenuté? Napiš Michalovi.
+          {rezim === "registrace"
+            ? <>Zaregistrovat se může jen ten, koho správce pozval.<br />Použij mail, na který máš pozvánku.</>
+            : <>Přihlášení si zařízení zapamatuje.<br />Heslo zapomenuté? Napiš Michalovi.</>}
         </div>
       </form>
     </div>
