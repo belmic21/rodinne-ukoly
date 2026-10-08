@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_0030";
+const FILE_VERSION = "261009_0100";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -27058,9 +27058,19 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialDraft={obchodDraft}
             initialOsoba={obchodOsoba}
             initialZakazka={obchodZakazka}
-            onClose={() => {
+            onClose={async () => {
               setShowObchodSheet(false); setObchodDraft("");
               setObchodOsoba(null); setObchodZakazka(null);
+              // V Obchodu mohl vzniknout úkol nebo poznámka u zakázky.
+              // Hlavní seznamy o nich nevědí, dokud si je nepřečtou znovu.
+              try {
+                const [t, n] = await Promise.all([
+                  apiLoadTasks(),
+                  apiLoadNotes(currentUser?.name),
+                ]);
+                if (Array.isArray(t)) setTasks(t);
+                if (Array.isArray(n)) setNotes(n);
+              } catch (e) { /* offline — seznamy se dorovnají při další synchronizaci */ }
             }}
           />
         )}
