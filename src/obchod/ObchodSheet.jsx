@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
-  nactiCiselniky, nactiPanel, nactiZakazky, zalozZakazku,
+  nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu,
 } from "./api.js";
 import {
@@ -102,6 +102,17 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   );
 
   const zavri = () => { setOtevrena(null); setNova(null); setObnov(k => k + 1); };
+
+  // Z přehledu člověka na zakázku. Načítáme ji celou — v přehledu
+  // je jen zkrácená, a kdyby se uložila takhle, přepsala by
+  // ostatní pole prázdnem.
+  const otevriZakazku = async (zkracena) => {
+    if (!zkracena?.id) return;
+    const cela = await nactiZakazku(zkracena.id);
+    if (!cela) return;
+    setZalozka("zakazky");
+    setOtevrena(cela);
+  };
 
   return (
     <div onClick={onClose} style={{
@@ -247,7 +258,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
             </div>
 
             {zalozka === "sit" ? (
-              <Site theme={theme} owner={owner} ciselniky={ciselniky} />
+              <Site theme={theme} owner={owner} ciselniky={ciselniky}
+                onOtevriZakazku={otevriZakazku} />
             ) : zalozka === "sdilene" ? (
               <SdilenoSeMnou theme={theme} ciselniky={ciselniky} />
             ) : (
