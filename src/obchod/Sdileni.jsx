@@ -400,7 +400,11 @@ export function Uzivatele({ theme, owner }) {
     const res = await pozviUzivatele(owner, novy);
     if (!res.ok) { setChyba(res.chyba); return; }
     setNovy(null);
-    setHotovo(`Pozvánka pro ${res.pozvanka.jmeno} je připravená. Pošli mu adresu aplikace — heslo si zvolí sám při registraci.`);
+    setHotovo(
+      `Pozvánka pro ${res.pozvanka.jmeno} je připravená. ` +
+      `Systém e-mail neposílá — napiš mu sám: ať otevře ${window.location.origin}, ` +
+      `přepne na „Mám pozvánku“ a zaregistruje se mailem ${res.pozvanka.email}.`
+    );
     nacti();
   };
 
@@ -412,7 +416,7 @@ export function Uzivatele({ theme, owner }) {
         <div style={{ display: "flex", marginBottom: 10 }}>
           <span style={{ flex: 1 }} />
           <button onClick={() => setNovy({ email: "", jmeno: "", is_admin: false })}
-            style={btnMain(theme)}>+ pozvat</button>
+            style={btnMain(theme)}>+ přidat</button>
         </div>
       )}
 
@@ -459,12 +463,15 @@ export function Uzivatele({ theme, owner }) {
             </span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={pozvi} style={btnMain(theme)}>POZVAT</button>
+            <button onClick={pozvi} style={btnMain(theme)}>PŘIPRAVIT PŘÍSTUP</button>
             <button onClick={() => { setNovy(null); setChyba(null); }} style={btnGhost(theme)}>zrušit</button>
           </div>
           <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 8, lineHeight: 1.6 }}>
             Jméno zadáváš ty, ne systém. Je to podpis pod všemi jeho záznamy
             a později se mění těžko.
+            <br />
+            <strong style={{ color: theme.yellow }}>E-mail se neodesílá.</strong>{" "}
+            Odkaz na aplikaci mu pošli sám — zaregistruje se tím mailem.
           </div>
         </div>
       )}
