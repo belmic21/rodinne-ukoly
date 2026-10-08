@@ -192,6 +192,142 @@ function ocisti(d) {
   return out;
 }
 
+/* ── Lidé ────────────────────────────────────────────────
+   Investoři nejsou zvláštní tabulka — jsou to lidé z Mapy.
+   Tady se jen hledají, aby se k nim dala přivěsit karta. */
+
+export async function hledejLidi(owner, query = "", limit = 20) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("map_people_search", {
+      p_owner: owner, p_query: query || "", p_limit: limit,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("hledejLidi", e);
+    return [];
+  }
+}
+
+export async function nactiOsobu(id) {
+  if (!id) return null;
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .select("id, name, aliases, note, met_at, contact, role_tagy")
+      .eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    selhalo("nactiOsobu", e);
+    return null;
+  }
+}
+
+// Profilové role: čím je člověk obecně. Role v konkrétní zakázce
+// jsou jinde — Radek je obecně investor i developer, ale v jedné
+// zakázce je právě jedním z nich.
+export async function ulozRole(personId, role) {
+  if (!personId) return { ok: false, chyba: "Chybí osoba." };
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .update({ role_tagy: role || [] })
+      .eq("id", personId)
+      .select("id, role_tagy");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Osoba se nenašla." };
+    return { ok: true, role: data[0].role_tagy };
+  } catch (e) {
+    return selhalo("ulozRole", e);
+  }
+}
+
+/* ── Karty ───────────────────────────────────────────── */
+
+const KARTA = `
+  id, person_id, smer, nazev, typy, kraje, cena_od, cena_do,
+  velikost_od, jednotka, faze_min, pro_koho, poznamka,
+  plati_od, plati_do, aktivni, created_at, updated_at,
+  osoba:map_people (id, name, role_tagy)
+`;
+
+export async function nactiKarty(owner, filtr = {}, limit = 200) {
+  if (!owner) return [];
+  try {
+    let q = supabase.from("deal_cards").select(KARTA).eq("owner", owner);
+    if (filtr.smer)    q = q.eq("smer", filtr.smer);
+    if (filtr.personId) q = q.eq("person_id", filtr.personId);
+    if (filtr.jenAktivni) q = q.eq("aktivni", true);
+    // Pole se filtruje překryvem: karta s více typy se najde podle kteréhokoli.
+    if (filtr.typ)  q = q.contains("typy", [filtr.typ]);
+    if (filtr.kraj) q = q.contains("kraje", [filtr.kraj]);
+
+    const { data, error } = await q
+      .order("aktivni", { ascending: false })
+      .order("updated_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiKarty", e);
+    return [];
+  }
+}
+
+export async function ulozKartu(owner, data) {
+  if (!owner || !data?.person_id) return { ok: false, chyba: "Chybí člověk." };
+  const telo = {
+    smer: data.smer || "poptavka",
+    nazev: prazdnoNaNull(data.nazev),
+    typy: data.typy || [],
+    kraje: data.kraje || [],
+    cena_od: cislo(data.cena_od),
+    cena_do: cislo(data.cena_do),
+    velikost_od: cislo(data.velikost_od),
+    jednotka: prazdnoNaNull(data.jednotka),
+    faze_min: prazdnoNaNull(data.faze_min),
+    pro_koho: prazdnoNaNull(data.pro_koho),
+    poznamka: prazdnoNaNull(data.poznamka),
+    plati_do: prazdnoNaNull(data.plati_do),
+    aktivni: data.aktivni !== false,
+  };
+  try {
+    const q = data.id
+      ? supabase.from("deal_cards").update(telo).eq("id", data.id)
+      : supabase.from("deal_cards").insert({ ...telo, owner, person_id: data.person_id });
+    const { data: row, error } = await q.select(KARTA).single();
+    if (error) throw error;
+    return { ok: true, karta: row };
+  } catch (e) {
+    return selhalo("ulozKartu", e);
+  }
+}
+
+export async function smazKartu(id) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_cards").delete().eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Karta se nenašla." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazKartu", e);
+  }
+}
+
+function prazdnoNaNull(v) {
+  return (v === "" || v === undefined) ? null : v;
+}
+
+function cislo(v) {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
 /* ── Párování ────────────────────────────────────────── */
 
 export async function komuToPasuje(projectId, limit = 30) {
