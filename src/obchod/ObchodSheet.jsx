@@ -544,8 +544,10 @@ function Statistika({ theme, owner }) {
                   marginBottom: 2, fontVariantNumeric: "tabular-nums",
                 }}>{n}</div>
               )}
+              {/* Tenký sloupec, ne široký blok. Plocha nenese informaci,
+                  nese ji výška — široké bloky jen dělají graf těžkým. */}
               <div style={{
-                width: "100%", height: vyska,
+                width: "62%", maxWidth: 26, height: vyska,
                 background: n === 0 ? theme.cardBorder : theme.accent,
                 opacity: najeto && najeto.mesic !== r.mesic ? 0.45 : 1,
                 borderRadius: n === 0 ? 1 : "4px 4px 0 0",

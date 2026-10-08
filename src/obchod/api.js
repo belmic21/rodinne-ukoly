@@ -266,6 +266,9 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
     if (filtr.stav)      q = q.eq("stav", filtr.stav);
     if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
     if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);
+    // Od kdy byla zadaná. Hranici počítá aplikace, ne databáze —
+    // "dnes" se řídí časem u tebe, ne na serveru v Americe.
+    if (filtr.odKdy)              q = q.gte("created_at", filtr.odKdy);
     // Velikost se filtruje prahem: "nad 50" vrátí i 85 a 100.
     if (filtr.velikostOd != null) q = q.gte("velikost", filtr.velikostOd);
 
@@ -1098,6 +1101,37 @@ export async function zrusPozvanku(email) {
     return { ok: true };
   } catch (e) {
     return selhalo("zrusPozvanku", e);
+  }
+}
+
+/* ── Statistika ──────────────────────────────────────────
+   Datum zadání se ukládalo od začátku, jen se nikde nečetlo.
+   Obě funkce počítají v databázi — stahovat kvůli součtu
+   všechny zakázky by bylo zbytečné. */
+
+export async function kolikZakazek(owner) {
+  if (!owner) return null;
+  try {
+    const { data, error } = await supabase.rpc("deal_kolik", { p_owner: owner });
+    if (error) throw error;
+    return (data && data[0]) || null;
+  } catch (e) {
+    selhalo("kolikZakazek", e);
+    return null;
+  }
+}
+
+export async function prirustekZakazek(owner, mesicu = 12) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("deal_prirustek", {
+      p_owner: owner, p_mesicu: mesicu,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("prirustekZakazek", e);
+    return [];
   }
 }
 
