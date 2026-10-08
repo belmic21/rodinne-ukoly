@@ -380,7 +380,7 @@ function SdilenaZakazka({ theme, ciselniky, z, onZpet }) {
    UŽIVATELÉ — jen pro správce
    ════════════════════════════════════════════════════════ */
 
-export function Uzivatele({ theme, owner, onZpet }) {
+export function Uzivatele({ theme, owner }) {
   const [lide, setLide] = useState([]);
   const [pozvanky, setPozvanky] = useState([]);
   const [busy, setBusy] = useState(true);
@@ -407,20 +407,14 @@ export function Uzivatele({ theme, owner, onZpet }) {
   const nepouzite = pozvanky.filter(p => !p.pouzito_at);
 
   return (
-    <div style={{ padding: "12px 16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button onClick={onZpet} style={{
-          ...btn(), background: "transparent", color: theme.textSub,
-          fontSize: "15px", padding: "2px 6px",
-        }}>←</button>
-        <div style={{ flex: 1, fontSize: "14px", fontWeight: 700, color: theme.text }}>
-          Uživatelé
-        </div>
-        {!novy && (
+    <div>
+      {!novy && (
+        <div style={{ display: "flex", marginBottom: 10 }}>
+          <span style={{ flex: 1 }} />
           <button onClick={() => setNovy({ email: "", jmeno: "", is_admin: false })}
             style={btnMain(theme)}>+ pozvat</button>
-        )}
-      </div>
+        </div>
+      )}
 
       {hotovo && (
         <div style={{
