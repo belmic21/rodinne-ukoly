@@ -328,6 +328,215 @@ function cislo(v) {
   return isFinite(n) ? n : null;
 }
 
+/* ── Časová osa ──────────────────────────────────────────
+   Události kolem zakázky se zapisují do Mapy, ne do vlastní
+   tabulky. Díky tomu klik na Davida ukáže i to, co s ním
+   řešíš obchodně — je to jedna osa, jen filtrovaná jinak. */
+
+async function zapisDoOsy(owner, { personId, projectId, text, context }) {
+  if (!owner || !text) return;
+  try {
+    const { error } = await supabase.from("map_facts").insert({
+      owner,
+      person_id: personId || null,
+      project_id: projectId || null,
+      content: text,
+      context: context || null,
+      happened_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+  } catch (e) {
+    // Osa je doprovodná. Když se nezapíše, hlavní akce platí dál.
+    console.warn("[obchod/zapisDoOsy]", e?.message || e);
+  }
+}
+
+export async function osaZakazky(owner, projectId, limit = 100) {
+  if (!owner || !projectId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("map_facts")
+      .select("id, content, context, happened_at, person_id, osoba:map_people (id, name)")
+      .eq("owner", owner)
+      .eq("project_id", projectId)
+      .order("happened_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("osaZakazky", e);
+    return [];
+  }
+}
+
+/* ── Účastníci: kdo je na zakázce napojený ───────────────
+   Provizní řetězec i vlastníci. Oddělené od oslovení:
+   tohle je "kdo na tom je", oslovení je "koho jsem zkoušel". */
+
+const UCASTNIK = `
+  id, project_id, person_id, role, podil, poradi,
+  forma_dohody, poznamka, created_at,
+  osoba:map_people (id, name)
+`;
+
+export async function nactiUcastniky(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("deal_participants").select(UCASTNIK)
+      .eq("project_id", projectId)
+      .order("poradi", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiUcastniky", e);
+    return [];
+  }
+}
+
+export async function ulozUcastnika(owner, data) {
+  if (!owner || !data?.project_id || !data?.person_id) {
+    return { ok: false, chyba: "Chybí zakázka nebo člověk." };
+  }
+  const telo = {
+    role: data.role || "prostrednik",
+    podil: cislo(data.podil),
+    poradi: cislo(data.poradi) ?? 1,
+    forma_dohody: prazdnoNaNull(data.forma_dohody),
+    poznamka: prazdnoNaNull(data.poznamka),
+  };
+  try {
+    const q = data.id
+      ? supabase.from("deal_participants").update(telo).eq("id", data.id)
+      : supabase.from("deal_participants").insert({
+          ...telo, owner, project_id: data.project_id, person_id: data.person_id,
+        });
+    const { data: row, error } = await q.select(UCASTNIK).single();
+    if (error) throw error;
+    return { ok: true, ucastnik: row };
+  } catch (e) {
+    // Stejný člověk ve stejné roli už na zakázce je
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Tenhle člověk už tu v téhle roli je." };
+    }
+    return selhalo("ulozUcastnika", e);
+  }
+}
+
+export async function smazUcastnika(id) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_participants").delete().eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazUcastnika", e);
+  }
+}
+
+/* ── Oslovení ────────────────────────────────────────── */
+
+const OSLOVENI = `
+  id, project_id, person_id, stav, aktualne, aktualne_at,
+  kanal, odeslano_at, cena_jednana, pripominka_at, poznamka,
+  created_at, updated_at,
+  osoba:map_people (id, name, contact)
+`;
+
+export async function nactiOsloveni(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("deal_approaches").select(OSLOVENI)
+      .eq("project_id", projectId)
+      .is("deleted_at", null)
+      .order("odeslano_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiOsloveni", e);
+    return [];
+  }
+}
+
+// Hromadné oslovení z výsledku párování. Kdo tam už je,
+// se přeskočí — nechceme přepsat stav u někoho rozjednaného.
+export async function oslovHromadne(owner, projectId, lide, nazevZakazky = "") {
+  if (!owner || !projectId || !lide?.length) {
+    return { ok: false, chyba: "Není koho oslovit." };
+  }
+  try {
+    const radky = lide.map(p => ({
+      owner, project_id: projectId, person_id: p.person_id,
+      stav: "osloveno", kanal: p.kanal || null,
+      odeslano_at: new Date().toISOString(),
+    }));
+    const { data, error } = await supabase
+      .from("deal_approaches")
+      .upsert(radky, { onConflict: "project_id,person_id", ignoreDuplicates: true })
+      .select("id, person_id");
+    if (error) throw error;
+    const pridano = data || [];
+    for (const r of pridano) {
+      const kdo = lide.find(x => x.person_id === r.person_id);
+      await zapisDoOsy(owner, {
+        personId: r.person_id, projectId,
+        text: `Oslovil jsem ho s nabídkou${nazevZakazky ? `: ${nazevZakazky}` : ""}.`,
+        context: kdo?.kanal || null,
+      });
+    }
+    return { ok: true, pridano: pridano.length, preskoceno: lide.length - pridano.length };
+  } catch (e) {
+    return selhalo("oslovHromadne", e);
+  }
+}
+
+export async function ulozOsloveni(owner, data, puvodniStav = null, popisStavu = "") {
+  if (!data?.id) return { ok: false, chyba: "Chybí ID." };
+  const telo = {
+    stav: data.stav,
+    aktualne: prazdnoNaNull(data.aktualne),
+    aktualne_at: data.aktualne ? new Date().toISOString() : null,
+    kanal: prazdnoNaNull(data.kanal),
+    cena_jednana: cislo(data.cena_jednana),
+    pripominka_at: prazdnoNaNull(data.pripominka_at),
+    poznamka: prazdnoNaNull(data.poznamka),
+  };
+  try {
+    const { data: row, error } = await supabase
+      .from("deal_approaches").update(telo).eq("id", data.id)
+      .select(OSLOVENI).single();
+    if (error) throw error;
+    // Posun na žebříku je událost, kterou chceš za rok vidět.
+    if (puvodniStav && puvodniStav !== data.stav) {
+      await zapisDoOsy(owner, {
+        personId: row.person_id, projectId: row.project_id,
+        text: `Posun v jednání: ${popisStavu || data.stav}.`,
+      });
+    }
+    return { ok: true, osloveni: row };
+  } catch (e) {
+    return selhalo("ulozOsloveni", e);
+  }
+}
+
+export async function smazOsloveni(id) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_approaches")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazOsloveni", e);
+  }
+}
+
 /* ── Párování ────────────────────────────────────────── */
 
 export async function komuToPasuje(projectId, limit = 30) {
