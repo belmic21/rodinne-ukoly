@@ -50,6 +50,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Com
 import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
+import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -96,7 +97,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_1715";
+const FILE_VERSION = "261008_2125";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -14367,7 +14368,8 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initia
   );
 }
 
-function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "", initialPerson = null, initialWho = null }) {
+function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "",
+  initialPerson = null, initialWho = null, onOpenZakazka }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
@@ -14615,6 +14617,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
             onBack={() => { setOpen(null); setReloadKey(k => k + 1); }}
             onClose={onClose}
             onOpenPerson={openPerson}
+            onOpenZakazka={onOpenZakazka}
             onPersonChanged={(p) => setOpen(prev => ({ ...prev, ...p }))}
           />
         ) : (
@@ -14860,7 +14863,8 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
 /* ── Stránka člověka ──
    Nahoře kotva: kde jsem ho poznal, kontakt, kdo mi ho představil a koho
    mi představil on. Pod tím celá časová osa, aby byl vidět vývoj vztahu. */
-function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, onOpenPerson }) {
+function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, onOpenPerson,
+  onOpenZakazka }) {
   const [rows, setRows] = useState([]);
   const [intro, setIntro] = useState([]);        // koho mi tenhle člověk představil
   const [asc, setAsc] = useState(true);
@@ -15194,6 +15198,20 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
             opacity: (saving || !draft.trim()) ? 0.5 : 1, flex: "0 0 auto",
           }}>{saving ? "…" : "+"}</button>
         </div>
+      </div>
+
+      {/* Obchod u člověka — zakázky, oslovení a karty.
+          Dřív se dal člověk otevřít přes lupu a vypadal prázdně, i když
+          s ním běžely dvě zakázky: tahle karta o Obchodu nevěděla.
+          Teď je to jedna karta a vidíš u člověka všechno. */}
+      <div style={{ padding: "0 16px" }}>
+        <ObchodUOsoby
+          theme={theme}
+          owner={owner}
+          personId={person.id}
+          sOsou={false}
+          onOtevriZakazku={onOpenZakazka}
+        />
       </div>
 
       <div style={{ padding: "12px 16px 20px" }}>
@@ -26997,6 +27015,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialQuery={mapaQuery}
             initialPerson={mapaPerson}
             initialWho={mapaWho}
+            onOpenZakazka={(z) => {
+              // Z člověka rovnou do zakázky. Mapa se zavře, ať se okna nevrší.
+              setShowMapaSheet(false);
+              setMapaDraft(""); setMapaQuery(""); setMapaPerson(null); setMapaWho(null);
+              setObchodDraft(""); setObchodOsoba(null);
+              setObchodZakazka(z?.id || null);
+              setShowObchodSheet(true);
+            }}
             onClose={() => {
               setShowMapaSheet(false);
               setMapaDraft(""); setMapaQuery(""); setMapaPerson(null); setMapaWho(null);
