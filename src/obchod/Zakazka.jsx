@@ -25,7 +25,7 @@ import {
    ŘETĚZEC
    ════════════════════════════════════════════════════════ */
 
-export function Retezec({ theme, owner, ciselniky, projectId }) {
+export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu }) {
   const [lide, setLide] = useState([]);
   const [busy, setBusy] = useState(true);
   const [pridavam, setPridavam] = useState(false);
@@ -98,8 +98,12 @@ export function Retezec({ theme, owner, ciselniky, projectId }) {
             minWidth: 14, textAlign: "center",
           }}>{u.poradi}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text }}>
-              {u.osoba?.name || "—"}
+            <div style={{ fontSize: "12.5px", fontWeight: 700 }}>
+              <span onClick={() => onOtevriOsobu?.(u.person_id)}
+                title="Ukázat všechno, co s ním běží"
+                style={{ color: theme.accent, cursor: "pointer" }}>
+                {u.osoba?.name || "—"}
+              </span>
               <span style={{ fontWeight: 400, color: theme.textSub, fontSize: "11px" }}>
                 {" "}· {popis(ciselniky, "role", u.role)}
               </span>
@@ -203,7 +207,7 @@ function UcastnikEditor({ theme, ciselniky, u, onUloz, onZrus }) {
 
 const KONEC = ["odmitl", "ticho"];
 
-export function Geneze({ theme, owner, ciselniky, zakazka }) {
+export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu }) {
   const projectId = zakazka?.id;
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
@@ -289,13 +293,13 @@ export function Geneze({ theme, owner, ciselniky, zakazka }) {
 
       {serazene.map(r => (
         <OsloveniRadek key={r.id} r={r} theme={theme} owner={owner}
-          ciselniky={ciselniky} onZmena={nacti} />
+          ciselniky={ciselniky} onZmena={nacti} onOtevriOsobu={onOtevriOsobu} />
       ))}
     </Sekce>
   );
 }
 
-function OsloveniRadek({ r, theme, owner, ciselniky, onZmena }) {
+function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu }) {
   const [otevreno, setOtevreno] = useState(false);
   const [f, setF] = useState({
     id: r.id, stav: r.stav, aktualne: r.aktualne || "",
@@ -346,10 +350,14 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena }) {
         display: "flex", alignItems: "center", gap: 9, cursor: "pointer",
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontSize: "12.5px", fontWeight: 700, color: theme.text,
-            textDecoration: skrtnuto ? "line-through" : "none",
-          }}>{r.osoba?.name || "—"}</div>
+          <div style={{ fontSize: "12.5px", fontWeight: 700 }}>
+            <span onClick={(e) => { e.stopPropagation(); onOtevriOsobu?.(r.person_id); }}
+              title="Ukázat všechno, co s ním běží"
+              style={{
+                color: theme.accent, cursor: "pointer",
+                textDecoration: skrtnuto ? "line-through" : "none",
+              }}>{r.osoba?.name || "—"}</span>
+          </div>
           <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
             {r.aktualne
               ? <span style={{ color: theme.yellow }}>{r.aktualne} · {jakDavno(r.aktualne_at)}</span>
