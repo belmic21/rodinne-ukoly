@@ -22,6 +22,7 @@ import {
 import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
 import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
+import Ciselniky from "./Ciselniky.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -43,19 +44,20 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
   const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
-  const [uzivatele, setUzivatele] = useState(false);
+  const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   const hledatRef = useRef(null);
 
   const KROK = 25;
   const [kolik, setKolik] = useState(KROK);
 
-  // Číselníky stačí jednou — je jich pár desítek řádků.
+  // Číselníky se načtou při otevření a po každé úpravě v nastavení.
+  const [ciselnikyKlic, setCiselnikyKlic] = useState(0);
   useEffect(() => {
     if (!owner) return;
     let zrus = false;
     nactiCiselniky(owner).then(c => { if (!zrus) setCiselniky(c); });
     return () => { zrus = true; };
-  }, [owner]);
+  }, [owner, ciselnikyKlic]);
 
   // Rychlé zadání z lomítka: otevře rovnou formulář s předvyplněným,
   // co se z věty dalo přečíst. Nic se neukládá bez tvého potvrzení.
@@ -113,18 +115,45 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
         overflow: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
         fontFamily: FONT,
       }}>
-        {uzivatele ? (
+        {nastaveni ? (
           <>
             <div style={{
               position: "sticky", top: 0, zIndex: 3, background: theme.bg,
-              padding: "14px 16px 0", display: "flex", justifyContent: "flex-end",
+              padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
+              display: "flex", alignItems: "center", gap: 8,
             }}>
+              <button onClick={() => setNastaveni(null)} title="Zpět" style={{
+                ...btn(), background: "transparent", color: theme.textSub,
+                fontSize: "15px", padding: "2px 6px",
+              }}>←</button>
+              <div style={{ display: "flex", gap: 4, flex: 1 }}>
+                {[
+                  { k: "uzivatele", t: "Uživatelé" },
+                  { k: "ciselniky", t: "Seznamy" },
+                ].map(v => {
+                  const zap = nastaveni === v.k;
+                  return (
+                    <button key={v.k} onClick={() => setNastaveni(v.k)} style={{
+                      ...btn(),
+                      background: zap ? theme.accentSoft : "transparent",
+                      border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
+                      color: zap ? theme.accent : theme.textSub,
+                      fontSize: "13px", fontWeight: 700, padding: "4px 11px", borderRadius: 8,
+                    }}>{v.t}</button>
+                  );
+                })}
+              </div>
               <button onClick={onClose} style={{
                 background: "none", border: "none", fontSize: "20px",
                 cursor: "pointer", color: theme.textSub, padding: "0 4px",
               }}>×</button>
             </div>
-            <Uzivatele theme={theme} owner={owner} onZpet={() => setUzivatele(false)} />
+            <div style={{ padding: "12px 16px 18px" }}>
+              {nastaveni === "ciselniky"
+                ? <Ciselniky theme={theme} owner={owner}
+                    onZmena={() => setCiselnikyKlic(k => k + 1)} />
+                : <Uzivatele theme={theme} owner={owner} />}
+            </div>
           </>
         ) : nova ? (
           <Detail
@@ -165,7 +194,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
                   })}
                 </div>
                 {currentUser?.admin && (
-                  <button onClick={() => setUzivatele(true)} title="Uživatelé" style={{
+                  <button onClick={() => setNastaveni("uzivatele")} title="Nastavení" style={{
                     ...btn(), background: "transparent", color: theme.textSub,
                     fontSize: "14px", padding: "2px 6px",
                   }}>⚙</button>
