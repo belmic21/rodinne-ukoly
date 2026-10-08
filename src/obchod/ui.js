@@ -148,6 +148,25 @@ export function jakDavno(iso) {
   return `před ${dni} dny`;
 }
 
+/* Kdy to vzniklo. Do týdne se líp čte "před 3 dny", starší věci
+   potřebují datum — "před 94 dny" si nikdo nepřeloží. */
+export function kdyZadano(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const dni = Math.floor((Date.now() - d.getTime()) / 86400000);
+  return dni <= 7 ? jakDavno(iso) : datumKratce(iso);
+}
+
+/* Název měsíce pro graf: "9/26". Celé "září 2026" by se do sloupce
+   nevešlo a pod dvanácti sloupci by se popisky překrývaly. */
+export function mesicKratce(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}`;
+}
+
 /* Počet s českým tvarem: 1 položka, 2 položky, 5 položek. */
 export function pocet(n, jedna, dve, pet) {
   const x = Number(n) || 0;

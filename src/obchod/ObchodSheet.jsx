@@ -14,10 +14,12 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
+  kolikZakazek, prirustekZakazek,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
-  useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno, OBCHOD_VERZE,
+  useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno,
+  kdyZadano, mesicKratce, pocet, OBCHOD_VERZE,
 } from "./ui.js";
 import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
@@ -29,7 +31,29 @@ import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
   cenaOd: null, cenaDo: null, velikostOd: null, hledat: "",
+  obdobi: "",   // "" | dnes | 7 | 30 | letos
 };
+
+/* Od kdy brát zakázky. Hranice se počítá tady, v prohlížeči —
+   "dnes" se má řídit půlnocí u tebe, ne na serveru v Americe. */
+const OBDOBI = [
+  { k: "",      t: "Vše" },
+  { k: "dnes",  t: "Dnes" },
+  { k: "7",     t: "7 dní" },
+  { k: "30",    t: "30 dní" },
+  { k: "letos", t: "Letos" },
+];
+
+function odKdy(obdobi) {
+  if (!obdobi) return null;
+  const d = new Date();
+  if (obdobi === "dnes")  { d.setHours(0, 0, 0, 0); return d.toISOString(); }
+  if (obdobi === "letos") return new Date(d.getFullYear(), 0, 1).toISOString();
+  const dni = Number(obdobi);
+  if (!isFinite(dni)) return null;
+  d.setDate(d.getDate() - dni);
+  return d.toISOString();
+}
 
 export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   initialOsoba = null, initialZakazka = null, onClose }) {
@@ -46,6 +70,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [otevrena, setOtevrena] = useState(null);
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
+  const [statistika, setStatistika] = useState(false);
   const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
@@ -94,7 +119,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
     setBusy(true);
     const id = setTimeout(async () => {
       // Výběr oblasti se tady rozpadne na kraje, které do ní patří.
-      const dotaz = { ...filtr };
+      const dotaz = { ...filtr, odKdy: odKdy(filtr.obdobi) };
       if (String(filtr.kraj || "").startsWith("oblast:")) {
         const g = filtr.kraj.slice(7);
         dotaz.kraje = (ciselniky.kraj || [])
@@ -279,11 +304,39 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       borderColor: vicFiltru || filtrAktivni ? theme.accentBorder : theme.cardBorder,
                       whiteSpace: "nowrap",
                     }}>filtry</button>
+                    <button onClick={() => setStatistika(v => !v)} title="Kolik zakázek v čase"
+                      style={{
+                        ...btnGhost(theme),
+                        background: statistika ? theme.accentSoft : "transparent",
+                        color: statistika ? theme.accent : theme.textSub,
+                        borderColor: statistika ? theme.accentBorder : theme.cardBorder,
+                        whiteSpace: "nowrap",
+                      }}>statistika</button>
                     {filtrAktivni && (
                       <button onClick={() => { setFiltr(PRAZDNY_FILTR); setKolik(KROK); }}
                         style={{ ...btnGhost(theme), whiteSpace: "nowrap" }}>zrušit</button>
                     )}
                   </div>
+
+                  {/* Kdy byla zakázka zadaná. Nejčastější filtr vůbec,
+                      proto je na ráně a ne schovaný pod „filtry". */}
+                  <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>
+                    {OBDOBI.map(o => {
+                      const zap = filtr.obdobi === o.k;
+                      return (
+                        <button key={o.k || "vse"} onClick={() => zmenFiltr("obdobi", o.k)} style={{
+                          ...btn(),
+                          background: zap ? theme.accentSoft : "transparent",
+                          border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+                          color: zap ? theme.accent : theme.textSub,
+                          fontSize: "11.5px", padding: "3px 10px", borderRadius: 13,
+                          fontWeight: zap ? 700 : 600,
+                        }}>{o.t}</button>
+                      );
+                    })}
+                  </div>
+
+                  {statistika && <Statistika theme={theme} owner={owner} />}
 
                   {vicFiltru && (
                     <Filtry theme={theme} ciselniky={ciselniky} filtr={filtr} zmen={zmenFiltr} />
@@ -379,6 +432,148 @@ function Panel({ theme, panel, onTerminy }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* ── Statistika: kolik zakázek v čase ───────────────────
+   Jedna veličina, jeden graf. Objem v korunách se do stejného
+   obrázku nevejde — osy by byly dvě a každý sloupec by se dal
+   číst dvěma způsoby. Proto je objem jen číslo pod grafem.
+
+   Sloupec, ne čára: měsíční přírůstky jsou oddělené události,
+   ne plynulý průběh. Prázdné měsíce v řadě zůstávají, jinak by
+   tři zakázky ze tří různých měsíců vypadaly jako souvislý tok. */
+
+function Statistika({ theme, owner }) {
+  const [cisla, setCisla] = useState(null);
+  const [rada, setRada] = useState([]);
+  const [busy, setBusy] = useState(true);
+  const [najeto, setNajeto] = useState(null);
+
+  useEffect(() => {
+    if (!owner) return;
+    let zrus = false;
+    setBusy(true);
+    Promise.all([kolikZakazek(owner), prirustekZakazek(owner, 12)])
+      .then(([c, r]) => { if (!zrus) { setCisla(c); setRada(r); setBusy(false); } });
+    return () => { zrus = true; };
+  }, [owner]);
+
+  const maximum = useMemo(
+    () => Math.max(1, ...rada.map(r => Number(r.pocet) || 0)),
+    [rada]
+  );
+  const celkemObjem = useMemo(
+    () => rada.reduce((s, r) => s + (Number(r.objem) || 0), 0),
+    [rada]
+  );
+  const zaRok = useMemo(
+    () => rada.reduce((s, r) => s + (Number(r.pocet) || 0), 0),
+    [rada]
+  );
+
+  if (busy) {
+    return (
+      <div style={{ ...card(theme), padding: "12px 14px", marginTop: 9,
+        fontSize: "12px", color: theme.textSub }}>Počítám…</div>
+    );
+  }
+
+  const prehled = [
+    { k: "dnes",   t: "dnes" },
+    { k: "tyden",  t: "za 7 dní" },
+    { k: "mesic",  t: "za 30 dní" },
+    { k: "letos",  t: "letos" },
+    { k: "celkem", t: "celkem" },
+  ];
+
+  return (
+    <div style={{ ...card(theme), padding: "12px 14px", marginTop: 9 }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+        {prehled.map(p => (
+          <div key={p.k}>
+            <div style={{
+              fontSize: "17px", fontWeight: 700, lineHeight: 1.1,
+              color: theme.text, fontVariantNumeric: "tabular-nums",
+            }}>{cisla ? Number(cisla[p.k] || 0) : 0}</div>
+            <div style={{ fontSize: "10px", color: theme.textSub, marginTop: 1 }}>{p.t}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{
+        ...label(theme), marginBottom: 7,
+        display: "flex", alignItems: "baseline", gap: 8,
+      }}>
+        <span>Nové zakázky po měsících</span>
+        <span style={{
+          marginLeft: "auto", textTransform: "none", letterSpacing: 0,
+          fontWeight: 400, fontSize: "11px", color: theme.textSub,
+        }}>
+          {najeto
+            ? `${mesicKratce(najeto.mesic)} — ${pocet(Number(najeto.pocet) || 0, "zakázka", "zakázky", "zakázek")}`
+            : `${pocet(zaRok, "zakázka", "zakázky", "zakázek")} za 12 měsíců`}
+        </span>
+      </div>
+
+      {/* Sloupce. Tenké, zaoblené nahoře, ukotvené k základní lince.
+          Číslo se píše jen nad nejvyšší sloupec — popisek na každém
+          by z grafu udělal tabulku. */}
+      <div style={{
+        display: "flex", alignItems: "flex-end", gap: 2,
+        height: 86, paddingBottom: 2,
+        borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        {rada.map((r, i) => {
+          const n = Number(r.pocet) || 0;
+          const vyska = n === 0 ? 2 : Math.max(5, Math.round((n / maximum) * 72));
+          const zvyraznit = najeto ? najeto.mesic === r.mesic : n === maximum && n > 0;
+          return (
+            <div key={i}
+              onMouseEnter={() => setNajeto(r)}
+              onMouseLeave={() => setNajeto(null)}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "flex-end",
+                height: "100%", cursor: "default",
+              }}>
+              {zvyraznit && n > 0 && (
+                <div style={{
+                  fontSize: "10px", fontWeight: 700, color: theme.text,
+                  marginBottom: 2, fontVariantNumeric: "tabular-nums",
+                }}>{n}</div>
+              )}
+              <div style={{
+                width: "100%", height: vyska,
+                background: n === 0 ? theme.cardBorder : theme.accent,
+                opacity: najeto && najeto.mesic !== r.mesic ? 0.45 : 1,
+                borderRadius: n === 0 ? 1 : "4px 4px 0 0",
+                transition: "opacity 0.12s",
+              }} />
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 2, marginTop: 4 }}>
+        {rada.map((r, i) => (
+          <div key={i} style={{
+            flex: 1, textAlign: "center", fontSize: "9px",
+            color: theme.textDim, whiteSpace: "nowrap", overflow: "hidden",
+          }}>
+            {/* Popisek jen u každého druhého měsíce, jinak se slijí. */}
+            {i % 2 === 0 ? mesicKratce(r.mesic) : ""}
+          </div>
+        ))}
+      </div>
+
+      {celkemObjem > 0 && (
+        <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 9, lineHeight: 1.6 }}>
+          Objem zakázek za těch 12 měsíců: {penizeKratce(celkemObjem)}.
+          Počítají se jen zakázky s vyplněnou cenou.
+        </div>
+      )}
     </div>
   );
 }
@@ -534,6 +729,7 @@ function Radek({ z, theme, ciselniky, onOpen }) {
             misto,
             z.velikost ? `${z.velikost} ${popis(ciselniky, "jednotka", z.jednotka)}` : "",
             popis(ciselniky, "faze", z.faze),
+            kdyZadano(z.created_at),
           ].filter(Boolean).join(" · ")}
         </div>
       </div>
