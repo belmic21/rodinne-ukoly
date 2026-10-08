@@ -224,7 +224,7 @@ function Prepinac({ theme, hodnota, onZmena, volby }) {
    už v Mapě je — nový člověk se zakládá tam, aby nevznikaly
    dvě různé evidence lidí. */
 
-function VyberOsoby({ theme, owner, onVyber, onZrus }) {
+export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
   const [q, setQ] = useState("");
   const [lidi, setLidi] = useState([]);
   const [busy, setBusy] = useState(false);
