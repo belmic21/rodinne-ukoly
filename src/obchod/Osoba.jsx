@@ -12,33 +12,83 @@
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect } from "react";
-import { osobaPrehled, ulozRole, popis, aktivni } from "./api.js";
+import { osobaPrehled, ulozRole, popis, aktivni, nactiCiselniky } from "./api.js";
 import {
   card, btn, btnGhost, label,
   penizeKratce, datumKratce, jakDavno,
 } from "./ui.js";
 
 export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOtevriZakazku }) {
+  const [jmeno, setJmeno] = useState(null);
+  return (
+    <div style={{ padding: "12px 16px 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <button onClick={onZpet} title="Zpět" style={{
+          ...btn(), background: "transparent", color: theme.textSub,
+          fontSize: "15px", padding: "2px 6px",
+        }}>←</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: "15px", fontWeight: 700, color: theme.text }}>
+            {jmeno?.name || "Člověk"}
+          </div>
+          <div style={{ fontSize: "11.5px", color: theme.textSub, marginTop: 1 }}>
+            {[jmeno?.contact, jmeno?.met_at].filter(Boolean).join(" · ") || "bez kontaktu"}
+          </div>
+        </div>
+      </div>
+      <ObchodUOsoby theme={theme} owner={owner} personId={personId}
+        ciselniky={ciselniky} onOtevriZakazku={onOtevriZakazku}
+        onNacteno={setJmeno} />
+    </div>
+  );
+}
+
+/* Obchodní část karty člověka, bez vlastní hlavičky.
+
+   Schválně oddělená: stejný obsah se ukazuje jednak tady v Obchodu,
+   jednak ve staré kartě z Mapy. Jinak by jedno místo vědělo o zakázkách
+   a druhé ne — a to byla přesně ta past, kdy sis otevřel Davida přes
+   lupu a viděl u něj prázdno, i když má rozjednané dvě zakázky.
+
+   `sOsou` vypni tam, kde už časová osa je (karta v Mapě si ji
+   vypisuje sama), ať tam není dvakrát. */
+export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
+  onOtevriZakazku, onNacteno, sOsou = true }) {
   const [d, setD] = useState(null);
   const [busy, setBusy] = useState(true);
+  const [vlastni, setVlastni] = useState({});
+
+  // Číselníky si umí načíst sama. Karta v Mapě o nich nic neví
+  // a bez nich by se místo "Rodinný dům" ukazovalo "rodinny_dum".
+  const ciselniky = ciselnikyProp && Object.keys(ciselnikyProp).length
+    ? ciselnikyProp : vlastni;
+
+  useEffect(() => {
+    if (ciselnikyProp && Object.keys(ciselnikyProp).length) return;
+    if (!owner) return;
+    let zrus = false;
+    nactiCiselniky(owner).then(c => { if (!zrus) setVlastni(c); });
+    return () => { zrus = true; };
+  }, [owner, ciselnikyProp]);
 
   useEffect(() => {
     let zrus = false;
     setBusy(true);
-    osobaPrehled(owner, personId).then(r => { if (!zrus) { setD(r); setBusy(false); } });
+    osobaPrehled(owner, personId).then(r => {
+      if (zrus) return;
+      setD(r); setBusy(false);
+      onNacteno?.(r?.osoba || null);
+    });
     return () => { zrus = true; };
-  }, [owner, personId]);
+  }, [owner, personId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (busy) {
-    return <div style={{ padding: "16px", fontSize: "12px", color: theme.textSub }}>Načítám…</div>;
+    return <div style={{ padding: "8px 2px", fontSize: "12px", color: theme.textSub }}>Načítám…</div>;
   }
   if (!d?.osoba) {
     return (
-      <div style={{ padding: "16px" }}>
-        <button onClick={onZpet} style={btnGhost(theme)}>← zpět</button>
-        <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 10 }}>
-          Tenhle člověk se nenašel.
-        </div>
+      <div style={{ fontSize: "12px", color: theme.textSub, padding: "8px 2px" }}>
+        Tenhle člověk se nenašel.
       </div>
     );
   }
@@ -51,20 +101,7 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
   const posledni = d.zaznamy[0];
 
   return (
-    <div style={{ padding: "12px 16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <button onClick={onZpet} title="Zpět" style={{
-          ...btn(), background: "transparent", color: theme.textSub,
-          fontSize: "15px", padding: "2px 6px",
-        }}>←</button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: "15px", fontWeight: 700, color: theme.text }}>{o.name}</div>
-          <div style={{ fontSize: "11.5px", color: theme.textSub, marginTop: 1 }}>
-            {[o.contact, o.met_at].filter(Boolean).join(" · ") || "bez kontaktu"}
-          </div>
-        </div>
-      </div>
-
+    <>
       <Role theme={theme} ciselniky={ciselniky} personId={o.id}
         puvodni={o.role_tagy || []} />
 
@@ -163,7 +200,7 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
         </Sekce>
       )}
 
-      {d.zaznamy.length > 0 && (
+      {sOsou && d.zaznamy.length > 0 && (
         <Sekce theme={theme} nadpis={`Časová osa (${d.zaznamy.length})`}>
           {d.zaznamy.map(z => (
             <div key={z.id} style={{
@@ -190,12 +227,12 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
         </Sekce>
       )}
 
-      {o.note && (
+      {sOsou && o.note && (
         <div style={{ fontSize: "11.5px", color: theme.textMid, marginTop: 12, lineHeight: 1.7 }}>
           {o.note}
         </div>
       )}
-    </div>
+    </>
   );
 }
 

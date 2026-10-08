@@ -67,19 +67,21 @@ export async function osobaPrehled(owner, personId) {
       supabase.from("map_people")
         .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
         .eq("id", personId).maybeSingle(),
+      // Bez filtru na vlastníka: u zakázky ve spolupráci patří k člověku
+      // i to, co zapsal partner. Co vidět nemáš, ti databáze nevydá.
       supabase.from("deal_participants")
-        .select(`id, role, podil, poradi, forma_dohody, poznamka, ${projekt}`)
-        .eq("owner", owner).eq("person_id", personId),
+        .select(`id, owner, role, podil, poradi, forma_dohody, poznamka, ${projekt}`)
+        .eq("person_id", personId),
       supabase.from("deal_approaches")
-        .select(`id, stav, aktualne, aktualne_at, odeslano_at, cena_jednana,
+        .select(`id, owner, stav, aktualne, aktualne_at, odeslano_at, cena_jednana,
                  pripominka_at, poznamka, ${projekt}`)
-        .eq("owner", owner).eq("person_id", personId).is("deleted_at", null),
+        .eq("person_id", personId).is("deleted_at", null),
       supabase.from("deal_cards")
         .select("id, smer, nazev, typy, kraje, cena_od, cena_do, velikost_od, jednotka, aktivni, poznamka")
         .eq("owner", owner).eq("person_id", personId),
       supabase.from("map_facts")
-        .select("id, content, context, happened_at, projekt:deal_projects (kod, nazev)")
-        .eq("owner", owner).eq("person_id", personId)
+        .select("id, owner, content, context, happened_at, projekt:deal_projects (kod, nazev)")
+        .eq("person_id", personId)
         .order("happened_at", { ascending: false }).limit(60),
     ]);
     return {
