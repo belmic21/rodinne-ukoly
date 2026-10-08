@@ -13,8 +13,8 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  hledejLidi, nactiLidi, nactiKarty, ulozKartu, smazKartu, ulozRole, zalozOsobu,
-  popis, aktivni,
+  hledejLidi, nactiLidi, nactiKarty, ulozKartu, smazKartu, zalozOsobu, ulozOsobu,
+  nactiCiselniky, popis, aktivni,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label,
@@ -106,7 +106,7 @@ export default function Site({ theme, owner, ciselniky, onOtevriOsobu }) {
       )}
 
       {vybiram && (
-        <VyberOsoby theme={theme} owner={owner}
+        <VyberOsoby theme={theme} owner={owner} ciselniky={ciselniky}
           onVyber={(osoba) => {
             setVybiram(false);
             setEdituji({ person_id: osoba.id, osoba, smer, typy: [], kraje: [], aktivni: true });
@@ -237,12 +237,11 @@ function Prepinac({ theme, hodnota, onZmena, volby }) {
    už v Mapě je — nový člověk se zakládá tam, aby nevznikaly
    dvě různé evidence lidí. */
 
-export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
+export function VyberOsoby({ theme, owner, ciselniky, onVyber, onZrus }) {
   const [q, setQ] = useState("");
   const [lidi, setLidi] = useState([]);
   const [busy, setBusy] = useState(false);
   const [zakladam, setZakladam] = useState(false);
-  const [kontakt, setKontakt] = useState("");
   const [chyba, setChyba] = useState(null);
   const ref = useRef(null);
 
@@ -258,15 +257,8 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
     return () => { zrus = true; clearTimeout(id); };
   }, [owner, q]);
 
-  // Nového člověka založíme rovnou tady. Dřív se muselo odskočit
-  // do Mapy a vrátit se — uprostřed zadávání zakázky je to otrava.
-  const zaloz = async () => {
-    setChyba(null);
-    const res = await zalozOsobu(owner, q, kontakt);
-    if (!res.ok) { setChyba(res.chyba); return; }
-    onVyber(res.osoba);
-  };
-
+  // Nového člověka založíme rovnou tady, a to celého včetně rolí.
+  // Dřív se musel odskočit do Mapy a role doplnit až v Síti.
   const presnaShoda = lidi.some(
     o => o.name.trim().toLowerCase() === q.trim().toLowerCase()
   );
@@ -278,8 +270,8 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
         <input ref={ref} value={q}
           onChange={e => { setQ(e.target.value); setChyba(null); }}
           onKeyDown={e => {
-            if (e.key === "Enter" && lzeZalozit && zakladam) zaloz();
             if (e.key === "Enter" && lidi.length === 1 && !zakladam) onVyber(lidi[0]);
+            else if (e.key === "Enter" && lzeZalozit && !zakladam) setZakladam(true);
           }}
           placeholder="Koho hledáš? Piš jméno…"
           style={{ ...input(theme), flex: 1 }} />
@@ -322,15 +314,10 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
             Zakládám <strong style={{ color: theme.text }}>{q.trim()}</strong>.
             Přibude i do Mapy, takže ho příště najdeš i tam.
           </div>
-          <input value={kontakt} onChange={e => setKontakt(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") zaloz(); }}
-            placeholder="Telefon, mail nebo firma — nepovinné"
-            style={{ ...input(theme), marginBottom: 7 }} />
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={zaloz} style={btnMain(theme)}>ZALOŽIT A POUŽÍT</button>
-            <button onClick={() => { setZakladam(false); setChyba(null); }}
-              style={btnGhost(theme)}>zpět</button>
-          </div>
+          <KontaktEditor theme={theme} owner={owner} ciselniky={ciselniky}
+            predvyplnenoJmeno={q.trim()}
+            onHotovo={(o) => onVyber(o)}
+            onZrus={() => { setZakladam(false); setChyba(null); }} />
         </div>
       )}
 
@@ -339,6 +326,151 @@ export function VyberOsoby({ theme, owner, onVyber, onZrus }) {
           Začni psát jméno. Koho nenajdeš, můžeš rovnou založit.
         </div>
       )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   EDITOR KONTAKTU — jeden pro celou aplikaci
+
+   Dřív byly tři: jeden v Síti (jméno, kontakt, role), druhý ve
+   výběru u zakázky (jméno a kontakt, role nikde) a třetí v Mapě
+   (jméno, kde jsi ho poznal, přezdívky, poznámka, role nikde).
+   Podle toho, kterým oknem jsi šel, se dalo vyplnit něco jiného.
+
+   Tohle je ten jediný. Pole jsou všude stejná a ukládá je stejná
+   funkce. `extra` je místo pro tlačítka, která patří jen jednomu
+   oknu — mazání a slučování v Mapě.
+   ════════════════════════════════════════════════════════ */
+
+export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = null,
+  predvyplnenoJmeno = "", onHotovo, onZrus, extra = null, autoFocus = true }) {
+  const novy = !osoba?.id;
+  // Číselníky si umí načíst sám. Karta v Mapě o nich nic neví,
+  // a bez nich by chyběly role — přesně ta věc, která tam chyběla dřív.
+  const [vlastniC, setVlastniC] = useState({});
+  const ciselniky = ciselnikyProp && Object.keys(ciselnikyProp).length
+    ? ciselnikyProp : vlastniC;
+  useEffect(() => {
+    if (ciselnikyProp && Object.keys(ciselnikyProp).length) return;
+    if (!owner) return;
+    let zrus = false;
+    nactiCiselniky(owner).then(c => { if (!zrus) setVlastniC(c); });
+    return () => { zrus = true; };
+  }, [owner, ciselnikyProp]);
+  const [f, setF] = useState(() => ({
+    name: osoba?.name || predvyplnenoJmeno || "",
+    contact: osoba?.contact || "",
+    met_at: osoba?.met_at || "",
+    note: osoba?.note || "",
+    aliases: Array.isArray(osoba?.aliases) ? osoba.aliases.join(", ") : (osoba?.aliases || ""),
+    role_tagy: osoba?.role_tagy || [],
+  }));
+  const [chyba, setChyba] = useState(null);
+  const [uklada, setUklada] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (autoFocus) setTimeout(() => ref.current?.focus(), 60);
+  }, [autoFocus]);
+
+  const uprav = (k, v) => { setF(p => ({ ...p, [k]: v })); setChyba(null); };
+  const prepniRoli = (k) => setF(p => ({
+    ...p,
+    role_tagy: p.role_tagy.includes(k)
+      ? p.role_tagy.filter(x => x !== k)
+      : [...p.role_tagy, k],
+  }));
+
+  const uloz = async () => {
+    setUklada(true); setChyba(null);
+    const res = novy ? await zalozOsobu(owner, f) : await ulozOsobu(osoba.id, f);
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba); return; }
+    onHotovo?.(res.osoba);
+  };
+
+  const naEnter = (e) => { if (e.key === "Enter") uloz(); };
+
+  return (
+    <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        gap: 7, marginBottom: 7,
+      }}>
+        <div>
+          <span style={label(theme)}>Jméno</span>
+          <input ref={ref} value={f.name} onChange={e => uprav("name", e.target.value)}
+            onKeyDown={naEnter} placeholder="Jméno a příjmení"
+            style={{ ...input(theme), fontWeight: 700 }} />
+        </div>
+        <div>
+          <span style={label(theme)}>Kontakt</span>
+          <input value={f.contact} onChange={e => uprav("contact", e.target.value)}
+            onKeyDown={naEnter} placeholder="Telefon, mail, firma" style={input(theme)} />
+        </div>
+      </div>
+
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        gap: 7, marginBottom: 8,
+      }}>
+        <div>
+          <span style={label(theme)}>Kde jsi ho poznal</span>
+          <input value={f.met_at} onChange={e => uprav("met_at", e.target.value)}
+            onKeyDown={naEnter} placeholder="Golf v Berouně, konference" style={input(theme)} />
+        </div>
+        <div>
+          <span style={label(theme)}>Přezdívky</span>
+          <input value={f.aliases} onChange={e => uprav("aliases", e.target.value)}
+            onKeyDown={naEnter} placeholder="Peťa, Petr od aut — oddělené čárkou"
+            style={input(theme)} />
+        </div>
+      </div>
+
+      {/* Role tady, ne až někde jinde. Tohle je ta databáze investorů:
+          označíš "investor" a máš ho v Síti pod filtrem. */}
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Čím ti je</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+          {aktivni(ciselniky, "role").map(r => {
+            const zap = f.role_tagy.includes(r.key);
+            return (
+              <button key={r.key} type="button" onClick={() => prepniRoli(r.key)} style={{
+                ...btn(),
+                background: zap ? theme.accentSoft : "transparent",
+                border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+                color: zap ? theme.accent : theme.textSub,
+                fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
+                fontWeight: zap ? 700 : 600,
+              }}>{r.label}</button>
+            );
+          })}
+          {aktivni(ciselniky, "role").length === 0 && (
+            <span style={{ fontSize: "11px", color: theme.textSub }}>
+              Role se zakládají v nastavení → Seznamy.
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Poznámka</span>
+        <input value={f.note} onChange={e => uprav("note", e.target.value)}
+          onKeyDown={naEnter} placeholder="Co je o něm dobré vědět" style={input(theme)} />
+      </div>
+
+      {chyba && (
+        <div style={{ fontSize: "11.5px", color: theme.red, marginBottom: 7 }}>{chyba}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={uloz} disabled={!f.name.trim() || uklada} style={{
+          ...btnMain(theme), opacity: f.name.trim() && !uklada ? 1 : 0.5,
+        }}>{uklada ? "UKLÁDÁM…" : novy ? "ZALOŽIT" : "ULOŽIT"}</button>
+        {onZrus && <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>}
+        {extra}
+      </div>
     </div>
   );
 }
@@ -386,7 +518,7 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
       cena_od: parsePenize(f.cena_od),
       cena_do: parsePenize(f.cena_do),
     });
-    if (res.ok && karta.person_id) await ulozRole(karta.person_id, role);
+    if (res.ok && karta.person_id) await ulozOsobu(karta.person_id, { role_tagy: role });
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
     onHotovo();
@@ -622,6 +754,7 @@ function Kontakty({ theme, owner, ciselniky, onOtevri }) {
   const [busy, setBusy] = useState(true);
   const [obnov, setObnov] = useState(0);
   const [zakladam, setZakladam] = useState(false);
+  const [upravuji, setUpravuji] = useState(null);   // kterého člověka edituju
   const ref = useRef(null);
 
   useEffect(() => {
@@ -656,8 +789,9 @@ function Kontakty({ theme, owner, ciselniky, onOtevri }) {
       </div>
 
       {zakladam && (
-        <NovyClovek theme={theme} owner={owner} ciselniky={ciselniky}
-          onHotovo={() => { setZakladam(false); setObnov(k => k + 1); }} />
+        <KontaktEditor theme={theme} owner={owner} ciselniky={ciselniky}
+          onHotovo={() => { setZakladam(false); setObnov(k => k + 1); }}
+          onZrus={() => setZakladam(false)} />
       )}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
@@ -693,97 +827,42 @@ function Kontakty({ theme, owner, ciselniky, onOtevri }) {
       )}
 
       {lidi.map(o => (
+        upravuji === o.id ? (
+          <KontaktEditor key={o.id} theme={theme} owner={owner} ciselniky={ciselniky}
+            osoba={o}
+            onHotovo={() => { setUpravuji(null); setObnov(k => k + 1); }}
+            onZrus={() => setUpravuji(null)} />
+        ) : (
         <div key={o.id} onClick={() => onOtevri?.(o.id)} style={{
           ...card(theme), padding: "9px 11px", marginBottom: 6, cursor: "pointer",
+          display: "flex", alignItems: "flex-start", gap: 8,
         }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{o.name}</span>
-            {o.contact && (
-              <span style={{ fontSize: "11.5px", color: theme.textSub }}>{o.contact}</span>
-            )}
-            <span style={{ flex: 1 }} />
-            {(o.role_tagy || []).map(r => (
-              <Znacka key={r} theme={theme}>{popis(ciselniky, "role", r)}</Znacka>
-            ))}
-          </div>
-          {(o.met_at || o.note) && (
-            <div style={{ fontSize: "11px", color: theme.textMid, marginTop: 2 }}>
-              {[o.met_at, o.note].filter(Boolean).join(" · ")}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{o.name}</span>
+              {o.contact && (
+                <span style={{ fontSize: "11.5px", color: theme.textSub }}>{o.contact}</span>
+              )}
+              <span style={{ flex: 1 }} />
+              {(o.role_tagy || []).map(r => (
+                <Znacka key={r} theme={theme}>{popis(ciselniky, "role", r)}</Znacka>
+              ))}
             </div>
-          )}
+            {(o.met_at || o.note) && (
+              <div style={{ fontSize: "11px", color: theme.textMid, marginTop: 2 }}>
+                {[o.met_at, o.note].filter(Boolean).join(" · ")}
+              </div>
+            )}
+          </div>
+          <button onClick={(e) => { e.stopPropagation(); setUpravuji(o.id); }}
+            title="Upravit kontakt" style={{
+              ...btn(), background: "transparent", color: theme.textSub,
+              fontSize: "12px", padding: "2px 5px",
+            }}>✎</button>
         </div>
+        )
       ))}
     </div>
   );
 }
 
-/* Rychlé založení — jméno, kontakt, role. Víc teď nepotřebuješ;
-   zbytek se doplní, až s tím člověkem něco poběží. */
-function NovyClovek({ theme, owner, ciselniky, onHotovo }) {
-  const [jmeno, setJmeno] = useState("");
-  const [kontakt, setKontakt] = useState("");
-  const [role, setRole] = useState([]);
-  const [chyba, setChyba] = useState(null);
-  const [uklada, setUklada] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => { setTimeout(() => ref.current?.focus(), 60); }, []);
-
-  const uloz = async () => {
-    setUklada(true); setChyba(null);
-    const res = await zalozOsobu(owner, jmeno, kontakt);
-    if (!res.ok) { setUklada(false); setChyba(res.chyba); return; }
-    if (role.length) await ulozRole(res.osoba.id, role);
-    setUklada(false);
-    setJmeno(""); setKontakt(""); setRole([]);
-    ref.current?.focus();
-    onHotovo();
-  };
-
-  return (
-    <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        <input ref={ref} value={jmeno} onChange={e => { setJmeno(e.target.value); setChyba(null); }}
-          onKeyDown={e => { if (e.key === "Enter") uloz(); }}
-          placeholder="Jméno" style={{ ...input(theme), flex: 1 }} />
-        <input value={kontakt} onChange={e => setKontakt(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") uloz(); }}
-          placeholder="Telefon, mail, firma" style={{ ...input(theme), flex: 1 }} />
-      </div>
-
-      <div style={{ marginBottom: 8 }}>
-        <span style={label(theme)}>Čím ti je</span>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-          {aktivni(ciselniky, "role").map(r => {
-            const zap = role.includes(r.key);
-            return (
-              <button key={r.key}
-                onClick={() => setRole(x => zap ? x.filter(y => y !== r.key) : [...x, r.key])}
-                style={{
-                  ...btn(),
-                  background: zap ? theme.accentSoft : "transparent",
-                  border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
-                  color: zap ? theme.accent : theme.textSub,
-                  fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
-                  fontWeight: zap ? 700 : 600,
-                }}>{r.label}</button>
-            );
-          })}
-        </div>
-      </div>
-
-      {chyba && (
-        <div style={{ fontSize: "11.5px", color: theme.red, marginBottom: 7 }}>{chyba}</div>
-      )}
-
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <button onClick={uloz} disabled={!jmeno.trim() || uklada} style={{
-          ...btnMain(theme), opacity: jmeno.trim() && !uklada ? 1 : 0.5,
-        }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT A PSÁT DÁL"}</button>
-        <span style={{ fontSize: "10.5px", color: theme.textSub }}>
-          Po uložení zůstane okno otevřené, ať můžeš přepisovat telefon v jednom tahu.
-        </span>
-      </div>
-    </div>
-  );
-}
