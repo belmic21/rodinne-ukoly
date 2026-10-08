@@ -21,6 +21,7 @@ import {
 } from "./ui.js";
 import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
+import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -41,7 +42,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   const [otevrena, setOtevrena] = useState(null);
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
-  const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit
+  const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
+  const [uzivatele, setUzivatele] = useState(false);
   const hledatRef = useRef(null);
 
   const KROK = 25;
@@ -111,7 +113,20 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
         overflow: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
         fontFamily: FONT,
       }}>
-        {nova ? (
+        {uzivatele ? (
+          <>
+            <div style={{
+              position: "sticky", top: 0, zIndex: 3, background: theme.bg,
+              padding: "14px 16px 0", display: "flex", justifyContent: "flex-end",
+            }}>
+              <button onClick={onClose} style={{
+                background: "none", border: "none", fontSize: "20px",
+                cursor: "pointer", color: theme.textSub, padding: "0 4px",
+              }}>×</button>
+            </div>
+            <Uzivatele theme={theme} owner={owner} onZpet={() => setUzivatele(false)} />
+          </>
+        ) : nova ? (
           <Detail
             theme={theme} owner={owner} ciselniky={ciselniky}
             predvyplneno={nova} onBack={zavri} onClose={onClose}
@@ -134,6 +149,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
                   {[
                     { k: "zakazky", t: "Zakázky" },
                     { k: "sit",     t: "Síť" },
+                    { k: "sdilene", t: "Sdíleno se mnou" },
                   ].map(z => {
                     const zap = zalozka === z.k;
                     return (
@@ -148,6 +164,12 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
                     );
                   })}
                 </div>
+                {currentUser?.admin && (
+                  <button onClick={() => setUzivatele(true)} title="Uživatelé" style={{
+                    ...btn(), background: "transparent", color: theme.textSub,
+                    fontSize: "14px", padding: "2px 6px",
+                  }}>⚙</button>
+                )}
                 <span title={`modul obchod ${OBCHOD_VERZE}`} style={{
                   fontSize: "9.5px", color: theme.textDim,
                   fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
@@ -197,6 +219,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
 
             {zalozka === "sit" ? (
               <Site theme={theme} owner={owner} ciselniky={ciselniky} />
+            ) : zalozka === "sdilene" ? (
+              <SdilenoSeMnou theme={theme} ciselniky={ciselniky} />
             ) : (
               /* ══ Seznam zakázek ══ */
               <div style={{ padding: "10px 16px 18px" }}>
@@ -612,6 +636,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null, 
               projectId={zakazkaId} />
             <Geneze theme={theme} owner={owner} ciselniky={ciselniky}
               zakazka={{ id: zakazkaId, nazev: f.nazev }} />
+            <SdileniZakazky theme={theme} owner={owner} projectId={zakazkaId} />
           </>
         )}
 
