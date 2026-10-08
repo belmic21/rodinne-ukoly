@@ -24,6 +24,7 @@ import { Retezec, Geneze } from "./Zakazka.jsx";
 import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 import Ciselniky from "./Ciselniky.jsx";
 import Osoba from "./Osoba.jsx";
+import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -83,8 +84,16 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
     let zrus = false;
     setBusy(true);
     const id = setTimeout(async () => {
+      // Výběr oblasti se tady rozpadne na kraje, které do ní patří.
+      const dotaz = { ...filtr };
+      if (String(filtr.kraj || "").startsWith("oblast:")) {
+        const g = filtr.kraj.slice(7);
+        dotaz.kraje = (ciselniky.kraj || [])
+          .filter(k => (k.skupina || "") === g).map(k => k.key);
+        dotaz.kraj = "";
+      }
       const [z, p] = await Promise.all([
-        nactiZakazky(owner, filtr, kolik + 1, 0),
+        nactiZakazky(owner, dotaz, kolik + 1, 0),
         nactiPanel(owner),
       ]);
       if (zrus) return;
@@ -94,7 +103,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
       setBusy(false);
     }, filtr.hledat ? 280 : 0);
     return () => { zrus = true; clearTimeout(id); };
-  }, [owner, filtr, kolik, obnov, zalozka]);
+  }, [owner, filtr, kolik, obnov, zalozka, ciselniky]);
 
   const zmenFiltr = useCallback((k, v) => {
     setKolik(KROK);
@@ -204,6 +213,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                   {[
                     { k: "zakazky", t: "Zakázky" },
                     { k: "sit",     t: "Síť" },
+                    { k: "terminy", t: "Termíny" },
                     { k: "sdilene", t: "Sdíleno se mnou" },
                   ].map(z => {
                     const zap = zalozka === z.k;
@@ -242,7 +252,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
 
               {zalozka === "zakazky" && (
                 <>
-                  <Panel theme={theme} panel={panel} />
+                  <Panel theme={theme} panel={panel}
+                    onTerminy={() => setZalozka("terminy")} />
 
                   <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                     <input
@@ -275,6 +286,9 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
             {zalozka === "sit" ? (
               <Site theme={theme} owner={owner} ciselniky={ciselniky}
                 onOtevriOsobu={setOsobaId} />
+            ) : zalozka === "terminy" ? (
+              <TerminyPrehled theme={theme} owner={owner}
+                onOtevriZakazku={otevriZakazku} onOtevriOsobu={setOsobaId} />
             ) : zalozka === "sdilene" ? (
               <SdilenoSeMnou theme={theme} ciselniky={ciselniky} />
             ) : (
@@ -327,20 +341,25 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
 
 /* ── Panel: co čeká na mě ──────────────────────────── */
 
-function Panel({ theme, panel }) {
+function Panel({ theme, panel, onTerminy }) {
   const polozky = [
     { k: "zakazek_aktivnich", t: "aktivních", barva: theme.text },
     { k: "osloveni_ceka",     t: "čeká na ně", barva: theme.accent },
-    { k: "pripominky_dnes",   t: "připomínky", barva: theme.yellow },
-    { k: "bez_odezvy_14dni",  t: "ticho 14 dní", barva: theme.red },
+    { k: "terminy_po",        t: "po termínu", barva: theme.red,    kam: "terminy" },
+    { k: "terminy_tyden",     t: "do týdne",   barva: theme.yellow, kam: "terminy" },
+    { k: "bez_odezvy_14dni",  t: "ticho 14 dní", barva: theme.textSub },
   ];
   return (
     <div style={{ display: "flex", gap: 6 }}>
       {polozky.map(p => {
         const n = panel ? Number(panel[p.k] || 0) : 0;
         return (
-          <div key={p.k} style={{
+          <div key={p.k}
+            onClick={() => { if (p.kam === "terminy") onTerminy?.(); }}
+            style={{
             ...card(theme), flex: 1, padding: "7px 10px", textAlign: "center",
+            cursor: p.kam ? "pointer" : "default",
+            borderColor: p.kam && n > 0 ? `${p.barva}55` : theme.cardBorder,
           }}>
             <div style={{
               fontSize: "17px", fontWeight: 700, lineHeight: 1.1,
@@ -370,8 +389,8 @@ function Filtry({ theme, ciselniky, filtr, zmen }) {
     }}>
       <Select theme={theme} nadpis="Typ" hodnota={filtr.typ}
         polozky={aktivni(ciselniky, "typ")} onZmena={v => zmen("typ", v)} />
-      <Select theme={theme} nadpis="Kraj" hodnota={filtr.kraj}
-        polozky={aktivni(ciselniky, "kraj")} skupiny onZmena={v => zmen("kraj", v)} />
+      <SelectKraj theme={theme} hodnota={filtr.kraj}
+        polozky={aktivni(ciselniky, "kraj")} onZmena={v => zmen("kraj", v)} />
       <Select theme={theme} nadpis="Fáze" hodnota={filtr.faze}
         polozky={aktivni(ciselniky, "faze")} onZmena={v => zmen("faze", v)} />
       <Select theme={theme} nadpis="Stav" hodnota={filtr.stav}
@@ -416,6 +435,36 @@ function Filtry({ theme, ciselniky, filtr, zmen }) {
             placeholder="vlastní" style={{ ...input(theme), maxWidth: 90 }} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/* Kraj, nebo rovnou celá oblast. Investor, který bere Prahu
+   a střední Čechy, nemá vybírat dva kraje zvlášť. */
+function SelectKraj({ theme, hodnota, polozky, onZmena }) {
+  const skupiny = useMemo(() => {
+    const m = new Map();
+    for (const p of polozky) {
+      const g = p.skupina || "Ostatní";
+      if (!m.has(g)) m.set(g, []);
+      m.get(g).push(p);
+    }
+    return [...m.entries()];
+  }, [polozky]);
+
+  return (
+    <div>
+      <span style={label(theme)}>Kraj nebo oblast</span>
+      <select value={hodnota || ""} onChange={e => onZmena(e.target.value)}
+        style={{ ...input(theme), cursor: "pointer" }}>
+        <option value="">kdekoli</option>
+        {skupiny.map(([g, items]) => (
+          <optgroup key={g} label={g}>
+            <option value={`oblast:${g}`}>— celá oblast {g} —</option>
+            {items.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </optgroup>
+        ))}
+      </select>
     </div>
   );
 }
@@ -711,6 +760,8 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             <Geneze theme={theme} owner={owner} ciselniky={ciselniky}
               zakazka={{ id: zakazkaId, nazev: f.nazev }}
               onOtevriOsobu={onOtevriOsobu} />
+            <TerminySekce theme={theme} owner={owner} projectId={zakazkaId}
+              nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
             <SdileniZakazky theme={theme} owner={owner} projectId={zakazkaId} />
           </>
         )}

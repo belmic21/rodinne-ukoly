@@ -12,7 +12,7 @@
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect } from "react";
-import { osobaPrehled, popis } from "./api.js";
+import { osobaPrehled, ulozRole, popis, aktivni } from "./api.js";
 import {
   card, btn, btnGhost, label,
   penizeKratce, datumKratce, jakDavno,
@@ -65,16 +65,8 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
         </div>
       </div>
 
-      {(o.role_tagy || []).length > 0 && (
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
-          {o.role_tagy.map(r => (
-            <span key={r} style={{
-              fontSize: "10.5px", fontWeight: 700, color: theme.textSub,
-              border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: "2px 8px",
-            }}>{popis(ciselniky, "role", r)}</span>
-          ))}
-        </div>
-      )}
+      <Role theme={theme} ciselniky={ciselniky} personId={o.id}
+        puvodni={o.role_tagy || []} />
 
       {/* Shrnutí jednou větou — co odpovědět do telefonu */}
       <div style={{
@@ -252,6 +244,64 @@ function Sekce({ theme, nadpis, children }) {
     <div style={{ marginBottom: 14 }}>
       <div style={{ ...label(theme), marginBottom: 6 }}>{nadpis}</div>
       {children}
+    </div>
+  );
+}
+
+/* Role člověka — čím ti je obecně. Mění se rovnou tady, aby se
+   kvůli přeřazení nemuselo otvírat nic dalšího. */
+function Role({ theme, ciselniky, personId, puvodni }) {
+  const [role, setRole] = useState(puvodni);
+  const [uprava, setUprava] = useState(false);
+  const [uklada, setUklada] = useState(false);
+
+  const prepni = async (k) => {
+    const nove = role.includes(k) ? role.filter(x => x !== k) : [...role, k];
+    setRole(nove);
+    setUklada(true);
+    await ulozRole(personId, nove);
+    setUklada(false);
+  };
+
+  if (!uprava) {
+    return (
+      <div onClick={() => setUprava(true)} title="Upravit role"
+        style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10, cursor: "pointer" }}>
+        {role.length === 0 ? (
+          <span style={{ fontSize: "11px", color: theme.yellow }}>+ čím ti je</span>
+        ) : role.map(r => (
+          <span key={r} style={{
+            fontSize: "10.5px", fontWeight: 700, color: theme.textSub,
+            border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: "2px 8px",
+          }}>{popis(ciselniky, "role", r)}</span>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <span style={label(theme)}>
+        Čím ti je{uklada ? " · ukládám…" : ""}
+      </span>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+        {aktivni(ciselniky, "role").map(r => {
+          const zap = role.includes(r.key);
+          return (
+            <button key={r.key} onClick={() => prepni(r.key)} style={{
+              ...btn(),
+              background: zap ? theme.accentSoft : "transparent",
+              border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+              color: zap ? theme.accent : theme.textSub,
+              fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
+              fontWeight: zap ? 700 : 600,
+            }}>{r.label}</button>
+          );
+        })}
+        <button onClick={() => setUprava(false)} style={{
+          ...btnGhost(theme), fontSize: "11px", padding: "4px 9px",
+        }}>hotovo</button>
+      </div>
     </div>
   );
 }

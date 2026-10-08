@@ -239,7 +239,9 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
       .is("deleted_at", null);
 
     if (filtr.typ)       q = q.eq("typ", filtr.typ);
-    if (filtr.kraj)      q = q.eq("kraj", filtr.kraj);
+    // Jeden kraj, nebo celá oblast (Čechy, Morava) jako seznam krajů.
+    if (filtr.kraje && filtr.kraje.length) q = q.in("kraj", filtr.kraje);
+    else if (filtr.kraj) q = q.eq("kraj", filtr.kraj);
     if (filtr.faze)      q = q.eq("faze", filtr.faze);
     if (filtr.stav)      q = q.eq("stav", filtr.stav);
     if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
@@ -388,6 +390,35 @@ export async function zalozOsobu(owner, jmeno, kontakt = "") {
       return { ok: false, chyba: "Někdo s tímhle jménem už v Mapě je — najdi ho v seznamu." };
     }
     return selhalo("zalozOsobu", e);
+  }
+}
+
+/* Prostý seznam lidí, ne hledání. Na přepisování kontaktů z telefonu
+   a na otázku „ukaž mi všechny prostředníky“. Role se filtruje
+   překryvem, takže člověk s víc rolemi se najde pod každou z nich. */
+export async function nactiLidi(owner, filtr = {}, limit = 300) {
+  if (!owner) return [];
+  try {
+    let q = supabase
+      .from("map_people")
+      .select("id, name, contact, met_at, note, role_tagy")
+      .eq("owner", owner);
+
+    if (filtr.role) q = q.contains("role_tagy", [filtr.role]);
+    if (filtr.bezRole) q = q.eq("role_tagy", "{}");
+
+    const h = (filtr.hledat || "").trim();
+    if (h) {
+      const v = h.replace(/[%,]/g, " ");
+      q = q.or(`name.ilike.%${v}%,contact.ilike.%${v}%,met_at.ilike.%${v}%,note.ilike.%${v}%`);
+    }
+
+    const { data, error } = await q.order("name").limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiLidi", e);
+    return [];
   }
 }
 
@@ -715,6 +746,177 @@ export async function smazOsloveni(id) {
     return { ok: true };
   } catch (e) {
     return selhalo("smazOsloveni", e);
+  }
+}
+
+/* ── Termíny ─────────────────────────────────────────────
+   Termín patří k zakázce a volitelně ke konkrétnímu člověku.
+   U jedné zakázky jich může být víc: s investorem jeden,
+   s klientem druhý, se zprostředkovatelem třetí.
+
+   Barva se počítá z počtu zbývajících dní, ne z typu termínu —
+   u výkupu je týden stres, u due diligence ne, ale naléhavost
+   je nakonec vždycky jen „kolik času zbývá“. */
+
+const TERMIN = `
+  id, project_id, person_id, nazev, datum, poznamka,
+  hotovo_at, reminder_id, created_at,
+  osoba:map_people (id, name)
+`;
+
+export async function nactiTerminy(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("deal_terminy").select(TERMIN)
+      .eq("project_id", projectId)
+      .order("datum", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiTerminy", e);
+    return [];
+  }
+}
+
+export async function prehledTerminu(owner, dni = 60) {
+  if (!owner) return [];
+  try {
+    const { data, error } = await supabase.rpc("deal_terminy_prehled", {
+      p_owner: owner, p_dni: dni,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("prehledTerminu", e);
+    return [];
+  }
+}
+
+export async function ulozTermin(owner, data, popisZakazky = "") {
+  if (!owner || !data?.project_id) return { ok: false, chyba: "Chybí zakázka." };
+  if (!data.nazev?.trim()) return { ok: false, chyba: "Napiš, o jaký termín jde." };
+  if (!data.datum) return { ok: false, chyba: "Chybí datum." };
+
+  const telo = {
+    nazev: data.nazev.trim(),
+    datum: data.datum,
+    person_id: data.person_id || null,
+    poznamka: prazdnoNaNull(data.poznamka),
+  };
+
+  try {
+    // Připomínka jede přes stávající systém připomínek, aby se ozvala
+    // i když aplikaci neotevřeš. Ukládá se zvlášť a termín si na ni
+    // drží odkaz, takže se dá posunout nebo zrušit zároveň s ním.
+    let reminderId = data.reminder_id || null;
+    if (data.pripomenout) {
+      const text = `Termín: ${telo.nazev}${popisZakazky ? ` — ${popisZakazky}` : ""}`;
+      const kdy = new Date(telo.datum + "T09:00:00").toISOString();
+      reminderId = await ulozPripominku(owner, reminderId, text, kdy);
+    } else if (reminderId) {
+      await zrusPripominku(reminderId);
+      reminderId = null;
+    }
+    telo.reminder_id = reminderId;
+
+    const q = data.id
+      ? supabase.from("deal_terminy").update(telo).eq("id", data.id)
+      : supabase.from("deal_terminy").insert({ ...telo, owner, project_id: data.project_id });
+    const { data: row, error } = await q.select(TERMIN).single();
+    if (error) throw error;
+    return { ok: true, termin: row };
+  } catch (e) {
+    return selhalo("ulozTermin", e);
+  }
+}
+
+export async function splnTermin(id, hotovo = true, reminderId = null) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_terminy")
+      .update({ hotovo_at: hotovo ? new Date().toISOString() : null })
+      .eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    if (hotovo && reminderId) await zrusPripominku(reminderId);
+    return { ok: true };
+  } catch (e) {
+    return selhalo("splnTermin", e);
+  }
+}
+
+export async function smazTermin(id, reminderId = null) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_terminy").delete().eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    if (reminderId) await zrusPripominku(reminderId);
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazTermin", e);
+  }
+}
+
+// Zapisuje do tabulky připomínek, kterou používá zbytek aplikace.
+// Vrátí id, nebo null — selhání připomínky nesmí shodit uložení termínu.
+async function ulozPripominku(owner, id, text, kdy) {
+  try {
+    if (id) {
+      const { data, error } = await supabase
+        .from("reminders")
+        .update({ text, remind_at: kdy, dismissed_at: null, notified: false })
+        .eq("id", id).select("id");
+      if (error) throw error;
+      if (data && data.length) return id;
+    }
+    const { data, error } = await supabase
+      .from("reminders")
+      .insert({ text, remind_at: kdy, created_by: owner })
+      .select("id").single();
+    if (error) throw error;
+    return data?.id || null;
+  } catch (e) {
+    console.warn("[obchod/ulozPripominku]", e?.message || e);
+    return null;
+  }
+}
+
+async function zrusPripominku(id) {
+  if (!id) return;
+  try {
+    await supabase.from("reminders")
+      .update({ dismissed_at: new Date().toISOString() }).eq("id", id);
+  } catch (e) {
+    console.warn("[obchod/zrusPripominku]", e?.message || e);
+  }
+}
+
+/* Naléhavost podle zbývajících dní. Jedno místo, ať se barvy
+   neliší mezi seznamem a detailem. */
+export function nalehavost(zbyva) {
+  const d = Number(zbyva);
+  if (!isFinite(d)) return { klic: "zadny", popis: "" };
+  // 2 dny, ale 5 dní — bez toho to v seznamu drhne.
+  const dny = (n) => `${n} ${n === 1 ? "den" : n < 5 ? "dny" : "dní"}`;
+  if (d < 0)   return { klic: "po",    popis: d === -1 ? "včera" : `${dny(-d)} po termínu` };
+  if (d === 0) return { klic: "dnes",  popis: "dnes" };
+  if (d === 1) return { klic: "dnes",  popis: "zítra" };
+  if (d <= 7)  return { klic: "tyden", popis: `za ${dny(d)}` };
+  if (d <= 30) return { klic: "mesic", popis: `za ${dny(d)}` };
+  return { klic: "dale", popis: `za ${dny(d)}` };
+}
+
+export function barvaTerminu(theme, klic) {
+  switch (klic) {
+    case "po":    return theme.red;
+    case "dnes":  return theme.orange || theme.red;
+    case "tyden": return theme.yellow;
+    case "mesic": return theme.accent;
+    default:      return theme.textSub;
   }
 }
 
