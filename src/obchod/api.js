@@ -210,6 +210,30 @@ export async function hledejLidi(owner, query = "", limit = 20) {
   }
 }
 
+// Nový člověk rovnou odsud, bez odskoku do Mapy. Zapisuje se do
+// stejné tabulky, takže v Mapě na něj narazíš úplně stejně.
+export async function zalozOsobu(owner, jmeno, kontakt = "") {
+  const n = (jmeno || "").trim();
+  if (!owner || !n) return { ok: false, chyba: "Chybí jméno." };
+  if (n.length > 60 || n.split(/\s+/).length > 5) {
+    return { ok: false, chyba: "To vypadá spíš na větu než na jméno. Zadej jen jméno." };
+  }
+  try {
+    const { data, error } = await supabase
+      .from("map_people")
+      .insert({ owner, name: n, contact: kontakt.trim() || null })
+      .select("id, name, contact, met_at, role_tagy")
+      .single();
+    if (error) throw error;
+    return { ok: true, osoba: data };
+  } catch (e) {
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Někdo s tímhle jménem už v Mapě je — najdi ho v seznamu." };
+    }
+    return selhalo("zalozOsobu", e);
+  }
+}
+
 export async function nactiOsobu(id) {
   if (!id) return null;
   try {
