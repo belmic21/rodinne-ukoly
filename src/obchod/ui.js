@@ -8,6 +8,12 @@
 
 import { useEffect } from "react";
 
+/* Verze modulu. Je schválně oddělená od verze v App.jsx:
+   obchod se dá aktualizovat samostatně, aniž by se sahalo
+   do hlavního souboru, a podle tohohle čísla poznáš,
+   která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
+export const OBCHOD_VERZE = "261008_0700";
+
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
 export const card = (th) => ({
