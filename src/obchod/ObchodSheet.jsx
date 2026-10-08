@@ -17,8 +17,9 @@ import {
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
-  useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno,
+  useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno, OBCHOD_VERZE,
 } from "./ui.js";
+import Site from "./Site.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -39,6 +40,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
   const [otevrena, setOtevrena] = useState(null);
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
+  const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit
   const hledatRef = useRef(null);
 
   const KROK = 25;
@@ -61,11 +63,13 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
 
   // Kurzor rovnou v hledání, ať se dá psát bez klikání.
   useEffect(() => {
-    if (!otevrena && !nova) setTimeout(() => hledatRef.current?.focus(), 80);
-  }, [otevrena, nova]);
+    if (!otevrena && !nova && zalozka === "zakazky") {
+      setTimeout(() => hledatRef.current?.focus(), 80);
+    }
+  }, [otevrena, nova, zalozka]);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!owner || zalozka !== "zakazky") return;
     let zrus = false;
     setBusy(true);
     const id = setTimeout(async () => {
@@ -80,7 +84,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
       setBusy(false);
     }, filtr.hledat ? 280 : 0);
     return () => { zrus = true; clearTimeout(id); };
-  }, [owner, filtr, kolik, obnov]);
+  }, [owner, filtr, kolik, obnov, zalozka]);
 
   const zmenFiltr = useCallback((k, v) => {
     setKolik(KROK);
@@ -125,68 +129,97 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "", onC
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                 <span style={{ fontSize: "16px" }}>💼</span>
-                <div style={{ flex: 1, fontSize: "14px", fontWeight: 700, color: theme.text }}>
-                  Obchod
+                <div style={{ display: "flex", gap: 4, flex: 1 }}>
+                  {[
+                    { k: "zakazky", t: "Zakázky" },
+                    { k: "sit",     t: "Síť" },
+                  ].map(z => {
+                    const zap = zalozka === z.k;
+                    return (
+                      <button key={z.k} onClick={() => setZalozka(z.k)} style={{
+                        ...btn(),
+                        background: zap ? theme.accentSoft : "transparent",
+                        border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
+                        color: zap ? theme.accent : theme.textSub,
+                        fontSize: "13px", fontWeight: 700, padding: "4px 11px",
+                        borderRadius: 8,
+                      }}>{z.t}</button>
+                    );
+                  })}
                 </div>
-                <button onClick={() => setNova({ nazev: "" })} style={btnMain(theme)}>
-                  + zakázka
-                </button>
+                <span title={`modul obchod ${OBCHOD_VERZE}`} style={{
+                  fontSize: "9.5px", color: theme.textDim,
+                  fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                }}>{OBCHOD_VERZE}</span>
+                {zalozka === "zakazky" && (
+                  <button onClick={() => setNova({ nazev: "" })} style={btnMain(theme)}>
+                    + zakázka
+                  </button>
+                )}
                 <button onClick={onClose} style={{
                   background: "none", border: "none", fontSize: "20px",
                   cursor: "pointer", color: theme.textSub, padding: "0 4px",
                 }}>×</button>
               </div>
 
-              <Panel theme={theme} panel={panel} />
+              {zalozka === "zakazky" && (
+                <>
+                  <Panel theme={theme} panel={panel} />
 
-              <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-                <input
-                  ref={hledatRef}
-                  value={filtr.hledat}
-                  onChange={e => zmenFiltr("hledat", e.target.value)}
-                  placeholder="Hledat — číslo zakázky, název, město…"
-                  style={{ ...input(theme), flex: 1 }}
-                />
-                <button onClick={() => setVicFiltru(v => !v)} style={{
-                  ...btnGhost(theme),
-                  background: vicFiltru || filtrAktivni ? theme.accentSoft : "transparent",
-                  color: vicFiltru || filtrAktivni ? theme.accent : theme.textSub,
-                  borderColor: vicFiltru || filtrAktivni ? theme.accentBorder : theme.cardBorder,
-                  whiteSpace: "nowrap",
-                }}>filtry</button>
-                {filtrAktivni && (
-                  <button onClick={() => { setFiltr(PRAZDNY_FILTR); setKolik(KROK); }}
-                    style={{ ...btnGhost(theme), whiteSpace: "nowrap" }}>zrušit</button>
+                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                    <input
+                      ref={hledatRef}
+                      value={filtr.hledat}
+                      onChange={e => zmenFiltr("hledat", e.target.value)}
+                      placeholder="Hledat — číslo zakázky, název, město…"
+                      style={{ ...input(theme), flex: 1 }}
+                    />
+                    <button onClick={() => setVicFiltru(v => !v)} style={{
+                      ...btnGhost(theme),
+                      background: vicFiltru || filtrAktivni ? theme.accentSoft : "transparent",
+                      color: vicFiltru || filtrAktivni ? theme.accent : theme.textSub,
+                      borderColor: vicFiltru || filtrAktivni ? theme.accentBorder : theme.cardBorder,
+                      whiteSpace: "nowrap",
+                    }}>filtry</button>
+                    {filtrAktivni && (
+                      <button onClick={() => { setFiltr(PRAZDNY_FILTR); setKolik(KROK); }}
+                        style={{ ...btnGhost(theme), whiteSpace: "nowrap" }}>zrušit</button>
+                    )}
+                  </div>
+
+                  {vicFiltru && (
+                    <Filtry theme={theme} ciselniky={ciselniky} filtr={filtr} zmen={zmenFiltr} />
+                  )}
+                </>
+              )}
+            </div>
+
+            {zalozka === "sit" ? (
+              <Site theme={theme} owner={owner} ciselniky={ciselniky} />
+            ) : (
+              /* ══ Seznam zakázek ══ */
+              <div style={{ padding: "10px 16px 18px" }}>
+                {busy && zakazky.length === 0 && (
+                  <Prazdno theme={theme}>Načítám…</Prazdno>
+                )}
+                {!busy && zakazky.length === 0 && (
+                  <Prazdno theme={theme}>
+                    {filtrAktivni
+                      ? "Nic nesedí. Zkus ubrat filtr."
+                      : "Zatím tu nic není. Tlačítkem nahoře založ první zakázku."}
+                  </Prazdno>
+                )}
+                {zakazky.map(z => (
+                  <Radek key={z.id} z={z} theme={theme} ciselniky={ciselniky}
+                    onOpen={() => setOtevrena(z)} />
+                ))}
+                {vice && (
+                  <button onClick={() => setKolik(k => k + KROK)} style={{
+                    ...btnGhost(theme), width: "100%", marginTop: 8, padding: "9px",
+                  }}>načíst další</button>
                 )}
               </div>
-
-              {vicFiltru && (
-                <Filtry theme={theme} ciselniky={ciselniky} filtr={filtr} zmen={zmenFiltr} />
-              )}
-            </div>
-
-            {/* ══ Seznam ══ */}
-            <div style={{ padding: "10px 16px 18px" }}>
-              {busy && zakazky.length === 0 && (
-                <Prazdno theme={theme}>Načítám…</Prazdno>
-              )}
-              {!busy && zakazky.length === 0 && (
-                <Prazdno theme={theme}>
-                  {filtrAktivni
-                    ? "Nic nesedí. Zkus ubrat filtr."
-                    : "Zatím tu nic není. Tlačítkem nahoře založ první zakázku."}
-                </Prazdno>
-              )}
-              {zakazky.map(z => (
-                <Radek key={z.id} z={z} theme={theme} ciselniky={ciselniky}
-                  onOpen={() => setOtevrena(z)} />
-              ))}
-              {vice && (
-                <button onClick={() => setKolik(k => k + KROK)} style={{
-                  ...btnGhost(theme), width: "100%", marginTop: 8, padding: "9px",
-                }}>načíst další</button>
-              )}
-            </div>
+            )}
           </>
         )}
       </div>
