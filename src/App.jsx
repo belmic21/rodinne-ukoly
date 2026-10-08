@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Com
 import { createPortal } from "react-dom";
 import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from "./supabase.js";
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
+import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -47,7 +48,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261008_0600";
+const FILE_VERSION = "261008_1620";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -10971,6 +10972,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
     { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
     { key: "z", dest: "obchod", icon: "💼", label: "Zakázka",      hint: "rodinný dům Beroun 3,5 mil" },
+    { key: "k", dest: "kdo",    icon: "👤", label: "Kdo",          hint: "jméno nebo telefon — co s ním běží" },
   ];
 
   const slash = useMemo(() => {
@@ -10990,15 +10992,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   /* Po "/m " se nabídka mění na živé hledání lidí. Píšeš "mar" a rovnou
      vidíš Martina, Martinu i Marka; dalším písmenem se výběr zužuje.
      Vybereš ze seznamu, nebo založíš nového — všechno bez otevírání Mapy. */
-  const mapaCmd = !!slash && (slash.hits[slashIdx] || slash.hits[0])?.dest === "mapa";
+  const cilCmd = (slash?.hits[slashIdx] || slash?.hits[0])?.dest;
+  const mapaCmd = !!slash && cilCmd === "mapa";
+  // /k hledá ve stejném seznamu lidí jako /m, jen místo zápisu
+  // otevře přehled toho člověka v Obchodu.
+  const kdoCmd  = !!slash && cilCmd === "kdo";
+  const lidiCmd = mapaCmd || kdoCmd;
   const mapaParts = useMemo(() => {
-    if (!slash || !mapaCmd) return null;
+    if (!slash || !lidiCmd) return null;
     const raw = slash.rest || "";
     const i = raw.indexOf(":");
     return i > 0
       ? { name: raw.slice(0, i).trim(), sentence: raw.slice(i + 1).trim() }
       : { name: raw.trim(), sentence: "" };
-  }, [slash, mapaCmd]);
+  }, [slash, lidiCmd]);
 
   const [mapaHits, setMapaHits] = useState([]);
   const [mapaBusy, setMapaBusy] = useState(false);
@@ -11020,12 +11027,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   // Kolik položek má nabídka právě teď — podle toho se pohybují šipky.
   const slashRows = !slash ? 0
     : (mapaCmd && mapaName) ? mapaHits.length + 1      // lidé + "nový člověk"
+    : (kdoCmd && mapaName)  ? mapaHits.length          // jen existující lidé
     : slash.hits.length;
 
   const pickMapaPerson = (person) => {
     setText("");
     setIsTypingPersist(false);
     if (onTypingChange) onTypingChange(false);
+    if (kdoCmd) { onRoute?.("kdo", "", { person }); return; }
     onRoute?.("mapa", mapaParts?.sentence || "", { person, newName: person ? null : mapaName });
   };
 
@@ -11039,6 +11048,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     if (cmd.dest === "mapa" && mapaName) {
       // Člověka vybíráme rovnou tady, ne až v Mapě.
       pickMapaPerson(slashIdx < mapaHits.length ? mapaHits[slashIdx] : null);
+      return;
+    }
+    if (cmd.dest === "kdo" && mapaName) {
+      // Neexistujícího člověka nemá smysl otevírat — ten se zakládá v Mapě.
+      if (mapaHits.length === 0) return;
+      pickMapaPerson(mapaHits[Math.min(slashIdx, mapaHits.length - 1)]);
       return;
     }
     setText("");
@@ -11071,7 +11086,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           borderRadius: 10, zIndex: 40, overflow: "hidden",
           boxShadow: "0 8px 24px rgba(0,0,0,0.28)", fontFamily: FONT,
         }}>
-          {(mapaCmd && mapaName) ? (
+          {(lidiCmd && mapaName) ? (
             <>
               {/* Živé hledání lidí — píšeš "mar" a vidíš Martina, Martinu, Marka */}
               <div style={{
@@ -11080,7 +11095,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 textTransform: "uppercase", letterSpacing: "0.04em",
                 display: "flex", alignItems: "center", gap: 6,
               }}>
-                <span>🗺️ Mapa — kdo?</span>
+                <span>{kdoCmd ? "👤 Kdo volá?" : "🗺️ Mapa — kdo?"}</span>
                 <span style={{ flex: 1 }} />
                 {mapaBusy && <span style={{ fontWeight: 400, textTransform: "none" }}>hledám…</span>}
               </div>
@@ -11112,24 +11127,34 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 </div>
               ))}
 
-              <div
-                onMouseDown={e => { e.preventDefault(); pickMapaPerson(null); }}
-                onMouseEnter={() => setSlashIdx(mapaHits.length)}
-                style={{
-                  padding: "8px 11px", fontSize: "12px", cursor: "pointer",
-                  color: theme.green, fontWeight: 600,
-                  background: slashIdx === mapaHits.length ? theme.inputBg : "transparent",
-                }}>
-                + nový člověk „{mapaName}“
-              </div>
+              {mapaCmd && (
+                <div
+                  onMouseDown={e => { e.preventDefault(); pickMapaPerson(null); }}
+                  onMouseEnter={() => setSlashIdx(mapaHits.length)}
+                  style={{
+                    padding: "8px 11px", fontSize: "12px", cursor: "pointer",
+                    color: theme.green, fontWeight: 600,
+                    background: slashIdx === mapaHits.length ? theme.inputBg : "transparent",
+                  }}>
+                  + nový člověk „{mapaName}“
+                </div>
+              )}
+
+              {kdoCmd && !mapaBusy && mapaHits.length === 0 && (
+                <div style={{ padding: "8px 11px", fontSize: "12px", color: theme.textMid }}>
+                  Nikdo takový. Zkus přezdívku nebo část čísla.
+                </div>
+              )}
 
               <div style={{
                 padding: "6px 11px", fontSize: "11px", color: theme.textMid,
                 background: theme.inputBg,
               }}>
-                {mapaParts?.sentence
-                  ? <>Záznam: „{mapaParts.sentence}“ — vyber člověka a Enter</>
-                  : <>Šipky vybírají, Enter potvrdí. Záznam připoj dvojtečkou: <b>{mapaName}: co řekl</b></>}
+                {kdoCmd
+                  ? <>Šipky vybírají, Enter otevře, co s ním běží.</>
+                  : mapaParts?.sentence
+                    ? <>Záznam: „{mapaParts.sentence}“ — vyber člověka a Enter</>
+                    : <>Šipky vybírají, Enter potvrdí. Záznam připoj dvojtečkou: <b>{mapaName}: co řekl</b></>}
               </div>
             </>
           ) : (
@@ -11207,7 +11232,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               if (e.key === "ArrowUp")   { e.preventDefault(); setSlashIdx(i => Math.max(i - 1, 0)); return; }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
-                runSlash((mapaCmd && mapaName) ? { dest: "mapa" } : (slash.hits[slashIdx] || slash.hits[0]));
+                runSlash((lidiCmd && mapaName)
+                  ? { dest: kdoCmd ? "kdo" : "mapa" }
+                  : (slash.hits[slashIdx] || slash.hits[0]));
                 return;
               }
             }
@@ -15214,7 +15241,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   );
 }
 
-function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa }) {
+function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa, onOpenZakazka }) {
   useEscapeKey(onClose);
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
@@ -15328,10 +15355,23 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
     return () => { cancelled = true; clearTimeout(id); };
   }, [query, currentUser?.name, isSmartQuery]);
 
+  // Zakázky — hledá v čísle, názvu, městě i souhrnu.
+  const [zakazky, setZakazky] = useState([]);
+  useEffect(() => {
+    const q = (query || "").trim();
+    if (q.length < 2 || isSmartQuery) { setZakazky([]); return; }
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      const r = await obchodHledejZakazky(currentUser?.name, { hledat: q }, 8, 0);
+      if (!cancelled) setZakazky(r || []);
+    }, 280);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [query, currentUser?.name, isSmartQuery]);
+
   const totalResults =
     results.tasks.length + results.comments.length +
     results.reminders.length + results.notes.length +
-    mapFacts.length + mapPeople.length;
+    mapFacts.length + mapPeople.length + zakazky.length;
 
   // Pomocná: highlight match v textu
   const highlight = (text, q) => {
@@ -15458,6 +15498,37 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 600 }}>
                 {totalResults} {totalResults === 1 ? "výsledek" : totalResults < 5 ? "výsledky" : "výsledků"}
               </div>
+
+              {/* ── Obchod: zakázky ── */}
+              {zakazky.length > 0 && (
+                <>
+                  {sectionLabel("💼", "Obchod — zakázky", zakazky.length, theme.accent)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {zakazky.map(z => (
+                      <button key={`dz-${z.id}`}
+                        onClick={() => { onOpenZakazka?.(z); onClose(); }}
+                        style={{
+                          ...buttonStyle(), textAlign: "left", padding: "10px 12px",
+                          background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                          borderRadius: "8px", display: "flex", flexDirection: "column",
+                          gap: "3px", cursor: "pointer",
+                        }}>
+                        <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+                          {highlight(z.nazev, query)}
+                          <span style={{ fontSize: 11, fontWeight: 400, color: theme.textMid }}>
+                            {"  "}{z.kod}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: "11.5px", color: theme.textSub }}>
+                          {[z.mesto, z.cena ? (z.cena / 1e6).toFixed(1).replace(".", ",") + " mil" : null]
+                            .filter(Boolean).join(" · ")}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ height: 12 }} />
+                </>
+              )}
 
               {/* ── Mapa: lidé ── */}
               {mapPeople.length > 0 && (
@@ -22598,6 +22669,8 @@ function App() {
   // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
   const [showObchodSheet, setShowObchodSheet] = useState(false);
   const [obchodDraft, setObchodDraft] = useState("");
+  const [obchodOsoba, setObchodOsoba] = useState(null);
+  const [obchodZakazka, setObchodZakazka] = useState(null);
   const [mapaDraft, setMapaDraft] = useState("");             // předvyplnění z /m
   const [mapaQuery, setMapaQuery] = useState("");             // otevření z lupy
   const [mapaPerson, setMapaPerson] = useState(null);
@@ -25686,7 +25759,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             🗺️
           </button>
           {/* 💼 Obchod — zakázky a investoři */}
-          <button onClick={() => { setObchodDraft(""); setShowObchodSheet(true); }}
+          <button onClick={() => {
+            setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+            setShowObchodSheet(true);
+          }}
             title="Obchod — zakázky a investoři"
             style={{
               background: "none", border: "none", cursor: "pointer",
@@ -26819,7 +26895,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             currentUser={currentUser}
             theme={theme}
             initialDraft={obchodDraft}
-            onClose={() => { setShowObchodSheet(false); setObchodDraft(""); }}
+            initialOsoba={obchodOsoba}
+            initialZakazka={obchodZakazka}
+            onClose={() => {
+              setShowObchodSheet(false); setObchodDraft("");
+              setObchodOsoba(null); setObchodZakazka(null);
+            }}
           />
         )}
 
@@ -26848,6 +26929,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               setMapaPerson(opts?.person || null);
               setMapaQuery(opts?.query || "");
               setShowMapaSheet(true);
+            }}
+            onOpenZakazka={(z) => {
+              setShowSearchSheet(false);
+              setObchodDraft(""); setObchodOsoba(null);
+              setObchodZakazka(z?.id || null);
+              setShowObchodSheet(true);
             }}
             onNavigate={(taskId) => {
               // Pokud je úkol v jiném view než aktuální, přepneme
@@ -27082,6 +27169,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               else if (dest === "note") { setEditingNote(body ? { title: body } : {}); }
               else if (dest === "story") { setStoryQuickText(body); setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }
               else if (dest === "obchod") { setObchodDraft(body); setShowObchodSheet(true); }
+              else if (dest === "kdo") {
+                setObchodOsoba(extra?.person?.id || null);
+                setShowObchodSheet(true);
+              }
             }}
             theme={theme}
             categoryFilter={categoryFilter}
