@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   nactiUcastniky, ulozUcastnika, smazUcastnika,
   nactiOsloveni, oslovHromadne, ulozOsloveni, smazOsloveni,
-  komuToPasuje, popis, aktivni,
+  komuToPasuje, nactiKarty, popis, aktivni,
 } from "./api.js";
 import { VyberOsoby } from "./Site.jsx";
 import {
@@ -245,12 +245,7 @@ export function Geneze({ theme, owner, ciselniky, zakazka }) {
     return { vse, odmitl, ticho, hotovo, zije };
   }, [radky]);
 
-  const otevriParovani = async () => {
-    setChyba(null);
-    const n = await komuToPasuje(projectId, 30);
-    const uz = new Set(radky.map(r => r.person_id));
-    setParovani(n.filter(x => !uz.has(x.person_id)));
-  };
+  const otevriParovani = () => { setChyba(null); setParovani(true); };
 
   const oslov = async (vybrani) => {
     const res = await oslovHromadne(owner, projectId, vybrani, zakazka?.nazev);
@@ -276,14 +271,16 @@ export function Geneze({ theme, owner, ciselniky, zakazka }) {
 
       {chyba && <Chyba theme={theme}>{chyba}</Chyba>}
 
-      {parovani !== null && (
-        <ParovaniVyber theme={theme} seznam={parovani}
+      {parovani && (
+        <VyberKohoOslovit
+          theme={theme} owner={owner} ciselniky={ciselniky} projectId={projectId}
+          jizOsloveni={new Set(radky.map(r => r.person_id))}
           onOslov={oslov} onZrus={() => setParovani(null)} />
       )}
 
       {busy && radky.length === 0 && <Tise theme={theme}>Načítám…</Tise>}
 
-      {!busy && radky.length === 0 && parovani === null && (
+      {!busy && radky.length === 0 && !parovani && (
         <Tise theme={theme}>
           Zatím nikdo. Tlačítkem „oslovit“ ti systém nabídne lidi ze sítě,
           kterým tahle zakázka sedí.
@@ -446,33 +443,153 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena }) {
   );
 }
 
-/* Výběr z párování — zaškrtáš a odešleš najednou. */
-function ParovaniVyber({ theme, seznam, onOslov, onZrus }) {
-  const [vybrani, setVybrani] = useState(() => new Set(seznam.map(s => s.person_id)));
+/* Výběr, koho oslovit.
+
+   Dva pohledy v jednom okně, protože ne vždycky chceš jen ty,
+   komu to sedí podle kritérií:
+     "Komu to pasuje" — výsledek párování, seřazený podle shody
+     "Všichni"        — celá síť, filtrovaná ručně podle typu a kraje
+
+   V obou se dá zaškrtnout celý výsledek a oslovit najednou.
+   Stavy se pak mění u jednotlivých řádků v seznamu pod tím. */
+function VyberKohoOslovit({ theme, owner, ciselniky, projectId, jizOsloveni, onOslov, onZrus }) {
+  const [rezim, setRezim] = useState("pasuje");   // pasuje | vsichni
+  const [seznam, setSeznam] = useState([]);
+  const [busy, setBusy] = useState(true);
+  const [typ, setTyp] = useState("");
+  const [kraj, setKraj] = useState("");
+  const [hledat, setHledat] = useState("");
+  const [vybrani, setVybrani] = useState(() => new Set());
+
+  useEffect(() => {
+    let zrus = false;
+    setBusy(true);
+    (async () => {
+      let r;
+      if (rezim === "pasuje") {
+        const n = await komuToPasuje(projectId, 50);
+        r = n.map(x => ({
+          person_id: x.person_id, jmeno: x.jmeno, card_id: x.card_id,
+          nazev_karty: x.nazev_karty, skore: Number(x.skore),
+          sedi: x.sedi || [], nesedi: x.nesedi || [],
+        }));
+      } else {
+        const karty = await nactiKarty(owner, {
+          smer: "poptavka", jenAktivni: true, typ: typ || undefined, kraj: kraj || undefined,
+        }, 200);
+        // Jeden člověk může mít víc karet; v seznamu ho chceme jednou.
+        const videni = new Set();
+        r = [];
+        for (const k of karty) {
+          if (videni.has(k.person_id)) continue;
+          videni.add(k.person_id);
+          r.push({
+            person_id: k.person_id, jmeno: k.osoba?.name || "—", card_id: k.id,
+            nazev_karty: k.nazev, skore: null, sedi: [], nesedi: [],
+            poznamka: k.poznamka,
+          });
+        }
+      }
+      if (zrus) return;
+      const zbyva = r.filter(x => !jizOsloveni.has(x.person_id));
+      setSeznam(zbyva);
+      setVybrani(new Set(rezim === "pasuje" ? zbyva.map(x => x.person_id) : []));
+      setBusy(false);
+    })();
+    return () => { zrus = true; };
+  }, [rezim, typ, kraj, projectId, owner]);  // eslint-disable-line
+
+  const videt = useMemo(() => {
+    const h = hledat.trim().toLowerCase();
+    if (!h) return seznam;
+    const bez = (x) => (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return seznam.filter(x => bez(x.jmeno).includes(bez(h)) || bez(x.nazev_karty).includes(bez(h)));
+  }, [seznam, hledat]);
+
   const prepni = (id) => setVybrani(s => {
     const n = new Set(s);
     if (n.has(id)) n.delete(id); else n.add(id);
     return n;
   });
 
-  if (seznam.length === 0) {
-    return (
-      <div style={{ ...card(theme), padding: "12px", marginBottom: 9 }}>
-        <div style={{ fontSize: "12px", color: theme.textSub, lineHeight: 1.7, marginBottom: 8 }}>
-          Nikdo další nesedí. Buď jsi oslovil všechny, na koho to pasuje,
-          nebo u lidí v síti chybí karta s tím, co hledají.
-        </div>
-        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
-      </div>
-    );
-  }
+  const vybranoZViditelnych = videt.filter(x => vybrani.has(x.person_id)).length;
+  const vseVybrano = videt.length > 0 && vybranoZViditelnych === videt.length;
+
+  const prepniVse = () => setVybrani(s => {
+    const n = new Set(s);
+    if (vseVybrano) videt.forEach(x => n.delete(x.person_id));
+    else videt.forEach(x => n.add(x.person_id));
+    return n;
+  });
 
   return (
     <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 9 }}>
-      <div style={{ ...label(theme), marginBottom: 7 }}>
-        Komu to pasuje — zaškrtni, koho oslovíš
+      <div style={{ display: "flex", gap: 4, marginBottom: 9 }}>
+        {[
+          { k: "pasuje",  t: "Komu to pasuje" },
+          { k: "vsichni", t: "Všichni investoři" },
+        ].map(v => {
+          const zap = rezim === v.k;
+          return (
+            <button key={v.k} onClick={() => setRezim(v.k)} style={{
+              ...btnGhost(theme),
+              background: zap ? theme.accentSoft : "transparent",
+              color: zap ? theme.accent : theme.textSub,
+              borderColor: zap ? theme.accentBorder : theme.cardBorder,
+              fontWeight: zap ? 700 : 600,
+            }}>{v.t}</button>
+          );
+        })}
       </div>
-      {seznam.map(r => {
+
+      {rezim === "vsichni" && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 9, flexWrap: "wrap" }}>
+          <select value={typ} onChange={e => setTyp(e.target.value)}
+            style={{ ...input(theme), flex: "0 1 150px", cursor: "pointer" }}>
+            <option value="">každý typ</option>
+            {aktivni(ciselniky, "typ").map(t => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
+          <select value={kraj} onChange={e => setKraj(e.target.value)}
+            style={{ ...input(theme), flex: "0 1 150px", cursor: "pointer" }}>
+            <option value="">každý kraj</option>
+            {aktivni(ciselniky, "kraj").map(t => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
+          <input value={hledat} onChange={e => setHledat(e.target.value)}
+            placeholder="jméno…" style={{ ...input(theme), flex: "1 1 110px" }} />
+        </div>
+      )}
+
+      {busy && <Tise theme={theme}>Načítám…</Tise>}
+
+      {!busy && videt.length === 0 && (
+        <Tise theme={theme}>
+          {rezim === "pasuje"
+            ? "Nikdo další nesedí. Buď jsi oslovil všechny, na koho to pasuje, nebo u lidí v síti chybí karta s tím, co hledají. Zkus druhý pohled — tam si vybereš ručně."
+            : "Nikdo takový v síti není. Zkus ubrat filtr, nebo lidem doplň karty v záložce Síť."}
+        </Tise>
+      )}
+
+      {videt.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 4,
+          paddingBottom: 5, borderBottom: `1px solid ${theme.cardBorder}`,
+        }}>
+          <button onClick={prepniVse} style={{
+            ...btn(), background: "transparent", color: theme.accent,
+            fontSize: "11.5px", padding: "2px 4px",
+          }}>{vseVybrano ? "zrušit výběr" : `vybrat vše (${videt.length})`}</button>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: "11px", color: theme.textSub }}>
+            vybráno {vybrani.size}
+          </span>
+        </div>
+      )}
+
+      {videt.map(r => {
         const zap = vybrani.has(r.person_id);
         return (
           <div key={r.card_id} onClick={() => prepni(r.person_id)} style={{
@@ -498,27 +615,35 @@ function ParovaniVyber({ theme, seznam, onOslov, onZrus }) {
                     {(r.sedi || []).length > 0 ? "  ·  " : ""}{r.nesedi.join(", ")}
                   </span>
                 )}
+                {r.skore === null && r.poznamka && (
+                  <span style={{ color: theme.textMid }}>{r.poznamka}</span>
+                )}
               </div>
             </div>
-            <span style={{
-              fontSize: "14px", fontWeight: 700, color: theme.accent,
-              fontVariantNumeric: "tabular-nums",
-            }}>{Number(r.skore)}</span>
+            {r.skore !== null && (
+              <span style={{
+                fontSize: "14px", fontWeight: 700, color: theme.accent,
+                fontVariantNumeric: "tabular-nums",
+              }}>{r.skore}</span>
+            )}
           </div>
         );
       })}
+
       <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
         <button
-          onClick={() => onOslov(seznam.filter(s => vybrani.has(s.person_id)))}
+          onClick={() => onOslov(seznam.filter(x => vybrani.has(x.person_id)))}
           disabled={vybrani.size === 0}
           style={{ ...btnMain(theme), opacity: vybrani.size === 0 ? 0.5 : 1 }}>
           OSLOVIT ({vybrani.size})
         </button>
-        <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
       </div>
+
       <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 7, lineHeight: 1.6 }}>
         Zapíše se, že jsi je oslovil, a objeví se to i na jejich časové ose
-        v Mapě. Samotný mail nebo telefonát je pořád na tobě.
+        v Mapě. Stavy pak měníš u jednotlivých řádků níž. Mail nebo
+        telefonát je pořád na tobě.
       </div>
     </div>
   );
