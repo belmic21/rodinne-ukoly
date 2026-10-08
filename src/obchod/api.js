@@ -391,17 +391,55 @@ export async function hledejLidi(owner, query = "", limit = 20) {
 
 // Nový člověk rovnou odsud, bez odskoku do Mapy. Zapisuje se do
 // stejné tabulky, takže v Mapě na něj narazíš úplně stejně.
-export async function zalozOsobu(owner, jmeno, kontakt = "") {
-  const n = (jmeno || "").trim();
-  if (!owner || !n) return { ok: false, chyba: "Chybí jméno." };
-  if (n.length > 60 || n.split(/\s+/).length > 5) {
-    return { ok: false, chyba: "To vypadá spíš na větu než na jméno. Zadej jen jméno." };
+/* Sloupce člověka. Na jednom místě, aby se po okně nepotulovaly
+   tři různé výběry a jedno okno nevědělo o roli, kterou druhé ukládá. */
+const OSOBA = "id, name, aliases, note, met_at, contact, role_tagy, introduced_by";
+
+/* Očistí, co přišlo z formuláře. Prázdné pole = null, ne prázdný řetězec:
+   jinak by "bez kontaktu" a "kontakt je prázdný text" byly dvě různé věci. */
+function osobaDoDb(d) {
+  const t = (x) => {
+    const v = (x ?? "").toString().trim();
+    return v === "" ? null : v;
+  };
+  const telo = {};
+  if ("name" in d)     telo.name = t(d.name);
+  if ("contact" in d)  telo.contact = t(d.contact);
+  if ("met_at" in d)   telo.met_at = t(d.met_at);
+  if ("note" in d)     telo.note = t(d.note);
+  if ("role_tagy" in d) telo.role_tagy = Array.isArray(d.role_tagy) ? d.role_tagy : [];
+  if ("aliases" in d) {
+    telo.aliases = Array.isArray(d.aliases)
+      ? d.aliases
+      : String(d.aliases || "").split(",").map(x => x.trim()).filter(Boolean);
   }
+  return telo;
+}
+
+function jmenoSedi(n) {
+  if (!n) return "Chybí jméno.";
+  if (n.length > 60 || n.split(/\s+/).length > 5) {
+    return "To vypadá spíš na větu než na jméno. Zadej jen jméno.";
+  }
+  return null;
+}
+
+/* Druhý parametr bere jméno jako text (staré volání) i celý
+   formulář jako objekt. Díky tomu jde člověka založit i s rolemi
+   rovnou z výběru u zakázky, ne až dodatečně v Síti. */
+export async function zalozOsobu(owner, jmenoNeboData, kontakt = "") {
+  const d = typeof jmenoNeboData === "string"
+    ? { name: jmenoNeboData, contact: kontakt }
+    : (jmenoNeboData || {});
+  const telo = osobaDoDb(d);
+  if (!owner) return { ok: false, chyba: "Chybí přihlášení." };
+  const spatne = jmenoSedi(telo.name);
+  if (spatne) return { ok: false, chyba: spatne };
   try {
     const { data, error } = await supabase
       .from("map_people")
-      .insert({ owner, name: n, contact: kontakt.trim() || null })
-      .select("id, name, contact, met_at, role_tagy")
+      .insert({ ...telo, owner })
+      .select(OSOBA)
       .single();
     if (error) throw error;
     return { ok: true, osoba: data };
@@ -410,6 +448,32 @@ export async function zalozOsobu(owner, jmeno, kontakt = "") {
       return { ok: false, chyba: "Někdo s tímhle jménem už v Mapě je — najdi ho v seznamu." };
     }
     return selhalo("zalozOsobu", e);
+  }
+}
+
+/* Úprava člověka. Stejná data, stejná pravidla, ať to voláš
+   z Mapy, ze Sítě nebo z detailu zakázky. */
+export async function ulozOsobu(id, data) {
+  if (!id) return { ok: false, chyba: "Chybí osoba." };
+  const telo = osobaDoDb(data || {});
+  if ("name" in telo) {
+    const spatne = jmenoSedi(telo.name);
+    if (spatne) return { ok: false, chyba: spatne };
+  }
+  if (Object.keys(telo).length === 0) return { ok: false, chyba: "Není co uložit." };
+  try {
+    const { data: row, error } = await supabase
+      .from("map_people").update(telo).eq("id", id).select(OSOBA);
+    if (error) throw error;
+    if (!row || row.length === 0) {
+      return { ok: false, chyba: "Osobu se nepodařilo uložit — není tvoje." };
+    }
+    return { ok: true, osoba: row[0] };
+  } catch (e) {
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Někdo s tímhle jménem už v Mapě je." };
+    }
+    return selhalo("ulozOsobu", e);
   }
 }
 
