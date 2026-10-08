@@ -12,12 +12,13 @@
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect } from "react";
-import { osobaPrehled, popis, nactiCiselniky } from "./api.js";
+import { osobaPrehled, popis, nactiCiselniky, prehledPrilepenych } from "./api.js";
 import { KontaktEditor } from "./Site.jsx";
 import {
   card, btn, label,
-  penizeKratce, datumKratce, jakDavno,
+  penizeKratce, datumKratce, jakDavno, kdyZadano,
 } from "./ui.js";
+import { Odznaky } from "./Prilepene.jsx";
 
 export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOtevriZakazku }) {
   const [jmeno, setJmeno] = useState(null);
@@ -59,6 +60,15 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
   const [busy, setBusy] = useState(true);
   const [vlastni, setVlastni] = useState({});
   const [upravuji, setUpravuji] = useState(false);
+  const [pocty, setPocty] = useState({});
+
+  // Počty úkolů a poznámek u zakázek, na kterých ten člověk je.
+  useEffect(() => {
+    if (!owner) return;
+    let zrus = false;
+    prehledPrilepenych(owner).then(p => { if (!zrus) setPocty(p); });
+    return () => { zrus = true; };
+  }, [owner]);
 
   // Číselníky si umí načíst sama. Karta v Mapě o nich nic neví
   // a bez nich by se místo "Rodinný dům" ukazovalo "rodinny_dum".
@@ -166,7 +176,7 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
         <Sekce theme={theme} nadpis="Na kterých zakázkách je">
           {ucast.map(u => (
             <Zakazka key={u.id} theme={theme} ciselniky={ciselniky} p={u.projekt}
-              onOtevri={onOtevriZakazku}
+              onOtevri={onOtevriZakazku} pocty={pocty[u.projekt?.id]}
               vpravo={u.podil != null ? `${u.podil} %` : null}
               podtext={[
                 popis(ciselniky, "role", u.role),
@@ -183,7 +193,7 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
             const konec = ["odmitl", "ticho"].includes(a.stav);
             return (
               <Zakazka key={a.id} theme={theme} ciselniky={ciselniky} p={a.projekt}
-                onOtevri={onOtevriZakazku}
+                onOtevri={onOtevriZakazku} pocty={pocty[a.projekt?.id]}
                 skrtnuto={konec}
                 vpravo={a.cena_jednana ? penizeKratce(a.cena_jednana) : null}
                 stav={popis(ciselniky, "stav_osloveni", a.stav)}
@@ -268,7 +278,8 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
   );
 }
 
-function Zakazka({ theme, ciselniky, p, podtext, vpravo, stav, stavBarva, skrtnuto, onOtevri }) {
+function Zakazka({ theme, ciselniky, p, podtext, vpravo, stav, stavBarva, skrtnuto,
+  onOtevri, pocty }) {
   if (!p) return null;
   return (
     <div onClick={() => onOtevri?.(p)} style={{
@@ -291,9 +302,11 @@ function Zakazka({ theme, ciselniky, p, podtext, vpravo, stav, stavBarva, skrtnu
             popis(ciselniky, "typ", p.typ),
             [p.mesto, popis(ciselniky, "kraj", p.kraj)].filter(Boolean).join(", "),
             podtext,
+            kdyZadano(p.created_at),
           ].filter(Boolean).join(" · ")}
         </div>
       </div>
+      {pocty && <Odznaky theme={theme} pocty={pocty} />}
       <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
         <div style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text }}>
           {vpravo || penizeKratce(p.cena)}

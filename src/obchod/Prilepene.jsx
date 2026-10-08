@@ -16,13 +16,17 @@
    zástup nedával smysl.
    ═══════════════════════════════════════════════════════ */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce, prepniUkol,
 } from "./api.js";
-import { card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno } from "./ui.js";
+import {
+  card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno, ODZNAKY,
+} from "./ui.js";
 
-export default function Prilepene({ theme, owner, projectId, kod, spravce = false }) {
+export default function Prilepene({ theme, owner, projectId, kod, spravce = false,
+  skocSem = false }) {
+  const box = useRef(null);
   const [ukoly, setUkoly] = useState([]);
   const [poznamky, setPoznamky] = useState([]);
   const [busy, setBusy] = useState(true);
@@ -39,6 +43,15 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
     setUkoly(u); setPoznamky(p); setBusy(false);
   };
   useEffect(() => { if (projectId) nacti(); }, [projectId]);  // eslint-disable-line
+
+  // Příchod z odznaku u řádku: odrolovat sem, ať se nehledá.
+  useEffect(() => {
+    if (!skocSem || busy) return;
+    const id = setTimeout(() => {
+      box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+    return () => clearTimeout(id);
+  }, [skocSem, busy]);
 
   const pridejUkol = async () => {
     if (!novyUkol.trim()) return;
@@ -72,7 +85,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
   const videt = ukazHotove ? [...otevrene, ...hotove] : otevrene;
 
   return (
-    <div style={{ marginTop: 16 }}>
+    <div ref={box} style={{ marginTop: 16, scrollMarginTop: 70 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
         <span style={{ ...label(theme), marginBottom: 0, flex: 1 }}>
           Úkoly a poznámky k zakázce
@@ -201,6 +214,33 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
           Tyhle úkoly a poznámky jsou i ve tvém úkolníku a v poznámkách.
           {spravce ? " Jako správce tu vidíš i to, co zapsal partner." : ""}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* Odznaky u řádku zakázky. Klik otevře zakázku rovnou u úkolů
+   a poznámek, ať se k nim nemusí rolovat. Když na zakázce nic
+   není, ukáže se bledý plus — pořád je kam kliknout a přidat. */
+export function Odznaky({ theme, pocty, onKlik }) {
+  const neco = pocty && ODZNAKY.some(o => (pocty[o.k] || 0) > 0);
+  return (
+    <div
+      onClick={(e) => { if (onKlik) { e.stopPropagation(); onKlik(); } }}
+      title={neco ? "Úkoly a poznámky k zakázce" : "Přidat úkol nebo poznámku"}
+      style={{
+        display: "flex", alignItems: "center", gap: 7,
+        cursor: onKlik ? "pointer" : "default", whiteSpace: "nowrap",
+        opacity: neco ? 1 : 0.4,
+      }}>
+      {neco ? ODZNAKY.filter(o => (pocty[o.k] || 0) > 0).map(o => (
+        <span key={o.k} title={o.popis} style={{
+          fontSize: "11px", color: theme.textSub, fontVariantNumeric: "tabular-nums",
+        }}>
+          {o.ikona} {pocty[o.k]}
+        </span>
+      )) : (
+        <span style={{ fontSize: "12px", color: theme.textSub }}>＋</span>
       )}
     </div>
   );

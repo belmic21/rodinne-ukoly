@@ -62,7 +62,7 @@ export async function osobaPrehled(owner, personId) {
   if (!owner || !personId) return null;
   const prazdne = { osoba: null, ucast: [], osloveni: [], karty: [], zaznamy: [] };
   try {
-    const projekt = "projekt:deal_projects (id, kod, nazev, typ, kraj, mesto, cena, stav, faze)";
+    const projekt = "projekt:deal_projects (id, kod, nazev, typ, kraj, mesto, cena, stav, faze, created_at)";
     const [osoba, ucast, osloveni, karty, zaznamy] = await Promise.all([
       supabase.from("map_people")
         .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
@@ -1111,6 +1111,28 @@ export async function zrusPozvanku(email) {
 
    Čte se přes funkce, ne z tabulky: úkolník se sdílením zakázky
    neotvírá. Každý vidí svoje, správce všechno. */
+
+/* Počty pro celý seznam najednou. Jeden dotaz místo dvaceti —
+   odznaky u řádku se jinak nedají ukázat bez čekání. */
+export async function prehledPrilepenych(owner) {
+  if (!owner) return {};
+  try {
+    const { data, error } = await supabase.rpc("deal_prilepene_prehled", { p_owner: owner });
+    if (error) throw error;
+    const mapa = {};
+    for (const r of (data || [])) {
+      mapa[r.project_id] = {
+        ukolu: Number(r.ukolu) || 0,
+        poznamek: Number(r.poznamek) || 0,
+        terminu: Number(r.terminu) || 0,
+      };
+    }
+    return mapa;
+  } catch (e) {
+    selhalo("prehledPrilepenych", e);
+    return {};
+  }
+}
 
 export async function ukolyZakazky(projectId) {
   if (!projectId) return [];

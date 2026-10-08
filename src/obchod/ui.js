@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261008_2240";
+export const OBCHOD_VERZE = "261009_0030";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -166,6 +166,16 @@ export function mesicKratce(iso) {
   if (isNaN(d.getTime())) return "";
   return `${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}`;
 }
+
+/* Odznaky u zakázky: kolik na ní visí úkolů, poznámek a termínů.
+   Jen ikona a číslo — na řádek seznamu se víc nevejde a stejně
+   jde o jediné: je na té zakázce něco rozdělaného, nebo ne?
+   Nula se nekreslí. Prázdný odznak by jen zabíral místo. */
+export const ODZNAKY = [
+  { k: "ukolu",    ikona: "☑", popis: "nesplněné úkoly" },
+  { k: "poznamek", ikona: "📝", popis: "poznámky" },
+  { k: "terminu",  ikona: "⏳", popis: "nesplněné termíny" },
+];
 
 /* Počet s českým tvarem: 1 položka, 2 položky, 5 položek. */
 export function pocet(n, jedna, dve, pet) {

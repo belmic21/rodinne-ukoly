@@ -14,7 +14,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
-  kolikZakazek, prirustekZakazek,
+  kolikZakazek, prirustekZakazek, prehledPrilepenych,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
@@ -27,7 +27,7 @@ import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 import Ciselniky from "./Ciselniky.jsx";
 import Osoba from "./Osoba.jsx";
 import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
-import Prilepene from "./Prilepene.jsx";
+import Prilepene, { Odznaky } from "./Prilepene.jsx";
 
 const PRAZDNY_FILTR = {
   typ: "", kraj: "", faze: "", stav: "",
@@ -72,11 +72,14 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
   const [statistika, setStatistika] = useState(false);
+  const [prilepene, setPrilepene] = useState({});   // počty u řádků seznamu
   const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
   // Schválně: co máš rozepsané v zakázce, zůstane pod ním nedotčené.
   const [osobaId, setOsobaId] = useState(initialOsoba);
+  // Na kterou sekci v detailu odrolovat — klik na odznak u řádku.
+  const [skocNa, setSkocNa] = useState(null);
   // Správce se ptáme databáze, ne přihlášení. Rozhoduje o tom, jestli
   // smíš sáhnout i na to, co zapsal někdo jiný.
   const [spravce, setSpravce] = useState(false);
@@ -127,14 +130,16 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           .filter(k => (k.skupina || "") === g).map(k => k.key);
         dotaz.kraj = "";
       }
-      const [z, p] = await Promise.all([
+      const [z, p, pri] = await Promise.all([
         nactiZakazky(owner, dotaz, kolik + 1, 0),
         nactiPanel(owner),
+        prehledPrilepenych(owner),
       ]);
       if (zrus) return;
       setVice(z.length > kolik);
       setZakazky(z.slice(0, kolik));
       setPanel(p);
+      setPrilepene(pri);
       setBusy(false);
     }, filtr.hledat ? 280 : 0);
     return () => { zrus = true; clearTimeout(id); };
@@ -150,7 +155,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
     [filtr]
   );
 
-  const zavri = () => { setOtevrena(null); setNova(null); setObnov(k => k + 1); };
+  const zavri = () => { setOtevrena(null); setNova(null); setSkocNa(null); setObnov(k => k + 1); };
 
   // Zakázka otevřená zvenku (z lupy). Načítá se celá, ne zkráceně.
   useEffect(() => {
@@ -233,7 +238,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           <Detail
             theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
             zakazka={otevrena} onBack={zavri} onClose={onClose}
-            onOtevriOsobu={setOsobaId}
+            onOtevriOsobu={setOsobaId} skocNa={skocNa}
           />
         ) : (
           <>
@@ -370,7 +375,9 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                 )}
                 {zakazky.map(z => (
                   <Radek key={z.id} z={z} theme={theme} ciselniky={ciselniky}
-                    onOpen={() => setOtevrena(z)} />
+                    pocty={prilepene[z.id]}
+                    onOpen={() => { setSkocNa(null); setOtevrena(z); }}
+                    onOdznak={() => { setSkocNa("prilepene"); setOtevrena(z); }} />
                 ))}
                 {vice && (
                   <button onClick={() => setKolik(k => k + KROK)} style={{
@@ -709,7 +716,7 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false }) {
 
 /* ── Řádek seznamu ─────────────────────────────────── */
 
-function Radek({ z, theme, ciselniky, onOpen }) {
+function Radek({ z, theme, ciselniky, onOpen, onOdznak, pocty }) {
   const misto = [z.mesto, popis(ciselniky, "kraj", z.kraj)].filter(Boolean).join(", ");
   return (
     <div onClick={onOpen} style={{
@@ -737,6 +744,8 @@ function Radek({ z, theme, ciselniky, onOpen }) {
         </div>
       </div>
 
+      <Odznaky theme={theme} pocty={pocty} onKlik={onOdznak} />
+
       <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
         <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
           {penizeKratce(z.cena)}
@@ -763,7 +772,7 @@ function Prazdno({ theme, children }) {
 /* ── Detail zakázky ────────────────────────────────── */
 
 function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
-  onBack, onClose, onOtevriOsobu, spravce = false }) {
+  onBack, onClose, onOtevriOsobu, spravce = false, skocNa = null }) {
   const novy = !zakazka;
   // Zakázka, kterou se mnou někdo sdílí ve spolupráci. Hlavička je jeho,
   // do průběhu zapisovat můžu. Správce může i hlavičku.
@@ -996,7 +1005,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
               ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
             <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
-              kod={kod} spravce={spravce} />
+              kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"} />
             {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
                 tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
             {!cizi && (
