@@ -1224,7 +1224,12 @@ export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = nul
         show_from: null,
         rec_days: 0,
         created_by: owner,
-        assigned_to: komu && komu !== owner ? [komu] : [],
+        // POZOR: "úkol pro mě" se v téhle aplikaci ukládá jako
+        // assigned_to: [moje jméno], NE jako prázdné pole. Prázdný
+        // seznam znamená "nikomu" a filtr MOJE úkoly takový úkol
+        // vyhodí — zmizel by ze všech pohledů, i když v databázi je.
+        assign_to: komu && komu !== owner ? "person" : "self",
+        assigned_to: [komu && komu !== owner ? komu : owner],
         shared_with: [],
         done_by: [],
         seen_by: [],
