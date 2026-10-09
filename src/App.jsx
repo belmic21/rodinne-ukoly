@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_1135";
+const FILE_VERSION = "261009_1210";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -5445,7 +5445,26 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze, onClose }) {
    Spustí se z 🔔 dropdown nebo z bell icon.
    ═══════════════════════════════════════════════════════ */
 
-function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate, onReactivate }) {
+/* Odložení připomínky. Přesně ten případ, kvůli kterému to vzniklo:
+   připomínka byla na dvanáctou, klient volá, že to stihne do tří.
+   Dřív se dala jen odklepnout jako vyřízená, nebo založit znovu. */
+const ODLOZIT = () => {
+  const ted = new Date();
+  const dnesV = (h) => { const d = new Date(); d.setHours(h, 0, 0, 0); return d; };
+  const zitraRano = () => {
+    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d;
+  };
+  const volby = [
+    { t: "+1 h", kdy: new Date(ted.getTime() + 3600000) },
+    { t: "+3 h", kdy: new Date(ted.getTime() + 3 * 3600000) },
+    { t: "na 15:00", kdy: dnesV(15) },
+    { t: "zítra 9:00", kdy: zitraRano() },
+  ];
+  // Hodinu, která už dnes byla, nemá smysl nabízet.
+  return volby.filter(v => v.kdy.getTime() > ted.getTime());
+};
+
+function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate, onReactivate, onSnooze }) {
   useEscapeKey(onClose);
   const [dismissedHistory, setDismissedHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -5577,6 +5596,41 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
     );
   };
 
+  /* Odložit — rozbalí nabídku časů. Vlastní stav na řádek, aby se
+     neotevíralo všechno naráz. */
+  const OdlozitTlacitko = ({ r }) => {
+    const [otevreno, setOtevreno] = useState(false);
+    const volby = ODLOZIT();
+    return (
+      <span style={{ position: "relative", display: "inline-block" }}>
+        <button onClick={() => setOtevreno(v => !v)} title="Odložit na později" style={{
+          ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+          background: otevreno ? theme.accentSoft : theme.inputBg,
+          color: otevreno ? theme.accent : theme.text,
+          border: `1px solid ${otevreno ? theme.accentBorder : theme.inputBorder}`,
+          fontWeight: 600,
+        }}>⏱</button>
+        {otevreno && (
+          <div style={{
+            position: "absolute", top: "100%", right: 0, zIndex: 40, marginTop: 3,
+            background: theme.card, border: `1px solid ${theme.cardBorder}`,
+            borderRadius: 8, padding: 4, minWidth: 110,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.2)",
+            display: "flex", flexDirection: "column", gap: 2,
+          }}>
+            {volby.map(v => (
+              <button key={v.t} onClick={() => { setOtevreno(false); onSnooze?.(r.id, v.kdy.toISOString()); }}
+                style={{
+                  ...buttonStyle(), padding: "5px 8px", fontSize: 12, textAlign: "left",
+                  background: "transparent", color: theme.text, border: "none",
+                }}>{v.t}</button>
+            ))}
+          </div>
+        )}
+      </span>
+    );
+  };
+
   const sectionLabel = (icon, text, count, color) => (
     <div style={{
       fontSize: 10, fontWeight: 800, color: color || theme.textMid,
@@ -5629,10 +5683,13 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {active.map(r => (
                   <ReminderRow key={r.id} r={r} variant="active" actions={
-                    <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
-                      ...buttonStyle(), padding: "5px 9px", fontSize: 12,
-                      background: theme.green, color: "#fff", fontWeight: 700,
-                    }}>✓</button>
+                    <>
+                      <OdlozitTlacitko r={r} />
+                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
+                        ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                        background: theme.green, color: "#fff", fontWeight: 700,
+                      }}>✓</button>
+                    </>
                   } />
                 ))}
               </div>
@@ -5647,6 +5704,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                 {expired.map(r => (
                   <ReminderRow key={r.id} r={r} variant="expired" actions={
                     <>
+                      <OdlozitTlacitko r={r} />
                       <button onClick={() => onReactivate(r)} title="Reaktivovat (znovu nastavit čas)" style={{
                         ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                         background: theme.accent, color: "#fff", fontWeight: 700,
@@ -26860,6 +26918,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onDismiss={async (id) => {
               setReminders(prev => prev.filter(r => r.id !== id));
               await apiDismissReminder(id);
+            }}
+            onSnooze={async (id, novyCas) => {
+              // Posune se hned v seznamu, ať je vidět, že se něco stalo;
+              // zápis do databáze doběhne vzápětí.
+              setReminders(prev => prev.map(r =>
+                r.id === id ? { ...r, remindAt: novyCas, notified: false } : r
+              ));
+              await apiSnoozeReminder(id, novyCas);
             }}
             onReactivate={(reminder) => {
               // Otevři QuickReminderModal s předvyplněným textem
