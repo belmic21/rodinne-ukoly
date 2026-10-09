@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_0650";
+const FILE_VERSION = "261009_0730";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -9668,7 +9668,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote, onRemindTask }) {
+function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote, onRemindTask, onFiltrujZakazku }) {
 
 
   const [isOpen, setIsOpen] = useState(false);
@@ -10227,12 +10227,15 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 if (!kod || !task.projectId) return task.title;
                 return (
                   <>
-                    <span title="Úkol k zakázce" style={{
-                      fontSize: "10px", fontWeight: 700, letterSpacing: "0.02em",
-                      color: theme.purple, border: `1px solid ${theme.purple}44`,
-                      borderRadius: 5, padding: "1px 5px", marginRight: 6,
-                      whiteSpace: "nowrap", verticalAlign: "middle",
-                    }}>{kod}</span>
+                    <span
+                      onClick={(e) => { e.stopPropagation(); onFiltrujZakazku?.(kod); }}
+                      title={`Zobrazit jen úkoly k ${kod}`}
+                      style={{
+                        fontSize: "10px", fontWeight: 700, letterSpacing: "0.02em",
+                        color: theme.purple, border: `1px solid ${theme.purple}44`,
+                        borderRadius: 5, padding: "1px 5px", marginRight: 6,
+                        whiteSpace: "nowrap", verticalAlign: "middle", cursor: "pointer",
+                      }}>{kod}</span>
                     {text}
                   </>
                 );
@@ -22855,6 +22858,9 @@ function App() {
      aktivní/plánovaný/splněný), ale druhá osa: čí je to práce.
      Volba se pamatuje — kdo si ráno dá "Osobní", nechce to
      přepínat každý den znovu. */
+  // Klik na kód u úkolu zúží seznam na jednu zakázku.
+  const [zakazkaFiltr, setZakazkaFiltr] = useState(null);
+
   const [praceFilter, setPraceFilter] = useState(() => {
     try { return localStorage.getItem("ft_prace") || "vse"; } catch (e) { return "vse"; }
   });
@@ -24922,6 +24928,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     // Osobní / zakázky. Úkol u zakázky má vyplněné projectId.
     if (praceFilter === "osobni") result = result.filter(t => !t.projectId);
     else if (praceFilter === "zakazky") result = result.filter(t => !!t.projectId);
+    // Klik na kód u úkolu — jen tahle zakázka.
+    if (zakazkaFiltr) result = result.filter(t => rozlozNazev(t.title).kod === zakazkaFiltr);
 
     // Status filter
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
@@ -25172,7 +25180,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     }
 
     return result;
-  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, customLists]);
+  }, [tasks, currentUser, filter, viewStatus, sortMode, categoryFilter, priorityFilter, tagFilter, searchQuery, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, customLists, praceFilter, zakazkaFiltr]);
 
   // Viditelné kategorie pro tohoto uživatele — vyfiltrovat hidden + seřadit
   const visibleCategories = useMemo(() => {
@@ -25692,7 +25700,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       }
       return true;
     }).length;
-  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, praceFilter]);
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -27385,6 +27393,20 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 width: 1, alignSelf: "stretch", margin: "2px 4px",
                 background: theme.cardBorder, flexShrink: 0,
               }} />
+              {zakazkaFiltr && (
+                <button onClick={() => setZakazkaFiltr(null)}
+                  title="Zrušit zúžení na jednu zakázku"
+                  style={{
+                    ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
+                    fontWeight: 700, background: theme.purple, color: "#fff",
+                    border: `1px solid ${theme.purple}`, borderRadius: "16px",
+                    display: "inline-flex", alignItems: "center", gap: "5px",
+                    fontFamily: FONT, flexShrink: 0,
+                  }}>
+                  <span>{zakazkaFiltr}</span>
+                  <span style={{ opacity: 0.8 }}>×</span>
+                </button>
+              )}
               {[
                 { key: "vse",     icon: "",   label: "Vše" },
                 { key: "osobni",  icon: "🏠", label: "Osobní" },
@@ -28729,6 +28751,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         task={task}
                         currentUser={currentUser}
                         users={users}
+                        onFiltrujZakazku={setZakazkaFiltr}
                         onStatusChange={changeStatus}
                         onMarkSeen={markSeen}
                         onUpdate={updateTask}
