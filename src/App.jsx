@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_0100";
+const FILE_VERSION = "261009_0620";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3656,6 +3656,8 @@ function noteFromDb(n) {
     sharedWith: Array.isArray(n.shared_with) ? n.shared_with : [],
     deletedAt: n.deleted_at || null, // soft delete
     archivedBy: (n.archived_by && typeof n.archived_by === "object") ? n.archived_by : {},
+    // Vyplněné = poznámka patří zakázce a do panelu Poznámky nepatří.
+    projectId: n.project_id || null,
   };
 }
 function noteToDb(n) {
@@ -3668,6 +3670,7 @@ function noteToDb(n) {
     shared_with: Array.isArray(n.sharedWith) ? n.sharedWith : [],
     deleted_at: n.deletedAt || null,
     archived_by: (n.archivedBy && typeof n.archivedBy === "object") ? n.archivedBy : {},
+    project_id: n.projectId || null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -3751,6 +3754,10 @@ async function apiLoadNotes(userName) {
     if (error) throw error;
     const all = (data || []).map(noteFromDb);
     const filtered = all.filter(n => {
+      // Poznámka patřící zakázce se do soukromých poznámek neplete.
+      // Žije u té zakázky a tam ji taky najdeš — jinak by se panel
+      // Poznámky zaplnil provozními zápisky z obchodu.
+      if (n.projectId) return false;
       if (n.createdBy === userName) return true;
       if (n.isShared) return true; // legacy
       if (Array.isArray(n.sharedWith)) {
@@ -3766,6 +3773,7 @@ async function apiLoadNotes(userName) {
     if (isNetworkError(e)) {
       const cached = cacheGet(CACHE_NOTES) || [];
       return cached.filter(n => {
+        if (n.projectId) return false;
         if (n.createdBy === userName) return true;
         if (n.isShared) return true;
         if (Array.isArray(n.sharedWith)) {
@@ -22915,6 +22923,21 @@ function App() {
     return flushed;
   }, []);
 
+  /* V Obchodu může u zakázky vzniknout úkol. Je to normální úkol
+     v úkolníku, ale hlavní seznam ho v paměti nemá — musí si ho
+     přečíst. Voláme hned po vytvoření i po zavření okna, ať ho
+     uživatel nehledá. */
+  const obnovZObchodu = useCallback(async () => {
+    try {
+      const [t, n] = await Promise.all([
+        apiLoadTasks(),
+        apiLoadNotes(currentUser?.name),
+      ]);
+      if (Array.isArray(t)) setTasks(t);
+      if (Array.isArray(n)) setNotes(n);
+    } catch (e) { /* offline — dorovná se při další synchronizaci */ }
+  }, [currentUser?.name]);
+
   // Automatické opakování: dokud něco visí ve frontě, zkoušej to každých 20 s.
   // Výpadek Supabase tak aplikace přežije sama, bez zásahu uživatele.
   useEffect(() => {
@@ -27058,19 +27081,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialDraft={obchodDraft}
             initialOsoba={obchodOsoba}
             initialZakazka={obchodZakazka}
+            onDataZmena={obnovZObchodu}
             onClose={async () => {
               setShowObchodSheet(false); setObchodDraft("");
               setObchodOsoba(null); setObchodZakazka(null);
-              // V Obchodu mohl vzniknout úkol nebo poznámka u zakázky.
-              // Hlavní seznamy o nich nevědí, dokud si je nepřečtou znovu.
-              try {
-                const [t, n] = await Promise.all([
-                  apiLoadTasks(),
-                  apiLoadNotes(currentUser?.name),
-                ]);
-                if (Array.isArray(t)) setTasks(t);
-                if (Array.isArray(n)) setNotes(n);
-              } catch (e) { /* offline — seznamy se dorovnají při další synchronizaci */ }
+              await obnovZObchodu();
             }}
           />
         )}
