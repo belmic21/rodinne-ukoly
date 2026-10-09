@@ -1203,7 +1203,7 @@ export function bezKodu(kod, text) {
   return t;
 }
 
-export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = null) {
+export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = null, priorita = null) {
   const t = (nazev || "").trim();
   if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
   if (!t) return { ok: false, chyba: "Napiš, co je potřeba udělat." };
@@ -1217,7 +1217,7 @@ export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = nul
         title: sKodem(kod, t),
         note: null,
         type: "simple",
-        priority: null,
+        priority: priorita || null,
         category: null,
         status: "active",
         due_date: null,

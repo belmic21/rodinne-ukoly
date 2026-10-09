@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261009_0650";
+export const OBCHOD_VERZE = "261009_0730";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -156,6 +156,20 @@ export function kdyZadano(iso) {
   if (isNaN(d.getTime())) return "";
   const dni = Math.floor((Date.now() - d.getTime()) / 86400000);
   return dni <= 7 ? jakDavno(iso) : datumKratce(iso);
+}
+
+/* Datum i čas. U zápisů k zakázce je důležité pořadí v rámci dne —
+   "ráno volal, odpoledne poslal podklady" se bez času nepozná. */
+export function kdyPresne(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const dnes = new Date(); dnes.setHours(0, 0, 0, 0);
+  const cas = d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
+  if (d >= dnes) return `dnes ${cas}`;
+  const vcera = new Date(dnes); vcera.setDate(vcera.getDate() - 1);
+  if (d >= vcera) return `včera ${cas}`;
+  return `${datumKratce(iso)} ${cas}`;
 }
 
 /* Název měsíce pro graf: "9/26". Celé "září 2026" by se do sloupce

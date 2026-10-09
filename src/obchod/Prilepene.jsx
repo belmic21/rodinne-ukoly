@@ -23,7 +23,7 @@ import {
   prepniUkol, komuZadat, bezKodu,
 } from "./api.js";
 import {
-  card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno, ODZNAKY,
+  card, input, btn, btnMain, btnGhost, label, kdyPresne, ODZNAKY,
 } from "./ui.js";
 
 export default function Prilepene({ theme, owner, projectId, kod, spravce = false,
@@ -33,10 +33,10 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
   const [poznamky, setPoznamky] = useState([]);
   const [lide, setLide] = useState([]);
   const [busy, setBusy] = useState(true);
-  const [novyUkol, setNovyUkol] = useState("");
+  const [text, setText] = useState("");
+  const [druh, setDruh] = useState("ukol");     // ukol | poznamka
   const [komu, setKomu] = useState("");
-  const [novaPozn, setNovaPozn] = useState("");
-  const [pisuPozn, setPisuPozn] = useState(false);
+  const [priorita, setPriorita] = useState("");
   const [chyba, setChyba] = useState(null);
   const [uklada, setUklada] = useState(false);
 
@@ -57,25 +57,21 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
     return () => clearTimeout(id);
   }, [skocSem, busy]);
 
-  const pridejUkol = async () => {
-    if (!novyUkol.trim()) return;
-    setUklada(true); setChyba(null);
-    const res = await ukolKZakazce(owner, projectId, novyUkol, kod, komu || null);
-    setUklada(false);
-    if (!res.ok) { setChyba(res.chyba); return; }
-    setNovyUkol("");
-    nacti();
-    onZmena?.();            // ať se úkol objeví i v hlavním seznamu
-  };
+  const jeUkol = druh === "ukol";
 
-  const pridejPoznamku = async () => {
-    if (!novaPozn.trim()) return;
+  /* Jedno uložení pro obojí. Po zápisu se pole vyčistí a druh
+     zůstane — píšeš-li tři poznámky za sebou, nepřepínáš pokaždé. */
+  const uloz = async () => {
+    if (!text.trim()) return;
     setUklada(true); setChyba(null);
-    const res = await poznamkaKZakazce(owner, projectId, novaPozn, kod);
+    const res = jeUkol
+      ? await ukolKZakazce(owner, projectId, text, kod, komu || null, priorita || null)
+      : await poznamkaKZakazce(owner, projectId, text, kod);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
-    setNovaPozn(""); setPisuPozn(false);
+    setText("");
     nacti();
+    if (jeUkol) onZmena?.();   // ať se úkol objeví i v hlavním seznamu
   };
 
   const odskrtni = async (t) => {
@@ -88,8 +84,12 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
     onZmena?.();
   };
 
-  const otevrene = ukoly.filter(t => (t.status || "") !== "done");
-  const hotove = ukoly.filter(t => (t.status || "") === "done");
+  // Nejnovější nahoře. U zakázky čteš průběh odzadu: co je čerstvé,
+  // to řešíš. Nesplněné před splněnými, uvnitř podle času.
+  const poCase = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  const otevrene = ukoly.filter(t => (t.status || "") !== "done").sort(poCase);
+  const hotove = ukoly.filter(t => (t.status || "") === "done").sort(poCase);
+  const poznamkyCas = [...poznamky].sort(poCase);
 
   return (
     <div ref={box} style={{ marginTop: 16, scrollMarginTop: 70 }}>
@@ -113,56 +113,88 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
         }}>{chyba}</div>
       )}
 
-      {/* Jednořádkové zadání. Když u telefonu padne "sežeň výpis
-          z katastru", nemá se vyplňovat formulář. */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-        <input value={novyUkol}
-          onChange={e => { setNovyUkol(e.target.value); setChyba(null); }}
-          onKeyDown={e => { if (e.key === "Enter") pridejUkol(); }}
-          placeholder="Co je potřeba udělat — Enter přidá úkol"
-          style={{ ...input(theme), flex: "1 1 220px" }} />
-        {lide.length > 1 && (
-          <select value={komu} onChange={e => setKomu(e.target.value)}
-            title="Komu úkol zadat"
-            style={{ ...input(theme), width: "auto", flex: "0 0 auto", cursor: "pointer" }}>
-            <option value="">pro mě</option>
-            {lide.filter(l => !l.ja).map(l => (
-              <option key={l.name} value={l.name}>pro {l.name}</option>
-            ))}
-          </select>
-        )}
-        <button onClick={pridejUkol} disabled={!novyUkol.trim() || uklada} style={{
-          ...btnMain(theme), opacity: novyUkol.trim() && !uklada ? 1 : 0.5,
-        }}>+ úkol</button>
-        {!pisuPozn && (
-          <button onClick={() => setPisuPozn(true)} style={btnGhost(theme)}>+ poznámka</button>
-        )}
-      </div>
+      {/* Jedno pole pro obojí. Přepínač vpravo rozhoduje, co z toho
+          vznikne — u úkolu se navíc ukáže, komu ho zadat. Dvě pole
+          pod sebou nutila rozmyslet si to dřív, než začneš psát. */}
+      <div style={{ ...card(theme), padding: "9px 10px", marginBottom: 8 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: jeUkol ? 7 : 0 }}>
+          <textarea value={text}
+            onChange={e => { setText(e.target.value); setChyba(null); }}
+            onKeyDown={e => {
+              // Enter odešle, Shift+Enter zalomí — u poznámky se hodí víc řádků.
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); uloz(); }
+            }}
+            rows={jeUkol ? 1 : 3}
+            placeholder={jeUkol
+              ? "Co je potřeba udělat — Enter přidá úkol"
+              : "Co padlo, na co nezapomenout — Enter uloží, Shift+Enter nový řádek"}
+            style={{
+              ...input(theme), flex: 1, resize: "vertical", lineHeight: 1.6,
+              minHeight: jeUkol ? 36 : 64,
+            }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {[{ k: "ukol", t: "úkol" }, { k: "poznamka", t: "poznámka" }].map(v => {
+              const zap = druh === v.k;
+              return (
+                <button key={v.k} onClick={() => setDruh(v.k)} style={{
+                  ...btn(),
+                  background: zap ? theme.accentSoft : "transparent",
+                  border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+                  color: zap ? theme.accent : theme.textSub,
+                  fontSize: "11.5px", padding: "4px 11px", borderRadius: 13,
+                  fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+                }}>{v.t}</button>
+              );
+            })}
+          </div>
+        </div>
 
-      {pisuPozn && (
-        <div style={{ ...card(theme), padding: "10px 12px", marginBottom: 8 }}>
-          <textarea value={novaPozn}
-            onChange={e => { setNovaPozn(e.target.value); setChyba(null); }}
-            rows={3} placeholder="Co padlo, na co nezapomenout, co se domluvilo."
-            style={{ ...input(theme), resize: "vertical", lineHeight: 1.6, marginBottom: 7 }} />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button onClick={pridejPoznamku} disabled={!novaPozn.trim() || uklada} style={{
-              ...btnMain(theme), opacity: novaPozn.trim() && !uklada ? 1 : 0.5,
+        {/* Volby jen u úkolu. U poznámky nemají smysl a jen by matly. */}
+        {jeUkol && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {lide.length > 1 && (
+              <select value={komu} onChange={e => setKomu(e.target.value)}
+                title="Komu úkol zadat"
+                style={{ ...input(theme), width: "auto", flex: "0 0 auto", cursor: "pointer",
+                  padding: "5px 8px", fontSize: "12px" }}>
+                <option value="">pro mě</option>
+                {lide.filter(l => !l.ja).map(l => (
+                  <option key={l.name} value={l.name}>pro {l.name}</option>
+                ))}
+              </select>
+            )}
+            <select value={priorita} onChange={e => setPriorita(e.target.value)}
+              title="Priorita"
+              style={{ ...input(theme), width: "auto", flex: "0 0 auto", cursor: "pointer",
+                padding: "5px 8px", fontSize: "12px" }}>
+              <option value="">běžné</option>
+              <option value="medium">důležité</option>
+              <option value="urgent">akutní</option>
+            </select>
+            <span style={{ flex: 1 }} />
+            <button onClick={uloz} disabled={!text.trim() || uklada} style={{
+              ...btnMain(theme), opacity: text.trim() && !uklada ? 1 : 0.5,
+            }}>{uklada ? "UKLÁDÁM…" : "PŘIDAT ÚKOL"}</button>
+          </div>
+        )}
+
+        {!jeUkol && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7 }}>
+            <button onClick={uloz} disabled={!text.trim() || uklada} style={{
+              ...btnMain(theme), opacity: text.trim() && !uklada ? 1 : 0.5,
             }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT POZNÁMKU"}</button>
-            <button onClick={() => { setPisuPozn(false); setNovaPozn(""); setChyba(null); }}
-              style={btnGhost(theme)}>zrušit</button>
             <span style={{ fontSize: "10.5px", color: theme.textSub }}>
               Zůstane u zakázky, do tvých poznámek se nedostane.
             </span>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {busy && ukoly.length === 0 && poznamky.length === 0 && (
         <Tise theme={theme}>Načítám…</Tise>
       )}
 
-      {!busy && ukoly.length === 0 && poznamky.length === 0 && !pisuPozn && (
+      {!busy && ukoly.length === 0 && poznamky.length === 0 && (
         <Tise theme={theme}>
           Zatím nic. Úkol se objeví i ve tvém úkolníku pod „Aktivní",
           poznámka zůstane jen tady.
@@ -195,7 +227,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
               <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 2 }}>
                 {[
                   hotovo ? "splněno" : "v úkolníku",
-                  t.created_at ? `zadáno ${jakDavno(t.created_at)}` : null,
+                  t.created_at ? kdyPresne(t.created_at) : null,
                   prokoho.length ? `pro ${prokoho.join(", ")}` : null,
                   cizi ? `zapsal ${t.created_by}` : null,
                 ].filter(Boolean).join(" · ")}
@@ -205,7 +237,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
         );
       })}
 
-      {poznamky.map(n => {
+      {poznamkyCas.map(n => {
         const cizi = n.created_by && n.created_by !== owner;
         return (
           <div key={n.id} style={{
@@ -219,7 +251,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
             <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 4 }}>
               {[
                 "poznámka k zakázce",
-                datumKratce(n.updated_at || n.created_at),
+                kdyPresne(n.created_at || n.updated_at),
                 cizi ? `zapsal ${n.created_by}` : null,
               ].filter(Boolean).join(" · ")}
             </div>

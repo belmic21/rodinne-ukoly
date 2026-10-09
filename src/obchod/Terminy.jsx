@@ -258,8 +258,28 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
         )}
       </div>
 
+      {/* Posunout termín a hned říct proč. "Čeká na finance" za dva
+          týdny je něco jiného než ticho — a za měsíc už si nevzpomeneš,
+          co se tehdy dělo. */}
+      {t.id && (
+        <div style={{ marginBottom: 8 }}>
+          <span style={label(theme)}>Posunout a napsat proč</span>
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            {[{ d: 7, t: "+ týden" }, { d: 14, t: "+ 14 dní" }, { d: 30, t: "+ měsíc" }].map(v => (
+              <button key={v.d} onClick={() => uprav("datum", ZA_DNI(v.d))}
+                style={btnGhost(theme)}>{v.t}</button>
+            ))}
+            {["čeká na finance", "čeká na due diligence", "čeká na banku", "rozmýšlí se"].map(d => (
+              <button key={d} onClick={() => uprav("poznamka", d)}
+                style={{ ...btnGhost(theme), color: theme.textSub }}>{d}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <input value={f.poznamka} onChange={e => uprav("poznamka", e.target.value)}
-        placeholder="Poznámka — nepovinné" style={{ ...input(theme), marginBottom: 8 }} />
+        placeholder="Proč se to posouvá — čeká na finance, na vyjádření…"
+        style={{ ...input(theme), marginBottom: 8 }} />
 
       <div onClick={() => uprav("pripomenout", !f.pripomenout)} style={{
         display: "flex", alignItems: "center", gap: 8,

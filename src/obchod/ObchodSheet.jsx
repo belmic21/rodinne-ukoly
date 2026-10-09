@@ -901,20 +901,6 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             style={{ ...input(theme), resize: "vertical", lineHeight: 1.6 }} />
         </div>
 
-        {/* Odkaz na podklady patří k souhrnu — oboje odpovídá
-            na "o co jde". Zbytek polí je níž pod Podrobnostmi. */}
-        <div style={{ marginBottom: 14 }}>
-          <span style={label(theme)}>Odkaz na složku s podklady</span>
-          <input value={f.slozka_odkaz || ""} onChange={e => uprav("slozka_odkaz", e.target.value)}
-            placeholder="https://… (OneDrive, Dropbox)" style={input(theme)} />
-          {f.slozka_odkaz && (
-            <a href={f.slozka_odkaz} target="_blank" rel="noreferrer"
-              style={{ fontSize: "11px", color: theme.accent, marginTop: 3, display: "inline-block" }}>
-              otevřít složku →
-            </a>
-          )}
-        </div>
-
         {chyba && (
           <div style={{
             background: `${theme.red}18`, border: `1px solid ${theme.red}44`,
@@ -946,21 +932,10 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
 
         {zakazkaId && (
           <>
-            <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
-              kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"}
-              onZmena={onDataZmena} />
-            <Retezec theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
-              projectId={zakazkaId} onOtevriOsobu={onOtevriOsobu} />
-            <Geneze theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
-              zakazka={{ id: zakazkaId, nazev: f.nazev }}
-              onOtevriOsobu={onOtevriOsobu} />
-            <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
-              ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
-
             {/* Technické údaje. Vyplňují se při zakládání a pak se k nim
                 člověk vrací málokdy — proto jsou sbalené. U nové zakázky
                 jsou rozbalené, tam je naopak potřebuješ hned. */}
-            <Podrobnosti theme={theme} otevreno={!zakazkaId || !f.typ}>
+            <Podrobnosti theme={theme} ciselniky={ciselniky} f={f} otevreno={!zakazkaId}>
         <div style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
             gap: 9, marginBottom: 10,
@@ -1016,6 +991,33 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
 
             </Podrobnosti>
 
+            <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
+              kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"}
+              onZmena={onDataZmena} />
+            <Retezec theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
+              projectId={zakazkaId} onOtevriOsobu={onOtevriOsobu} />
+            <Geneze theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
+              zakazka={{ id: zakazkaId, nazev: f.nazev }}
+              onOtevriOsobu={onOtevriOsobu} />
+            <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
+              ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
+
+            {/* Odkaz na složku se zadá jednou a pak se jen otvírá —
+                nahoře by zabíral místo, kde chceš vidět souhrn a úkoly. */}
+            <div style={{ marginTop: 16 }}>
+        <div style={{ marginBottom: 14 }}>
+          <span style={label(theme)}>Odkaz na složku s podklady</span>
+          <input value={f.slozka_odkaz || ""} onChange={e => uprav("slozka_odkaz", e.target.value)}
+            placeholder="https://… (OneDrive, Dropbox)" style={input(theme)} />
+          {f.slozka_odkaz && (
+            <a href={f.slozka_odkaz} target="_blank" rel="noreferrer"
+              style={{ fontSize: "11px", color: theme.accent, marginTop: 3, display: "inline-block" }}>
+              otevřít složku →
+            </a>
+          )}
+        </div>
+            </div>
+
             {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
                 tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
             {!cizi && (
@@ -1040,23 +1042,53 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
 /* Sbalitelný blok s technickými údaji. Typ, fáze, cena, kraj —
    vyplní se při zakládání a pak se k nim člověk vrací málokdy.
    Nahoře má být to, co odpovídá na „o co jde" a „co je potřeba". */
-function Podrobnosti({ theme, otevreno = false, children }) {
+/* Parametry zakázky. Zavřené se čtou jako věta, otevřené se
+   editují. Dřív tu byly výběrové seznamy pořád — jenže typ a fázi
+   vyplníš jednou při zakládání a pak chceš jen vidět, co to je. */
+function Podrobnosti({ theme, ciselniky, f, otevreno = false, children }) {
   const [open, setOpen] = useState(otevreno);
+
+  const radky = [
+    ["Typ", popis(ciselniky, "typ", f.typ)],
+    ["Velikost", f.velikost ? `${f.velikost} ${popis(ciselniky, "jednotka", f.jednotka)}` : null],
+    ["Cena", f.cena ? `${f.cena} ${f.mena || "CZK"}` : null],
+    ["Odměna", f.odmena],
+    ["Lokalita", [f.mesto, popis(ciselniky, "kraj", f.kraj)].filter(Boolean).join(", ")],
+    ["Adresa", f.lokalita_text],
+    ["Fáze", popis(ciselniky, "faze", f.faze)],
+    ["Stav", popis(ciselniky, "stav_zakazky", f.stav)],
+  ].filter(([, v]) => v);
+
   return (
     <div style={{ marginTop: 16 }}>
-      <button onClick={() => setOpen(v => !v)} style={{
-        ...btn(), background: "transparent", padding: "2px 0",
-        display: "flex", alignItems: "center", gap: 6, width: "100%",
-      }}>
-        <span style={{ ...label(theme), marginBottom: 0 }}>
-          {open ? "▾" : "▸"} Podrobnosti zakázky
-        </span>
-        {!open && (
-          <span style={{ fontSize: "10.5px", color: theme.textSub, fontWeight: 400 }}>
-            typ, fáze, cena, lokalita
-          </span>
-        )}
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+        <span style={{ ...label(theme), marginBottom: 0, flex: 1 }}>O zakázce</span>
+        <button onClick={() => setOpen(v => !v)}
+          title={open ? "Zavřít úpravy" : "Upravit"} style={{
+            ...btn(), background: "transparent", color: open ? theme.accent : theme.textSub,
+            fontSize: "12px", padding: "2px 6px",
+          }}>{open ? "hotovo" : "✎ upravit"}</button>
+      </div>
+
+      {!open && (
+        <div style={{
+          ...card(theme), padding: "10px 13px",
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+          gap: "5px 16px",
+        }}>
+          {radky.length === 0 ? (
+            <span style={{ fontSize: "11.5px", color: theme.textSub }}>
+              Zatím nevyplněno — tužkou doplníš typ, cenu a lokalitu.
+            </span>
+          ) : radky.map(([k, v]) => (
+            <div key={k} style={{ display: "flex", gap: 8, minWidth: 0 }}>
+              <span style={{ fontSize: "11px", color: theme.textSub, minWidth: 62 }}>{k}</span>
+              <span style={{ fontSize: "12.5px", color: theme.text, minWidth: 0 }}>{v}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {open && <div style={{ marginTop: 9 }}>{children}</div>}
     </div>
   );
