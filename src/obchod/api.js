@@ -1134,6 +1134,27 @@ export async function prehledPrilepenych(owner) {
   }
 }
 
+/* Komu můžu u téhle zakázky zadat úkol: já a ti, s kým ji sdílím.
+   Zadat úkol někomu, kdo zakázku nevidí, nedává smysl — otevřel by
+   si ho a nevěděl, o čem je. */
+export async function komuZadat(owner, projectId) {
+  const ja = { name: owner, ja: true };
+  if (!projectId) return [ja];
+  try {
+    const { data, error } = await supabase
+      .from("deal_shares").select("grantee").eq("project_id", projectId);
+    if (error) throw error;
+    const dalsi = (data || [])
+      .map(r => r.grantee)
+      .filter(n => n && n !== owner)
+      .map(name => ({ name, ja: false }));
+    return [ja, ...dalsi];
+  } catch (e) {
+    selhalo("komuZadat", e);
+    return [ja];
+  }
+}
+
 export async function ukolyZakazky(projectId) {
   if (!projectId) return [];
   try {
@@ -1187,14 +1208,30 @@ export async function ukolKZakazce(owner, projectId, nazev, kod = "", komu = nul
   if (!owner || !projectId) return { ok: false, chyba: "Chybí zakázka." };
   if (!t) return { ok: false, chyba: "Napiš, co je potřeba udělat." };
   try {
+    // Vyplňujeme stejná pole, jaká zakládá úkolník sám. Chybějící
+    // sloupec se sice dosadí výchozí hodnotou, ale aplikace podle
+    // některých filtruje — úkol by pak v seznamu nebyl vidět.
     const { data, error } = await supabase
       .from("tasks")
       .insert({
         title: sKodem(kod, t),
-        created_by: owner,
-        project_id: projectId,
-        assigned_to: komu && komu !== owner ? [komu] : [],
+        note: null,
+        type: "simple",
+        priority: null,
+        category: null,
         status: "active",
+        due_date: null,
+        show_from: null,
+        rec_days: 0,
+        created_by: owner,
+        assigned_to: komu && komu !== owner ? [komu] : [],
+        shared_with: [],
+        done_by: [],
+        seen_by: [],
+        checklist: [],
+        images: [],
+        rejected_by: [],
+        project_id: projectId,
       })
       .select("*")
       .single();

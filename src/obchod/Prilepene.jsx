@@ -1,50 +1,54 @@
 /* ═══════════════════════════════════════════════════════
    OBCHOD — úkoly a poznámky u zakázky
 
-   Nic nového se tu neskladuje. Úkol je pořád úkol v úkolníku,
-   poznámka pořád poznámka v poznámkách — jen mají vyplněnou
-   zakázku. Díky tomu je vidíš na obou místech a v úkolníku si
-   je vyfiltruješ podle čísla zakázky.
+   KDE CO ŽIJE — tohle je to podstatné rozhodnutí:
 
-   Proč to takhle: u obchodu vznikají úkoly přirozeně ("sehnat
-   výpis z katastru", "zavolat na stavební úřad") a dřív se
-   zapisovaly bokem, bez vazby. Za měsíc se pak nedalo zjistit,
-   co k té zakázce vlastně běželo.
+   ÚKOL patří do úkolníku. Je to práce, která se má udělat,
+   a ta má být vidět tam, kde se člověk dívá ráno na den.
+   U zakázky se jen zobrazuje navíc. Když ho odškrtneš,
+   z úkolníku zmizí (jde mezi splněné), ale TADY zůstane
+   přeškrtnutý — u zakázky chceš vidět i to, co je za tebou.
 
-   Úkolník se sdílením zakázky NEOTVÍRÁ. Partner tu vidí svoje
-   úkoly a poznámky, ne tvoje. Správce vidí obojí — jinak by
-   zástup nedával smysl.
+   POZNÁMKA patří zakázce. Do panelu Poznámky se neplete:
+   provozní zápisky z obchodu nemají co dělat mezi soukromými
+   poznámkami. Najdeš ji u zakázky a přes její číslo.
+
+   Obojí se zakládá s kódem zakázky v názvu, takže napsáním
+   "MB-10003" se k tomu dostaneš i odjinud.
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useRef } from "react";
 import {
-  ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce, prepniUkol, bezKodu,
+  ukolyZakazky, poznamkyZakazky, ukolKZakazce, poznamkaKZakazce,
+  prepniUkol, komuZadat, bezKodu,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label, datumKratce, jakDavno, ODZNAKY,
 } from "./ui.js";
 
 export default function Prilepene({ theme, owner, projectId, kod, spravce = false,
-  skocSem = false }) {
+  skocSem = false, onZmena }) {
   const box = useRef(null);
   const [ukoly, setUkoly] = useState([]);
   const [poznamky, setPoznamky] = useState([]);
+  const [lide, setLide] = useState([]);
   const [busy, setBusy] = useState(true);
   const [novyUkol, setNovyUkol] = useState("");
+  const [komu, setKomu] = useState("");
   const [novaPozn, setNovaPozn] = useState("");
   const [pisuPozn, setPisuPozn] = useState(false);
   const [chyba, setChyba] = useState(null);
   const [uklada, setUklada] = useState(false);
-  const [ukazHotove, setUkazHotove] = useState(false);
 
   const nacti = async () => {
     setBusy(true);
-    const [u, p] = await Promise.all([ukolyZakazky(projectId), poznamkyZakazky(projectId)]);
-    setUkoly(u); setPoznamky(p); setBusy(false);
+    const [u, p, l] = await Promise.all([
+      ukolyZakazky(projectId), poznamkyZakazky(projectId), komuZadat(owner, projectId),
+    ]);
+    setUkoly(u); setPoznamky(p); setLide(l); setBusy(false);
   };
   useEffect(() => { if (projectId) nacti(); }, [projectId]);  // eslint-disable-line
 
-  // Příchod z odznaku u řádku: odrolovat sem, ať se nehledá.
   useEffect(() => {
     if (!skocSem || busy) return;
     const id = setTimeout(() => {
@@ -56,11 +60,12 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
   const pridejUkol = async () => {
     if (!novyUkol.trim()) return;
     setUklada(true); setChyba(null);
-    const res = await ukolKZakazce(owner, projectId, novyUkol, kod);
+    const res = await ukolKZakazce(owner, projectId, novyUkol, kod, komu || null);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba); return; }
     setNovyUkol("");
     nacti();
+    onZmena?.();            // ať se úkol objeví i v hlavním seznamu
   };
 
   const pridejPoznamku = async () => {
@@ -75,26 +80,28 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
 
   const odskrtni = async (t) => {
     const hotovo = (t.status || "") === "done";
+    // Optimisticky překreslit — čekání na odpověď u odškrtnutí ruší.
+    setUkoly(p => p.map(x => x.id === t.id
+      ? { ...x, status: hotovo ? "active" : "done" } : x));
     const res = await prepniUkol(t.id, !hotovo, owner);
-    if (!res.ok) { setChyba(res.chyba); return; }
-    nacti();
+    if (!res.ok) { setChyba(res.chyba); nacti(); return; }
+    onZmena?.();
   };
 
   const otevrene = ukoly.filter(t => (t.status || "") !== "done");
   const hotove = ukoly.filter(t => (t.status || "") === "done");
-  const videt = ukazHotove ? [...otevrene, ...hotove] : otevrene;
 
   return (
     <div ref={box} style={{ marginTop: 16, scrollMarginTop: 70 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
         <span style={{ ...label(theme), marginBottom: 0, flex: 1 }}>
-          Úkoly a poznámky k zakázce
+          Úkoly a poznámky
         </span>
-        {hotove.length > 0 && (
-          <button onClick={() => setUkazHotove(v => !v)} style={{
-            ...btn(), background: "transparent", color: theme.textSub,
-            fontSize: "11px", padding: "2px 5px",
-          }}>{ukazHotove ? "skrýt hotové" : `hotové (${hotove.length})`}</button>
+        {(otevrene.length > 0 || hotove.length > 0) && (
+          <span style={{ fontSize: "11px", color: theme.textSub }}>
+            {ODZNAKY[0].ikona} {otevrene.length}
+            {hotove.length > 0 && ` · ${hotove.length} hotovo`}
+          </span>
         )}
       </div>
 
@@ -106,14 +113,24 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
         }}>{chyba}</div>
       )}
 
-      {/* Zadání úkolu je jednořádkové schválně. Když u telefonu
-          padne "sežeň výpis z katastru", nemá se vyplňovat formulář. */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+      {/* Jednořádkové zadání. Když u telefonu padne "sežeň výpis
+          z katastru", nemá se vyplňovat formulář. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
         <input value={novyUkol}
           onChange={e => { setNovyUkol(e.target.value); setChyba(null); }}
           onKeyDown={e => { if (e.key === "Enter") pridejUkol(); }}
           placeholder="Co je potřeba udělat — Enter přidá úkol"
-          style={{ ...input(theme), flex: 1 }} />
+          style={{ ...input(theme), flex: "1 1 220px" }} />
+        {lide.length > 1 && (
+          <select value={komu} onChange={e => setKomu(e.target.value)}
+            title="Komu úkol zadat"
+            style={{ ...input(theme), width: "auto", flex: "0 0 auto", cursor: "pointer" }}>
+            <option value="">pro mě</option>
+            {lide.filter(l => !l.ja).map(l => (
+              <option key={l.name} value={l.name}>pro {l.name}</option>
+            ))}
+          </select>
+        )}
         <button onClick={pridejUkol} disabled={!novyUkol.trim() || uklada} style={{
           ...btnMain(theme), opacity: novyUkol.trim() && !uklada ? 1 : 0.5,
         }}>+ úkol</button>
@@ -134,6 +151,9 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
             }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT POZNÁMKU"}</button>
             <button onClick={() => { setPisuPozn(false); setNovaPozn(""); setChyba(null); }}
               style={btnGhost(theme)}>zrušit</button>
+            <span style={{ fontSize: "10.5px", color: theme.textSub }}>
+              Zůstane u zakázky, do tvých poznámek se nedostane.
+            </span>
           </div>
         </div>
       )}
@@ -142,21 +162,24 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
         <Tise theme={theme}>Načítám…</Tise>
       )}
 
-      {!busy && otevrene.length === 0 && poznamky.length === 0 && !pisuPozn && (
+      {!busy && ukoly.length === 0 && poznamky.length === 0 && !pisuPozn && (
         <Tise theme={theme}>
-          Zatím nic. Co sem napíšeš, se založí ve tvém úkolníku a v poznámkách
-          {kod ? ` pod ${kod}` : ""} — uvidíš to tady i tam.
+          Zatím nic. Úkol se objeví i ve tvém úkolníku pod „Aktivní",
+          poznámka zůstane jen tady.
         </Tise>
       )}
 
-      {videt.map(t => {
+      {/* Nesplněné nahoře, hotové pod nimi a přeškrtnuté. Nemizí —
+          u zakázky chceš vidět i to, co je hotové. */}
+      {[...otevrene, ...hotove].map(t => {
         const hotovo = (t.status || "") === "done";
         const cizi = t.created_by && t.created_by !== owner;
+        const prokoho = (t.assigned_to || []).filter(x => x !== owner);
         return (
           <div key={t.id} style={{
             ...card(theme), padding: "8px 11px", marginBottom: 6,
             display: "flex", alignItems: "flex-start", gap: 9,
-            opacity: hotovo ? 0.55 : 1,
+            opacity: hotovo ? 0.6 : 1,
           }}>
             <button onClick={() => odskrtni(t)}
               title={hotovo ? "Vrátit mezi nesplněné" : "Hotovo"}
@@ -171,9 +194,9 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
               }}>{bezKodu(kod, t.title)}</div>
               <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 2 }}>
                 {[
-                  kod,
+                  hotovo ? "splněno" : "v úkolníku",
                   t.created_at ? `zadáno ${jakDavno(t.created_at)}` : null,
-                  (t.assigned_to || []).length ? `pro ${t.assigned_to.join(", ")}` : null,
+                  prokoho.length ? `pro ${prokoho.join(", ")}` : null,
                   cizi ? `zapsal ${t.created_by}` : null,
                 ].filter(Boolean).join(" · ")}
               </div>
@@ -189,18 +212,13 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
             ...card(theme), padding: "9px 11px", marginBottom: 6,
             borderLeft: `3px solid ${theme.yellow}66`,
           }}>
-            {n.title && (
-              <div style={{ fontSize: "12px", fontWeight: 700, color: theme.text, marginBottom: 2 }}>
-                {bezKodu(kod, n.title)}
-              </div>
-            )}
             <div style={{
               fontSize: "12.5px", color: theme.text, lineHeight: 1.6,
               whiteSpace: "pre-wrap",
             }}>{n.content}</div>
             <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 4 }}>
               {[
-                kod,
+                "poznámka k zakázce",
                 datumKratce(n.updated_at || n.created_at),
                 cizi ? `zapsal ${n.created_by}` : null,
               ].filter(Boolean).join(" · ")}
@@ -208,14 +226,6 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
           </div>
         );
       })}
-
-      {(ukoly.length > 0 || poznamky.length > 0) && (
-        <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 6, lineHeight: 1.6 }}>
-          Zakládají se s číslem zakázky v názvu, takže je kdekoli najdeš
-          napsáním {kod || "čísla zakázky"} — v úkolníku, v poznámkách i v lupě.
-          {spravce ? " Jako správce tu vidíš i to, co zapsal partner." : ""}
-        </div>
-      )}
     </div>
   );
 }

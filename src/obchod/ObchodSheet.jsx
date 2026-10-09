@@ -57,7 +57,7 @@ function odKdy(obdobi) {
 }
 
 export default function ObchodSheet({ currentUser, theme, initialDraft = "",
-  initialOsoba = null, initialZakazka = null, onClose }) {
+  initialOsoba = null, initialZakazka = null, onClose, onDataZmena }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
@@ -238,7 +238,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           <Detail
             theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
             zakazka={otevrena} onBack={zavri} onClose={onClose}
-            onOtevriOsobu={setOsobaId} skocNa={skocNa}
+            onOtevriOsobu={setOsobaId} skocNa={skocNa} onDataZmena={onDataZmena}
           />
         ) : (
           <>
@@ -772,7 +772,7 @@ function Prazdno({ theme, children }) {
 /* ── Detail zakázky ────────────────────────────────── */
 
 function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
-  onBack, onClose, onOtevriOsobu, spravce = false, skocNa = null }) {
+  onBack, onClose, onOtevriOsobu, spravce = false, skocNa = null, onDataZmena }) {
   const novy = !zakazka;
   // Zakázka, kterou se mnou někdo sdílí ve spolupráci. Hlavička je jeho,
   // do průběhu zapisovat můžu. Správce může i hlavičku.
@@ -894,66 +894,15 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             placeholder="Rezidence Zličín" style={{ ...input(theme), fontWeight: 700, fontSize: "14px" }} />
         </div>
 
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-          gap: 9, marginBottom: 10,
-        }}>
-          <Select theme={theme} nadpis="Typ" hodnota={f.typ}
-            polozky={aktivni(ciselniky, "typ")} onZmena={v => uprav("typ", v)} />
-          <Select theme={theme} nadpis="Fáze přípravy" hodnota={f.faze}
-            polozky={aktivni(ciselniky, "faze")} onZmena={v => uprav("faze", v)} />
-          <Select theme={theme} nadpis="Stav zakázky" hodnota={f.stav}
-            polozky={aktivni(ciselniky, "stav_zakazky")} onZmena={v => uprav("stav", v)} />
-
-          <div>
-            <span style={label(theme)}>Akviziční cena</span>
-            <input value={f.cena ?? ""} onChange={e => uprav("cena", e.target.value)}
-              placeholder="90 mil" style={input(theme)} />
-          </div>
-
-          <div>
-            <span style={label(theme)}>Velikost</span>
-            <div style={{ display: "flex", gap: 5 }}>
-              <input value={f.velikost ?? ""} onChange={e => uprav("velikost", e.target.value)}
-                placeholder="85" style={{ ...input(theme), flex: 1 }} />
-              <select value={f.jednotka || "byt"} onChange={e => uprav("jednotka", e.target.value)}
-                style={{ ...input(theme), width: 85, cursor: "pointer" }}>
-                {aktivni(ciselniky, "jednotka").map(j => (
-                  <option key={j.key} value={j.key}>{j.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <Select theme={theme} nadpis="Kraj" hodnota={f.kraj} skupiny
-            polozky={aktivni(ciselniky, "kraj")} onZmena={v => uprav("kraj", v)} />
-
-          <div>
-            <span style={label(theme)}>Město</span>
-            <input value={f.mesto || ""} onChange={e => uprav("mesto", e.target.value)}
-              placeholder="Praha" style={input(theme)} />
-          </div>
-
-          <div>
-            <span style={label(theme)}>Odměna</span>
-            <input value={f.odmena || ""} onChange={e => uprav("odmena", e.target.value)}
-              placeholder="5 % / 100 tis." style={input(theme)} />
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <span style={label(theme)}>Přesná lokalita</span>
-          <input value={f.lokalita_text || ""} onChange={e => uprav("lokalita_text", e.target.value)}
-            placeholder="Ulice, parcela, odkaz na mapu" style={input(theme)} />
-        </div>
-
         <div style={{ marginBottom: 10 }}>
           <span style={label(theme)}>Souhrn — o co jde</span>
           <textarea value={f.souhrn || ""} onChange={e => uprav("souhrn", e.target.value)}
-            rows={6} placeholder="Co to je, co k tomu je za dokumentaci, na co si dát pozor."
+            rows={4} placeholder="Co to je, co k tomu je za dokumentaci, na co si dát pozor."
             style={{ ...input(theme), resize: "vertical", lineHeight: 1.6 }} />
         </div>
 
+        {/* Odkaz na podklady patří k souhrnu — oboje odpovídá
+            na "o co jde". Zbytek polí je níž pod Podrobnostmi. */}
         <div style={{ marginBottom: 14 }}>
           <span style={label(theme)}>Odkaz na složku s podklady</span>
           <input value={f.slozka_odkaz || ""} onChange={e => uprav("slozka_odkaz", e.target.value)}
@@ -997,6 +946,9 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
 
         {zakazkaId && (
           <>
+            <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
+              kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"}
+              onZmena={onDataZmena} />
             <Retezec theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
               projectId={zakazkaId} onOtevriOsobu={onOtevriOsobu} />
             <Geneze theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
@@ -1004,8 +956,66 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
               onOtevriOsobu={onOtevriOsobu} />
             <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
               ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
-            <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
-              kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"} />
+
+            {/* Technické údaje. Vyplňují se při zakládání a pak se k nim
+                člověk vrací málokdy — proto jsou sbalené. U nové zakázky
+                jsou rozbalené, tam je naopak potřebuješ hned. */}
+            <Podrobnosti theme={theme} otevreno={!zakazkaId || !f.typ}>
+        <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: 9, marginBottom: 10,
+          }}>
+            <Select theme={theme} nadpis="Typ" hodnota={f.typ}
+              polozky={aktivni(ciselniky, "typ")} onZmena={v => uprav("typ", v)} />
+            <Select theme={theme} nadpis="Fáze přípravy" hodnota={f.faze}
+              polozky={aktivni(ciselniky, "faze")} onZmena={v => uprav("faze", v)} />
+            <Select theme={theme} nadpis="Stav zakázky" hodnota={f.stav}
+              polozky={aktivni(ciselniky, "stav_zakazky")} onZmena={v => uprav("stav", v)} />
+
+            <div>
+              <span style={label(theme)}>Akviziční cena</span>
+              <input value={f.cena ?? ""} onChange={e => uprav("cena", e.target.value)}
+                placeholder="90 mil" style={input(theme)} />
+            </div>
+
+            <div>
+              <span style={label(theme)}>Velikost</span>
+              <div style={{ display: "flex", gap: 5 }}>
+                <input value={f.velikost ?? ""} onChange={e => uprav("velikost", e.target.value)}
+                  placeholder="85" style={{ ...input(theme), flex: 1 }} />
+                <select value={f.jednotka || "byt"} onChange={e => uprav("jednotka", e.target.value)}
+                  style={{ ...input(theme), width: 85, cursor: "pointer" }}>
+                  {aktivni(ciselniky, "jednotka").map(j => (
+                    <option key={j.key} value={j.key}>{j.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <Select theme={theme} nadpis="Kraj" hodnota={f.kraj} skupiny
+              polozky={aktivni(ciselniky, "kraj")} onZmena={v => uprav("kraj", v)} />
+
+            <div>
+              <span style={label(theme)}>Město</span>
+              <input value={f.mesto || ""} onChange={e => uprav("mesto", e.target.value)}
+                placeholder="Praha" style={input(theme)} />
+            </div>
+
+            <div>
+              <span style={label(theme)}>Odměna</span>
+              <input value={f.odmena || ""} onChange={e => uprav("odmena", e.target.value)}
+                placeholder="5 % / 100 tis." style={input(theme)} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <span style={label(theme)}>Přesná lokalita</span>
+            <input value={f.lokalita_text || ""} onChange={e => uprav("lokalita_text", e.target.value)}
+              placeholder="Ulice, parcela, odkaz na mapu" style={input(theme)} />
+          </div>
+
+            </Podrobnosti>
+
             {/* Komu je zakázka sdílená, rozhoduje její vlastník. Partner
                 tuhle sekci nevidí — nemá co rozdávat cizí zakázku dál. */}
             {!cizi && (
@@ -1024,6 +1034,31 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
         )}
       </div>
     </>
+  );
+}
+
+/* Sbalitelný blok s technickými údaji. Typ, fáze, cena, kraj —
+   vyplní se při zakládání a pak se k nim člověk vrací málokdy.
+   Nahoře má být to, co odpovídá na „o co jde" a „co je potřeba". */
+function Podrobnosti({ theme, otevreno = false, children }) {
+  const [open, setOpen] = useState(otevreno);
+  return (
+    <div style={{ marginTop: 16 }}>
+      <button onClick={() => setOpen(v => !v)} style={{
+        ...btn(), background: "transparent", padding: "2px 0",
+        display: "flex", alignItems: "center", gap: 6, width: "100%",
+      }}>
+        <span style={{ ...label(theme), marginBottom: 0 }}>
+          {open ? "▾" : "▸"} Podrobnosti zakázky
+        </span>
+        {!open && (
+          <span style={{ fontSize: "10.5px", color: theme.textSub, fontWeight: 400 }}>
+            typ, fáze, cena, lokalita
+          </span>
+        )}
+      </button>
+      {open && <div style={{ marginTop: 9 }}>{children}</div>}
+    </div>
   );
 }
 
