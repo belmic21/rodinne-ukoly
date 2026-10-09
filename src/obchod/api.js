@@ -1114,6 +1114,24 @@ export async function zrusPozvanku(email) {
 
 /* Počty pro celý seznam najednou. Jeden dotaz místo dvaceti —
    odznaky u řádku se jinak nedají ukázat bez čekání. */
+/* Hledání napříč obsahem zakázky — jméno, telefon, text poznámky,
+   úkol, termín. Vrací mapu id → { kde, ukazka }, ať se dá v seznamu
+   ukázat, proč se zakázka našla. */
+export async function hledejVObsahu(dotaz) {
+  const q = (dotaz || "").trim();
+  if (!q) return {};
+  try {
+    const { data, error } = await supabase.rpc("deal_hledej", { p_dotaz: q });
+    if (error) throw error;
+    const mapa = {};
+    for (const r of (data || [])) mapa[r.project_id] = { kde: r.kde, ukazka: r.ukazka };
+    return mapa;
+  } catch (e) {
+    selhalo("hledejVObsahu", e);
+    return {};
+  }
+}
+
 export async function prehledPrilepenych(owner) {
   if (!owner) return {};
   try {
@@ -1125,6 +1143,10 @@ export async function prehledPrilepenych(owner) {
         ukolu: Number(r.ukolu) || 0,
         poznamek: Number(r.poznamek) || 0,
         terminu: Number(r.terminu) || 0,
+        terminDni: r.termin_dni === null || r.termin_dni === undefined
+          ? null : Number(r.termin_dni),
+        terminNazev: r.termin_nazev || null,
+        terminKdo: r.termin_kdo || null,
       };
     }
     return mapa;
@@ -1138,16 +1160,23 @@ export async function prehledPrilepenych(owner) {
    Zadat úkol někomu, kdo zakázku nevidí, nedává smysl — otevřel by
    si ho a nevěděl, o čem je. */
 export async function komuZadat(owner, projectId) {
-  const ja = { name: owner, ja: true };
-  if (!projectId) return [ja];
+  const ja = { name: owner, ja: true, vidi: true };
   try {
-    const { data, error } = await supabase
-      .from("deal_shares").select("grantee").eq("project_id", projectId);
-    if (error) throw error;
-    const dalsi = (data || [])
-      .map(r => r.grantee)
+    const [lide, sdileni] = await Promise.all([
+      supabase.from("profiles").select("name").order("name"),
+      projectId
+        ? supabase.from("deal_shares").select("grantee").eq("project_id", projectId)
+        : Promise.resolve({ data: [] }),
+    ]);
+    if (lide.error) throw lide.error;
+    const maPristup = new Set((sdileni.data || []).map(r => r.grantee));
+    const dalsi = (lide.data || [])
+      .map(r => r.name)
       .filter(n => n && n !== owner)
-      .map(name => ({ name, ja: false }));
+      // Nabízíme všechny uživatele, ne jen ty se sdílenou zakázkou.
+      // Kdo ji nevidí, dostane u jména hvězdičku — úkol mu přijde,
+      // ale na zakázku se nepodívá, dokud mu ji nenasdílíš.
+      .map(name => ({ name, ja: false, vidi: maPristup.has(name) }));
     return [ja, ...dalsi];
   } catch (e) {
     selhalo("komuZadat", e);

@@ -117,20 +117,22 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
           vznikne — u úkolu se navíc ukáže, komu ho zadat. Dvě pole
           pod sebou nutila rozmyslet si to dřív, než začneš psát. */}
       <div style={{ ...card(theme), padding: "9px 10px", marginBottom: 8 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: jeUkol ? 7 : 0 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 7 }}>
           <textarea value={text}
             onChange={e => { setText(e.target.value); setChyba(null); }}
             onKeyDown={e => {
               // Enter odešle, Shift+Enter zalomí — u poznámky se hodí víc řádků.
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); uloz(); }
             }}
-            rows={jeUkol ? 1 : 3}
+            rows={3}
             placeholder={jeUkol
               ? "Co je potřeba udělat — Enter přidá úkol"
               : "Co padlo, na co nezapomenout — Enter uloží, Shift+Enter nový řádek"}
+            // Stejná výška pro obojí. Když se měnila podle druhu,
+            // celá sekce pod tím poskakovala při každém přepnutí.
             style={{
               ...input(theme), flex: 1, resize: "vertical", lineHeight: 1.6,
-              minHeight: jeUkol ? 36 : 64,
+              minHeight: 64, height: 64,
             }} />
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[{ k: "ukol", t: "úkol" }, { k: "poznamka", t: "poznámka" }].map(v => {
@@ -151,7 +153,9 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
 
         {/* Volby jen u úkolu. U poznámky nemají smysl a jen by matly. */}
         {jeUkol && (
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{
+            display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", minHeight: 30,
+          }}>
             {lide.length > 1 && (
               <select value={komu} onChange={e => setKomu(e.target.value)}
                 title="Komu úkol zadat"
@@ -159,7 +163,9 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
                   padding: "5px 8px", fontSize: "12px" }}>
                 <option value="">pro mě</option>
                 {lide.filter(l => !l.ja).map(l => (
-                  <option key={l.name} value={l.name}>pro {l.name}</option>
+                  <option key={l.name} value={l.name}>
+                    pro {l.name}{l.vidi ? "" : " *"}
+                  </option>
                 ))}
               </select>
             )}
@@ -171,6 +177,12 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
               <option value="medium">důležité</option>
               <option value="urgent">akutní</option>
             </select>
+            {komu && !lide.find(l => l.name === komu)?.vidi && (
+              <span title="Úkol dostane, ale zakázku zatím nevidí — nasdílej mu ji níž"
+                style={{ fontSize: "10.5px", color: theme.yellow }}>
+                * zakázku zatím nevidí
+              </span>
+            )}
             <span style={{ flex: 1 }} />
             <button onClick={uloz} disabled={!text.trim() || uklada} style={{
               ...btnMain(theme), opacity: text.trim() && !uklada ? 1 : 0.5,
@@ -179,7 +191,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
         )}
 
         {!jeUkol && (
-          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 30 }}>
             <button onClick={uloz} disabled={!text.trim() || uklada} style={{
               ...btnMain(theme), opacity: text.trim() && !uklada ? 1 : 0.5,
             }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT POZNÁMKU"}</button>

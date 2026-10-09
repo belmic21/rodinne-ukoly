@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261009_0730";
+export const OBCHOD_VERZE = "261009_1010";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -179,6 +179,27 @@ export function mesicKratce(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   return `${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}`;
+}
+
+/* Rozseká text na kusy podle hledaného výrazu, ať jde shoda
+   zvýraznit. Porovnává se bez diakritiky — "komin" najde "komínem"
+   — ale vrací se původní text, aby se nezkomolil. */
+export function zvyrazni(text, dotaz) {
+  const t = String(text || "");
+  const q = String(dotaz || "").trim();
+  if (!q) return [{ text: t, shoda: false }];
+  const bez = (x) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const tn = bez(t), qn = bez(q);
+  const kusy = [];
+  let i = 0;
+  while (i < t.length) {
+    const j = tn.indexOf(qn, i);
+    if (j < 0 || !qn) { kusy.push({ text: t.slice(i), shoda: false }); break; }
+    if (j > i) kusy.push({ text: t.slice(i, j), shoda: false });
+    kusy.push({ text: t.slice(j, j + q.length), shoda: true });
+    i = j + q.length;
+  }
+  return kusy.length ? kusy : [{ text: t, shoda: false }];
 }
 
 /* Odznaky u zakázky: kolik na ní visí úkolů, poznámek a termínů.

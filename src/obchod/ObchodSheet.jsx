@@ -14,12 +14,12 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
-  kolikZakazek, prirustekZakazek, prehledPrilepenych,
+  kolikZakazek, prirustekZakazek, prehledPrilepenych, hledejVObsahu, nactiZakazku as nactiCelou,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
   useEscapeKey, penizeKratce, penizePresne, parsePenize, jakDavno,
-  kdyZadano, mesicKratce, pocet, OBCHOD_VERZE,
+  kdyZadano, mesicKratce, pocet, zvyrazni, OBCHOD_VERZE,
 } from "./ui.js";
 import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
@@ -73,6 +73,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [vicFiltru, setVicFiltru] = useState(false);
   const [statistika, setStatistika] = useState(false);
   const [prilepene, setPrilepene] = useState({});   // počty u řádků seznamu
+  const [nalezy, setNalezy] = useState({});        // kde se co našlo při hledání
   const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
@@ -130,16 +131,29 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           .filter(k => (k.skupina || "") === g).map(k => k.key);
         dotaz.kraj = "";
       }
-      const [z, p, pri] = await Promise.all([
+      // Hledá se dvakrát: běžný dotaz na sloupce zakázky a vedle
+      // toho napříč vším, co k ní patří — lidé, poznámky, úkoly,
+      // termíny. Výsledky se slučují, ať "komín" z poznámky najde
+      // zakázku stejně jako slovo z názvu.
+      const [z, p, pri, nal] = await Promise.all([
         nactiZakazky(owner, dotaz, kolik + 1, 0),
         nactiPanel(owner),
         prehledPrilepenych(owner),
+        hledejVObsahu(filtr.hledat),
       ]);
       if (zrus) return;
-      setVice(z.length > kolik);
-      setZakazky(z.slice(0, kolik));
+      let seznam = z;
+      const chybi = Object.keys(nal).filter(id => !z.some(x => x.id === id));
+      if (chybi.length) {
+        const doplnene = (await Promise.all(chybi.slice(0, 20).map(nactiCelou)))
+          .filter(Boolean);
+        seznam = [...z, ...doplnene];
+      }
+      setVice(seznam.length > kolik);
+      setZakazky(seznam.slice(0, kolik));
       setPanel(p);
       setPrilepene(pri);
+      setNalezy(nal);
       setBusy(false);
     }, filtr.hledat ? 280 : 0);
     return () => { zrus = true; clearTimeout(id); };
@@ -375,7 +389,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                 )}
                 {zakazky.map(z => (
                   <Radek key={z.id} z={z} theme={theme} ciselniky={ciselniky}
-                    pocty={prilepene[z.id]}
+                    pocty={prilepene[z.id]} nalez={nalezy[z.id]} hledano={filtr.hledat}
                     onOpen={() => { setSkocNa(null); setOtevrena(z); }}
                     onOdznak={() => { setSkocNa("prilepene"); setOtevrena(z); }} />
                 ))}
@@ -716,7 +730,28 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false }) {
 
 /* ── Řádek seznamu ─────────────────────────────────── */
 
-function Radek({ z, theme, ciselniky, onOpen, onOdznak, pocty }) {
+/* Odpočet do nejbližšího termínu. Barva se řídí tím, kolik zbývá —
+   stejná logika jako v Termínech, ať se to po aplikaci nerozchází. */
+function Odpocet({ theme, pocty }) {
+  const d = pocty?.terminDni;
+  if (d === null || d === undefined) return null;
+  const barva = d < 0 ? theme.red : d <= 2 ? theme.red : d <= 7 ? theme.yellow : theme.textSub;
+  const text = d < 0 ? `po termínu ${Math.abs(d)} d`
+    : d === 0 ? "dnes" : d === 1 ? "zítra" : `za ${d} dní`;
+  return (
+    <div style={{ textAlign: "right", whiteSpace: "nowrap", minWidth: 0 }}>
+      <div style={{ fontSize: "11.5px", fontWeight: 700, color: barva }}>{text}</div>
+      <div style={{
+        fontSize: "10px", color: theme.textSub, maxWidth: 150,
+        overflow: "hidden", textOverflow: "ellipsis",
+      }}>
+        {[pocty.terminKdo, pocty.terminNazev].filter(Boolean).join(" · ")}
+      </div>
+    </div>
+  );
+}
+
+function Radek({ z, theme, ciselniky, onOpen, onOdznak, pocty, nalez, hledano }) {
   const misto = [z.mesto, popis(ciselniky, "kraj", z.kraj)].filter(Boolean).join(", ");
   return (
     <div onClick={onOpen} style={{
@@ -742,7 +777,29 @@ function Radek({ z, theme, ciselniky, onOpen, onOdznak, pocty }) {
             kdyZadano(z.created_at),
           ].filter(Boolean).join(" · ")}
         </div>
+
+        {/* Proč se zakázka našla. Bez tohohle řádku by u hledání
+            "komín" vyskočila zakázka a nebylo by poznat proč. */}
+        {nalez && (
+          <div style={{
+            fontSize: "11px", color: theme.textSub, marginTop: 3,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            <span style={{
+              fontSize: "9.5px", fontWeight: 700, textTransform: "uppercase",
+              color: theme.accent, marginRight: 6,
+            }}>{nalez.kde}</span>
+            {zvyrazni(nalez.ukazka, hledano).map((k, i) => (
+              <span key={i} style={k.shoda ? {
+                background: `${theme.yellow}40`, color: theme.text,
+                fontWeight: 700, borderRadius: 3, padding: "0 2px",
+              } : undefined}>{k.text}</span>
+            ))}
+          </div>
+        )}
       </div>
+
+      <Odpocet theme={theme} pocty={pocty} />
 
       <Odznaky theme={theme} pocty={pocty} onKlik={onOdznak} />
 
