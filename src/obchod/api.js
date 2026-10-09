@@ -848,7 +848,7 @@ export async function smazOsloveni(id) {
    je nakonec vždycky jen „kolik času zbývá“. */
 
 const TERMIN = `
-  id, owner, project_id, person_id, nazev, datum, poznamka,
+  id, owner, project_id, person_id, nazev, datum, poznamka, dulezite,
   hotovo_at, reminder_id, created_at,
   osoba:map_people (id, name)
 `;
@@ -892,6 +892,7 @@ export async function ulozTermin(owner, data, popisZakazky = "") {
     datum: data.datum,
     person_id: data.person_id || null,
     poznamka: prazdnoNaNull(data.poznamka),
+    dulezite: !!data.dulezite,
   };
 
   try {
@@ -917,6 +918,23 @@ export async function ulozTermin(owner, data, popisZakazky = "") {
     return { ok: true, termin: row };
   } catch (e) {
     return selhalo("ulozTermin", e);
+  }
+}
+
+/* Hvězdička u termínu. Píše se jedním klikem ze seznamu, proto
+   zvlášť — načítat a ukládat kvůli ní celý termín by bylo zbytečné. */
+export async function oznacTermin(id, dulezite = true) {
+  if (!id) return { ok: false, chyba: "Chybí ID." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_terminy")
+      .update({ dulezite: !!dulezite })
+      .eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    return { ok: true };
+  } catch (e) {
+    return selhalo("oznacTermin", e);
   }
 }
 

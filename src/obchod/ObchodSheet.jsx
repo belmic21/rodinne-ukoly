@@ -369,8 +369,9 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
               <Site theme={theme} owner={owner} ciselniky={ciselniky}
                 onOtevriOsobu={setOsobaId} />
             ) : zalozka === "terminy" ? (
-              <TerminyPrehled theme={theme} owner={owner} ciselniky={ciselniky}
-                onOtevriZakazku={otevriZakazku} onOtevriOsobu={setOsobaId} />
+              <TerminyPrehled theme={theme} owner={owner}
+                onOtevriZakazku={otevriZakazku} onOtevriOsobu={setOsobaId}
+                onNaZakazky={() => setZalozka("zakazky")} />
             ) : zalozka === "sdilene" ? (
               <SdilenoSeMnou theme={theme} ciselniky={ciselniky}
                 onOtevriSpolupraci={otevriZakazku} />

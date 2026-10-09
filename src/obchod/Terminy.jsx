@@ -1,10 +1,14 @@
 /* ═══════════════════════════════════════════════════════
    OBCHOD — termíny
 
-   Dvě obrazovky ze stejných dat:
+   Tři obrazovky ze stejných dat:
 
-   TerminySekce  — v detailu zakázky, termíny jedné zakázky
-   TerminyPrehled — přes všechny zakázky, seřazené podle naléhavosti
+   TerminySekce   — v detailu zakázky; jediné místo, kde termín vzniká
+   TerminyPrehled — přes všechny zakázky, s volbou řazení
+   TerminyPanel   — užší výpis do pravého sloupce hlavní obrazovky
+
+   Zakládá se jen u zakázky. Samostatný formulář tu byl a zmizel:
+   než si člověk vybral zakázku z rozbalovátka, myšlenka byla pryč.
 
    Termín patří k zakázce a volitelně ke konkrétnímu člověku.
    U jedné zakázky jich může být víc, každý s někým jiným.
@@ -17,7 +21,7 @@
 import { useState, useEffect } from "react";
 import {
   nactiTerminy, prehledTerminu, ulozTermin, splnTermin, smazTermin,
-  nalehavost, barvaTerminu, nactiZakazky,
+  oznacTermin, nalehavost, barvaTerminu,
 } from "./api.js";
 import { VyberOsoby } from "./Site.jsx";
 import { card, input, btn, btnMain, btnGhost, label, datumKratce } from "./ui.js";
@@ -149,6 +153,21 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
           cursor: moje ? "pointer" : "default",
         }}>{hotovo ? "☑" : "☐"}</button>
 
+      {!hotovo && (
+        <button onClick={async () => {
+          setPracuji(true);
+          await oznacTermin(t.id, !t.dulezite);
+          setPracuji(false);
+          onZmena();
+        }} disabled={pracuji || !moje}
+          title={t.dulezite ? "Zrušit důležitost" : "Označit jako důležité"}
+          style={{
+            ...btn(), background: "transparent", padding: "2px 2px",
+            fontSize: "13px", cursor: moje ? "pointer" : "default",
+            color: t.dulezite ? theme.yellow : theme.textDim,
+          }}>{t.dulezite ? "★" : "☆"}</button>
+      )}
+
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: "12.5px", fontWeight: 700, color: theme.text,
@@ -201,6 +220,7 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
     person_id: t.person_id || null, osoba: t.osoba || null,
     poznamka: t.poznamka || "", reminder_id: t.reminder_id || null,
     pripomenout: t.pripomenout !== false,
+    dulezite: !!t.dulezite,
   });
   const [vybiram, setVybiram] = useState(false);
   const uprav = (k, v) => setF(p => ({ ...p, [k]: v }));
@@ -283,12 +303,24 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
 
       <div onClick={() => uprav("pripomenout", !f.pripomenout)} style={{
         display: "flex", alignItems: "center", gap: 8,
-        padding: "4px 2px", cursor: "pointer", marginBottom: 9,
+        padding: "4px 2px", cursor: "pointer", marginBottom: 2,
       }}>
         <span style={{ fontSize: "14px" }}>{f.pripomenout ? "☑" : "☐"}</span>
         <span style={{ fontSize: "12px", color: f.pripomenout ? theme.text : theme.textSub }}>
           Připomenout — objeví se mezi připomínkami v den termínu.
           Upozornění na zavřený telefon zatím systém neposílá.
+        </span>
+      </div>
+
+      {/* Hvězdička místo stupnice priorit. Tříúrovňová priorita svádí
+          k tomu dát všemu "vysokou"; tady buď jde o věc dne, nebo ne. */}
+      <div onClick={() => uprav("dulezite", !f.dulezite)} style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "4px 2px", cursor: "pointer", marginBottom: 9,
+      }}>
+        <span style={{ fontSize: "14px" }}>{f.dulezite ? "★" : "☆"}</span>
+        <span style={{ fontSize: "12px", color: f.dulezite ? theme.text : theme.textSub }}>
+          Důležité — drží se nahoře, ať je datum jakékoli.
         </span>
       </div>
 
@@ -302,64 +334,105 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
 
 /* ════════════════════════════════════════════════════════
    PŘEHLED PŘES VŠECHNY ZAKÁZKY
+
+   Jen výpis. Termín se zakládá u zakázky, kde na něj člověk
+   myslí — ne tady přes rozbalovátko „ke které zakázce“.
+   Mezi tím, než si zakázku vybereš, myšlenka uteče.
    ════════════════════════════════════════════════════════ */
 
-export function TerminyPrehled({ theme, owner, ciselniky, onOtevriZakazku, onOtevriOsobu }) {
+/* Řazení. Datum je výchozí, protože termín je ze své podstaty
+   o čase. Zakázka se hodí, když řešíš jeden obchod a chceš mít
+   jeho termíny pohromadě. Důležité je ruční přetřídění hvězdičkou. */
+export const RAZENI = [
+  { k: "datum",    t: "podle data" },
+  { k: "zakazka",  t: "podle zakázky" },
+  { k: "dulezite", t: "důležité první" },
+];
+
+export function serad(radky, jak) {
+  const r = [...(radky || [])];
+  if (jak === "zakazka") {
+    return r.sort((a, b) =>
+      (a.kod || "").localeCompare(b.kod || "", "cs") ||
+      Number(a.zbyva) - Number(b.zbyva));
+  }
+  if (jak === "dulezite") {
+    return r.sort((a, b) =>
+      (b.dulezite ? 1 : 0) - (a.dulezite ? 1 : 0) ||
+      Number(a.zbyva) - Number(b.zbyva));
+  }
+  return r.sort((a, b) => Number(a.zbyva) - Number(b.zbyva));
+}
+
+export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, onNaZakazky }) {
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [rozsah, setRozsah] = useState(30);
-  const [pridavam, setPridavam] = useState(false);
-  const [obnov, setObnov] = useState(0);
+  const [jak, setJak] = useState(() => {
+    try { return localStorage.getItem("ft_terminy_razeni") || "datum"; } catch (e) { return "datum"; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("ft_terminy_razeni", jak); } catch (e) {}
+  }, [jak]);
 
   useEffect(() => {
     let zrus = false;
     setBusy(true);
-    prehledTerminu(owner, rozsah).then(r => { if (!zrus) { setRadky(r); setBusy(false); } });
+    prehledTerminu(owner, rozsah).then(r => { if (!zrus) { setRadky(r || []); setBusy(false); } });
     return () => { zrus = true; };
-  }, [owner, rozsah, obnov]);
+  }, [owner, rozsah]);
 
-  const skupiny = [
-    { klic: "po",    nadpis: "Po termínu" },
-    { klic: "dnes",  nadpis: "Dnes a zítra" },
-    { klic: "tyden", nadpis: "Tento týden" },
-    { klic: "mesic", nadpis: "Tento měsíc" },
-    { klic: "dale",  nadpis: "Později" },
-  ];
+  const serazene = serad(radky, jak);
 
-  const rozdelene = skupiny.map(s => ({
-    ...s,
-    polozky: radky.filter(r => nalehavost(r.zbyva).klic === s.klic),
-  })).filter(s => s.polozky.length > 0);
+  /* Podle data a podle důležitosti dávají smysl skupiny naléhavosti.
+     Podle zakázky ne — tam je přirozený oddíl samotná zakázka. */
+  const skupiny = jak === "zakazka"
+    ? [...new Map(serazene.map(r => [r.project_id, r])).values()].map(z => ({
+        klic: z.project_id,
+        nadpis: `${z.kod} · ${z.zakazka}`,
+        barva: theme.textSub,
+        polozky: serazene.filter(r => r.project_id === z.project_id),
+      }))
+    : [
+        { klic: "po",    nadpis: "Po termínu" },
+        { klic: "dnes",  nadpis: "Dnes a zítra" },
+        { klic: "tyden", nadpis: "Tento týden" },
+        { klic: "mesic", nadpis: "Tento měsíc" },
+        { klic: "dale",  nadpis: "Později" },
+      ].map(s => ({
+        ...s,
+        barva: barvaTerminu(theme, s.klic),
+        polozky: serazene.filter(r => nalehavost(r.zbyva).klic === s.klic),
+      })).filter(s => s.polozky.length > 0);
+
+  const prepinac = (pole, hodnota, nastav) => (
+    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+      {pole.map(v => {
+        const zap = hodnota === v.k;
+        return (
+          <button key={v.k} onClick={() => nastav(v.k)} style={{
+            ...btnGhost(theme),
+            background: zap ? theme.accentSoft : "transparent",
+            color: zap ? theme.accent : theme.textSub,
+            borderColor: zap ? theme.accentBorder : theme.cardBorder,
+            fontWeight: zap ? 700 : 600,
+          }}>{v.t}</button>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div style={{ padding: "12px 16px 18px" }}>
-      <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
-        {[{ d: 7, t: "týden" }, { d: 30, t: "měsíc" }, { d: 90, t: "čtvrtletí" }].map(v => {
-          const zap = rozsah === v.d;
-          return (
-            <button key={v.d} onClick={() => setRozsah(v.d)} style={{
-              ...btnGhost(theme),
-              background: zap ? theme.accentSoft : "transparent",
-              color: zap ? theme.accent : theme.textSub,
-              borderColor: zap ? theme.accentBorder : theme.cardBorder,
-              fontWeight: zap ? 700 : 600,
-            }}>{v.t}</button>
-          );
-        })}
-        <span style={{ flex: 1 }} />
-        {!pridavam && (
-          <button onClick={() => setPridavam(true)} style={btnMain(theme)}>+ termín</button>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        {prepinac(
+          [{ k: 7, t: "týden" }, { k: 30, t: "měsíc" }, { k: 90, t: "čtvrtletí" }],
+          rozsah, setRozsah
         )}
+        <span style={{ flex: 1 }} />
+        {prepinac(RAZENI, jak, setJak)}
       </div>
-
-      {/* Termín jde zadat rovnou tady. Dřív sem patřila jen věta
-          "zadávají se u zakázky" — pravdivá, ale k ničemu, když
-          člověk stojí nad prázdným seznamem termínů. */}
-      {pridavam && (
-        <NovyTermin theme={theme} owner={owner} ciselniky={ciselniky}
-          onHotovo={() => { setPridavam(false); setObnov(k => k + 1); }}
-          onZrus={() => setPridavam(false)} />
-      )}
 
       {busy && radky.length === 0 && (
         <div style={{ fontSize: "12px", color: theme.textSub }}>Načítám…</div>
@@ -370,17 +443,21 @@ export function TerminyPrehled({ theme, owner, ciselniky, onOtevriZakazku, onOte
           ...card(theme), padding: "20px 16px", textAlign: "center",
           color: theme.textSub, fontSize: "12px", lineHeight: 1.7,
         }}>
-          Žádný termín v tomhle rozsahu. Zadej ho tlačítkem nahoře,
-          nebo v detailu zakázky v sekci Termíny.
+          Žádný termín v tomhle rozsahu.<br />
+          Termín se zadává u zakázky — v jejím detailu v sekci Termíny.
+          {onNaZakazky && (
+            <div style={{ marginTop: 10 }}>
+              <button onClick={onNaZakazky} style={btnMain(theme)}>→ na zakázky</button>
+            </div>
+          )}
         </div>
       )}
 
-      {rozdelene.map(s => (
+      {skupiny.map(s => (
         <div key={s.klic} style={{ marginBottom: 14 }}>
-          <div style={{
-            ...label(theme), marginBottom: 6,
-            color: barvaTerminu(theme, s.klic),
-          }}>{s.nadpis} ({s.polozky.length})</div>
+          <div style={{ ...label(theme), marginBottom: 6, color: s.barva }}>
+            {s.nadpis} ({s.polozky.length})
+          </div>
 
           {s.polozky.map(r => {
             const n = nalehavost(r.zbyva);
@@ -391,19 +468,23 @@ export function TerminyPrehled({ theme, owner, ciselniky, onOtevriZakazku, onOte
                 borderLeft: `3px solid ${barva}`, cursor: "pointer",
                 display: "flex", alignItems: "center", gap: 9,
               }}>
+                {r.dulezite && (
+                  <span style={{ fontSize: "13px", color: theme.yellow }}>★</span>
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text }}>
                     {r.nazev}
                   </div>
                   <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
-                    {r.kod} · {r.zakazka}
+                    {jak !== "zakazka" && `${r.kod} · ${r.zakazka}`}
                     {r.s_kym && (
                       <>
-                        {" · "}
+                        {jak !== "zakazka" && " · "}
                         <span onClick={(e) => { e.stopPropagation(); onOtevriOsobu?.(r.person_id); }}
                           style={{ color: theme.accent, cursor: "pointer" }}>{r.s_kym}</span>
                       </>
                     )}
+                    {r.poznamka ? ` · ${r.poznamka}` : ""}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
@@ -422,77 +503,89 @@ export function TerminyPrehled({ theme, owner, ciselniky, onOtevriZakazku, onOte
 }
 
 
-/* Nový termín z přehledu. Zakázku vybereš ze seznamu, zbytek
-   vyplní stejný editor jako v detailu zakázky — ať se stejná věc
-   nezadává na dvou místech dvěma způsoby. */
-function NovyTermin({ theme, owner, ciselniky, onHotovo, onZrus }) {
-  const [zakazky, setZakazky] = useState([]);
-  const [vybrana, setVybrana] = useState(null);
-  const [busy, setBusy] = useState(true);
-  const [chyba, setChyba] = useState(null);
+/* ════════════════════════════════════════════════════════
+   PANEL NA HLAVNÍ OBRAZOVCE
+
+   Užší verze přehledu do pravého sloupce. Stejná data, stejné
+   řazení, jen bez skupin — na šířku sloupce se nadpisy nevejdou
+   a při osmi řádcích by stejně nic nerozdělily.
+
+   Řazení si pamatuje vlastní klíč, aby se nepralo s přehledem:
+   v panelu chceš většinou „co hoří“, v přehledu listuješ po zakázkách.
+   ════════════════════════════════════════════════════════ */
+
+export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
+  const [radky, setRadky] = useState([]);
+  const [jak, setJak] = useState(() => {
+    try { return localStorage.getItem("ft_panel_razeni") || "datum"; } catch (e) { return "datum"; }
+  });
 
   useEffect(() => {
+    try { localStorage.setItem("ft_panel_razeni", jak); } catch (e) {}
+  }, [jak]);
+
+  useEffect(() => {
+    if (!owner) return;
     let zrus = false;
-    nactiZakazky(owner, {}, 100, 0).then(z => {
-      if (zrus) return;
-      setZakazky(z);
-      if (z.length === 1) setVybrana(z[0]);
-      setBusy(false);
-    });
+    prehledTerminu(owner, 60).then(r => { if (!zrus) setRadky(r || []); });
     return () => { zrus = true; };
   }, [owner]);
 
-  const uloz = async (data) => {
-    setChyba(null);
-    const res = await ulozTermin(owner, { ...data, project_id: vybrana.id }, vybrana.nazev);
-    if (!res.ok) { setChyba(res.chyba); return; }
-    onHotovo();
-  };
-
-  if (busy) {
-    return (
-      <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10,
-        fontSize: "12px", color: theme.textSub }}>Načítám zakázky…</div>
-    );
-  }
-
-  if (zakazky.length === 0) {
-    return (
-      <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
-        <div style={{ fontSize: "12px", color: theme.textSub, lineHeight: 1.7, marginBottom: 8 }}>
-          Termín patří k zakázce a zatím žádnou nemáš. Založ ji v záložce
-          Zakázky a termín pak přidáš tady nebo rovnou u ní.
-        </div>
-        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
-      </div>
-    );
-  }
+  const serazene = serad(radky, jak).slice(0, limit);
 
   return (
-    <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
-      <div style={{ marginBottom: 9 }}>
-        <span style={label(theme)}>Ke které zakázce</span>
-        <select value={vybrana?.id || ""}
-          onChange={e => setVybrana(zakazky.find(z => z.id === e.target.value) || null)}
-          style={{ ...input(theme), cursor: "pointer" }}>
-          <option value="">— vyber zakázku —</option>
-          {zakazky.map(z => (
-            <option key={z.id} value={z.id}>{z.kod} · {z.nazev}</option>
-          ))}
-        </select>
+    <div>
+      <div style={{
+        display: "flex", gap: 4, padding: "7px 10px",
+        borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        {RAZENI.map(v => {
+          const zap = jak === v.k;
+          return (
+            <button key={v.k} onClick={() => setJak(v.k)} style={{
+              ...btn(), flex: 1, padding: "3px 4px", fontSize: "10px",
+              fontWeight: zap ? 800 : 600,
+              background: zap ? theme.accentSoft : "transparent",
+              color: zap ? theme.accent : theme.textSub,
+              border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
+              borderRadius: 6,
+            }}>{v.t.replace("podle ", "").replace(" první", "")}</button>
+          );
+        })}
       </div>
 
-      {chyba && (
-        <div style={{ fontSize: "11.5px", color: theme.red, marginBottom: 8 }}>{chyba}</div>
-      )}
-
-      {vybrana ? (
-        <TerminEditor theme={theme} owner={owner} ciselniky={ciselniky}
-          t={{ datum: ZA_DNI(7), pripomenout: true }}
-          onUloz={uloz} onZrus={onZrus} />
-      ) : (
-        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
-      )}
+      {serazene.length === 0 ? (
+        <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center", lineHeight: 1.6 }}>
+          Žádný termín do dvou měsíců.<br />
+          Zadáš ho v detailu zakázky.
+        </div>
+      ) : serazene.map(t => {
+        const n = nalehavost(t.zbyva);
+        const barva = barvaTerminu(theme, n.klic);
+        return (
+          <div key={t.id} onClick={() => onOtevriZakazku?.({ id: t.project_id })} style={{
+            padding: "8px 12px", cursor: "pointer",
+            borderTop: `1px solid ${theme.cardBorder}40`,
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              {t.dulezite && <span style={{ fontSize: 11, color: theme.yellow }}>★</span>}
+              <span style={{
+                fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{t.nazev}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
+                {n.popis}
+              </span>
+            </div>
+            <div style={{
+              fontSize: 10, color: theme.textSub, marginTop: 2,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              {[t.kod, t.s_kym, t.zakazka].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
