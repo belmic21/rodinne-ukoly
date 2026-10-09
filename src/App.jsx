@@ -52,7 +52,8 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
-import { nactiZakazky as obchodHledejZakazky, prehledTerminu } from "./obchod/api.js";
+import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
+import { TerminyPanel } from "./obchod/Terminy.jsx";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -98,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_1010";
+const FILE_VERSION = "261009_1135";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -6506,19 +6507,16 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
   /* Spodní díl sloupce se přepíná: doma koukáš na poznámky,
      v práci na to, komu se máš ozvat. Volba se pamatuje. */
   const [panel, setPanel] = useState(() => {
-    try { return localStorage.getItem("ft_panel") || "poznamky"; } catch (e) { return "poznamky"; }
+    try {
+      const u = localStorage.getItem("ft_panel");
+      // Panel "zakázky" byl odjakživa výpis termínů. Teď se tak i jmenuje;
+      // kdo měl zapnuté zakázky, ať se po aktualizaci dívá na totéž.
+      return u === "zakazky" ? "terminy" : (u || "poznamky");
+    } catch (e) { return "poznamky"; }
   });
   useEffect(() => {
     try { localStorage.setItem("ft_panel", panel); } catch (e) {}
   }, [panel]);
-
-  const [terminy, setTerminy] = useState([]);
-  useEffect(() => {
-    if (panel !== "zakazky" || !currentUser?.name) return;
-    let zrus = false;
-    prehledTerminu(currentUser.name, 60).then(r => { if (!zrus) setTerminy(r || []); });
-    return () => { zrus = true; };
-  }, [panel, currentUser?.name]);
 
   // Aktivní reminders — vlastní + sdílené, neuzavřené, top 5 nejbližších
   const myActiveReminders = (reminders || [])
@@ -6688,7 +6686,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
 
       {/* Přepínač spodního dílu */}
       <div style={{ display: "flex", gap: 5, margin: "2px 0 6px" }}>
-        {[{ k: "poznamky", t: "📝 Poznámky" }, { k: "zakazky", t: "💼 Zakázky" }].map(v => {
+        {[{ k: "poznamky", t: "📝 Poznámky" }, { k: "terminy", t: "⏳ Termíny" }].map(v => {
           const zap = panel === v.k;
           return (
             <button key={v.k} onClick={() => setPanel(v.k)} style={{
@@ -6703,37 +6701,15 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
         })}
       </div>
 
-      {panel === "zakazky" && (
+      {/* Komu se ozvat. Řazení si panel drží sám — viz TerminyPanel. */}
+      {panel === "terminy" && (
         <Widget>
           <WidgetHeader
-            icon="💼" title="Komu se ozvat" count={terminy.length}
+            icon="⏳" title="Komu se ozvat"
             accentColor={theme.purple}
           />
-          {terminy.length === 0 ? (
-            <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center" }}>
-              Žádný termín do dvou měsíců
-            </div>
-          ) : terminy.slice(0, 8).map(t => {
-            const d = Number(t.zbyva);
-            const barva = d < 0 ? theme.red : d <= 2 ? theme.red : d <= 7 ? theme.yellow : theme.textSub;
-            return (
-              <ItemRow key={t.id} onClick={() => onOpenZakazka?.({ id: t.project_id })}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{
-                    fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>{t.nazev}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
-                    {d < 0 ? `-${Math.abs(d)} d` : d === 0 ? "dnes" : `${d} d`}
-                  </span>
-                </div>
-                <div style={{ fontSize: 10, color: theme.textSub, marginTop: 2 }}>
-                  {[t.kod, t.osoba_jmeno || t.jmeno, t.zakazka_nazev || t.projekt_nazev]
-                    .filter(Boolean).join(" · ")}
-                </div>
-              </ItemRow>
-            );
-          })}
+          <TerminyPanel theme={theme} owner={currentUser?.name} limit={8}
+            onOtevriZakazku={onOpenZakazka} />
         </Widget>
       )}
 
