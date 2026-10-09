@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_0620";
+const FILE_VERSION = "261009_0640";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -2884,6 +2884,8 @@ async function apiLoadTasks() {
       const t = dbToTask(row);
       // Granulární sdílení — propagovat z DB sloupce shared_with
       if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
+      // Vazba na zakázku — podle ní se dá oddělit práce od osobních věcí.
+      t.projectId = row.project_id || null;
       // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
       if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
       else t.rejectedBy = [];
@@ -3641,6 +3643,17 @@ async function apiDeleteReminder(id) {
    ═══════════════════════════════════════════════════════ */
 
 const CACHE_NOTES = "ft_cache_notes";
+
+/* Úkol u zakázky má kód v názvu ("MB-10003 zavolat projektanta").
+   Vytáhneme ho, ať se dá v seznamu ukázat jako štítek a z názvu
+   zmizet — jinak by každý řádek začínal stejným balastem.
+   Prefix si určuje uživatel v nastavení, proto obecný tvar. */
+const KOD_ZAKAZKY = /^([A-Z]{1,4}-\d{3,7})\s+(.*)$/;
+
+function rozlozNazev(title) {
+  const m = KOD_ZAKAZKY.exec((title || "").trim());
+  return m ? { kod: m[1], text: m[2] } : { kod: null, text: title || "" };
+}
 
 function noteFromDb(n) {
   if (!n) return null;
@@ -10209,7 +10222,21 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 </span>
               </>
             ) : (
-              task.title
+              (() => {
+                const { kod, text } = rozlozNazev(task.title);
+                if (!kod || !task.projectId) return task.title;
+                return (
+                  <>
+                    <span title="Úkol k zakázce" style={{
+                      fontSize: "10px", fontWeight: 700, letterSpacing: "0.02em",
+                      color: theme.purple, border: `1px solid ${theme.purple}44`,
+                      borderRadius: 5, padding: "1px 5px", marginRight: 6,
+                      whiteSpace: "nowrap", verticalAlign: "middle",
+                    }}>{kod}</span>
+                    {text}
+                  </>
+                );
+              })()
             )}
           </div>
 
@@ -22824,6 +22851,17 @@ function App() {
   const [activeHorizonDays, setActiveHorizonDays] = useState(7);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
+  /* Osobní věci vs. práce na zakázkách. Není to stav úkolu (ten je
+     aktivní/plánovaný/splněný), ale druhá osa: čí je to práce.
+     Volba se pamatuje — kdo si ráno dá "Osobní", nechce to
+     přepínat každý den znovu. */
+  const [praceFilter, setPraceFilter] = useState(() => {
+    try { return localStorage.getItem("ft_prace") || "vse"; } catch (e) { return "vse"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("ft_prace", praceFilter); } catch (e) {}
+  }, [praceFilter]);
+
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [searchDraft, setSearchDraft] = useState("");   // dotaz předaný z „/?“
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
@@ -24881,6 +24919,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       });
     }
 
+    // Osobní / zakázky. Úkol u zakázky má vyplněné projectId.
+    if (praceFilter === "osobni") result = result.filter(t => !t.projectId);
+    else if (praceFilter === "zakazky") result = result.filter(t => !!t.projectId);
+
     // Status filter
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
     if (viewStatus === "today") {
@@ -25650,7 +25692,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       }
       return true;
     }).length;
-  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, praceFilter]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -27330,6 +27372,43 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         minWidth: "16px", textAlign: "center",
                       }}>{v.count}</span>
                     )}
+                  </button>
+                );
+              })}
+
+              {/* Druhá osa: čí je to práce. Schválně oddělené svislou
+                  čárou — stav úkolu (Dnes/Aktivní/…) a původ úkolu
+                  (osobní/zakázka) jsou dvě různé otázky a míchat je
+                  do jedné řady by znamenalo, že se nedá zeptat
+                  "co jsem u zakázek už udělal". */}
+              <span style={{
+                width: 1, alignSelf: "stretch", margin: "2px 4px",
+                background: theme.cardBorder, flexShrink: 0,
+              }} />
+              {[
+                { key: "vse",     icon: "",   label: "Vše" },
+                { key: "osobni",  icon: "🏠", label: "Osobní" },
+                { key: "zakazky", icon: "💼", label: "Zakázky" },
+              ].map(v => {
+                const zap = praceFilter === v.key;
+                return (
+                  <button key={v.key} onClick={() => setPraceFilter(v.key)}
+                    title={v.key === "osobni" ? "Jen úkoly bez zakázky"
+                      : v.key === "zakazky" ? "Jen úkoly k zakázkám"
+                      : "Osobní i zakázky dohromady"}
+                    style={{
+                      ...buttonStyle(),
+                      padding: "4px 10px",
+                      fontSize: "12px", fontWeight: zap ? 700 : 500,
+                      background: zap ? theme.purple : "transparent",
+                      color: zap ? "#fff" : theme.textMid,
+                      border: `1px solid ${zap ? theme.purple : theme.cardBorder}`,
+                      borderRadius: "16px",
+                      display: "inline-flex", alignItems: "center", gap: "4px",
+                      fontFamily: FONT, flexShrink: 0,
+                    }}>
+                    {v.icon && <span>{v.icon}</span>}
+                    <span>{v.label}</span>
                   </button>
                 );
               })}
