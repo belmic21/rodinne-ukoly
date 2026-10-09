@@ -52,7 +52,7 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
-import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
+import { nactiZakazky as obchodHledejZakazky, prehledTerminu } from "./obchod/api.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -98,7 +98,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_0730";
+const FILE_VERSION = "261009_1010";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -6502,7 +6502,24 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
    Klik na položku otevře relevantní panel/editor přes callback.
    ═══════════════════════════════════════════════════════ */
 
-function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, theme, onOpenReminders, onOpenNotes, onOpenNote, onOpenTask, onCreateReminder, onCreateNote }) {
+function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, theme, onOpenReminders, onOpenNotes, onOpenNote, onOpenTask, onCreateReminder, onCreateNote, onOpenZakazka }) {
+  /* Spodní díl sloupce se přepíná: doma koukáš na poznámky,
+     v práci na to, komu se máš ozvat. Volba se pamatuje. */
+  const [panel, setPanel] = useState(() => {
+    try { return localStorage.getItem("ft_panel") || "poznamky"; } catch (e) { return "poznamky"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("ft_panel", panel); } catch (e) {}
+  }, [panel]);
+
+  const [terminy, setTerminy] = useState([]);
+  useEffect(() => {
+    if (panel !== "zakazky" || !currentUser?.name) return;
+    let zrus = false;
+    prehledTerminu(currentUser.name, 60).then(r => { if (!zrus) setTerminy(r || []); });
+    return () => { zrus = true; };
+  }, [panel, currentUser?.name]);
+
   // Aktivní reminders — vlastní + sdílené, neuzavřené, top 5 nejbližších
   const myActiveReminders = (reminders || [])
     .filter(r => {
@@ -6669,7 +6686,59 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
         })}
       </Widget>
 
+      {/* Přepínač spodního dílu */}
+      <div style={{ display: "flex", gap: 5, margin: "2px 0 6px" }}>
+        {[{ k: "poznamky", t: "📝 Poznámky" }, { k: "zakazky", t: "💼 Zakázky" }].map(v => {
+          const zap = panel === v.k;
+          return (
+            <button key={v.k} onClick={() => setPanel(v.k)} style={{
+              ...buttonStyle(), flex: 1,
+              padding: "5px 8px", fontSize: "11.5px", fontWeight: zap ? 700 : 600,
+              background: zap ? theme.accentSoft : "transparent",
+              color: zap ? theme.accent : theme.textSub,
+              border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+              borderRadius: 8, fontFamily: FONT,
+            }}>{v.t}</button>
+          );
+        })}
+      </div>
+
+      {panel === "zakazky" && (
+        <Widget>
+          <WidgetHeader
+            icon="💼" title="Komu se ozvat" count={terminy.length}
+            accentColor={theme.purple}
+          />
+          {terminy.length === 0 ? (
+            <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center" }}>
+              Žádný termín do dvou měsíců
+            </div>
+          ) : terminy.slice(0, 8).map(t => {
+            const d = Number(t.zbyva);
+            const barva = d < 0 ? theme.red : d <= 2 ? theme.red : d <= 7 ? theme.yellow : theme.textSub;
+            return (
+              <ItemRow key={t.id} onClick={() => onOpenZakazka?.({ id: t.project_id })}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{
+                    fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{t.nazev}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
+                    {d < 0 ? `-${Math.abs(d)} d` : d === 0 ? "dnes" : `${d} d`}
+                  </span>
+                </div>
+                <div style={{ fontSize: 10, color: theme.textSub, marginTop: 2 }}>
+                  {[t.kod, t.osoba_jmeno || t.jmeno, t.zakazka_nazev || t.projekt_nazev]
+                    .filter(Boolean).join(" · ")}
+                </div>
+              </ItemRow>
+            );
+          })}
+        </Widget>
+      )}
+
       {/* Notes widget */}
+      {panel === "poznamky" && (
       <Widget>
         <WidgetHeader
           icon="📝" title="Poznámky" count={myNotes.length}
@@ -6706,6 +6775,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
           );
         })}
       </Widget>
+      )}
 
       {/* Recent comments widget */}
       {myRecentComments.length > 0 && (
@@ -10228,7 +10298,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 return (
                   <>
                     <span
-                      onClick={(e) => { e.stopPropagation(); onFiltrujZakazku?.(kod); }}
+                      onClick={(e) => { e.stopPropagation(); onFiltrujZakazku?.(kod, task.projectId); }}
                       title={`Zobrazit jen úkoly k ${kod}`}
                       style={{
                         fontSize: "10px", fontWeight: 700, letterSpacing: "0.02em",
@@ -22858,8 +22928,11 @@ function App() {
      aktivní/plánovaný/splněný), ale druhá osa: čí je to práce.
      Volba se pamatuje — kdo si ráno dá "Osobní", nechce to
      přepínat každý den znovu. */
-  // Klik na kód u úkolu zúží seznam na jednu zakázku.
+  // Klik na kód u úkolu zúží seznam na jednu zakázku. Držíme si
+  // i její id, aby se z pruhu dala rovnou otevřít — jinak by ses
+  // k ní musel proklikat přes seznam zakázek.
   const [zakazkaFiltr, setZakazkaFiltr] = useState(null);
+  const [zakazkaFiltrId, setZakazkaFiltrId] = useState(null);
 
   const [praceFilter, setPraceFilter] = useState(() => {
     try { return localStorage.getItem("ft_prace") || "vse"; } catch (e) { return "vse"; }
@@ -27394,18 +27467,32 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 background: theme.cardBorder, flexShrink: 0,
               }} />
               {zakazkaFiltr && (
-                <button onClick={() => setZakazkaFiltr(null)}
-                  title="Zrušit zúžení na jednu zakázku"
-                  style={{
-                    ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
-                    fontWeight: 700, background: theme.purple, color: "#fff",
-                    border: `1px solid ${theme.purple}`, borderRadius: "16px",
-                    display: "inline-flex", alignItems: "center", gap: "5px",
-                    fontFamily: FONT, flexShrink: 0,
-                  }}>
-                  <span>{zakazkaFiltr}</span>
-                  <span style={{ opacity: 0.8 }}>×</span>
-                </button>
+                <span style={{ display: "inline-flex", flexShrink: 0, gap: 4 }}>
+                  <button onClick={() => { setZakazkaFiltr(null); setZakazkaFiltrId(null); }}
+                    title="Zrušit zúžení na jednu zakázku"
+                    style={{
+                      ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
+                      fontWeight: 700, background: theme.purple, color: "#fff",
+                      border: `1px solid ${theme.purple}`, borderRadius: "16px",
+                      display: "inline-flex", alignItems: "center", gap: "5px",
+                      fontFamily: FONT,
+                    }}>
+                    <span>{zakazkaFiltr}</span>
+                    <span style={{ opacity: 0.8 }}>×</span>
+                  </button>
+                  {zakazkaFiltrId && (
+                    <button onClick={() => {
+                      setObchodDraft(""); setObchodOsoba(null);
+                      setObchodZakazka(zakazkaFiltrId);
+                      setShowObchodSheet(true);
+                    }} title="Otevřít tuhle zakázku" style={{
+                      ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
+                      fontWeight: 700, background: "transparent", color: theme.purple,
+                      border: `1px solid ${theme.purple}66`, borderRadius: "16px",
+                      fontFamily: FONT,
+                    }}>otevřít →</button>
+                  )}
+                </span>
               )}
               {[
                 { key: "vse",     icon: "",   label: "Vše" },
@@ -28751,7 +28838,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         task={task}
                         currentUser={currentUser}
                         users={users}
-                        onFiltrujZakazku={setZakazkaFiltr}
+                        onFiltrujZakazku={(kod, id) => {
+                          setZakazkaFiltr(kod); setZakazkaFiltrId(id || null);
+                        }}
                         onStatusChange={changeStatus}
                         onMarkSeen={markSeen}
                         onUpdate={updateTask}
@@ -28879,6 +28968,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           onOpenReminders={() => setShowReminderSheet(true)}
           onOpenNotes={() => setShowNotesSheet(true)}
           onOpenNote={(note) => setEditingNote(note)}
+          onOpenZakazka={(z) => {
+            setObchodDraft(""); setObchodOsoba(null);
+            setObchodZakazka(z?.id || null);
+            setShowObchodSheet(true);
+          }}
           onOpenTask={(taskId) => {
             const t = tasks.find(x => x.id === taskId);
             if (t) {
