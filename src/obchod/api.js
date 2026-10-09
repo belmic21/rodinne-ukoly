@@ -848,7 +848,7 @@ export async function smazOsloveni(id) {
    je nakonec vždycky jen „kolik času zbývá“. */
 
 const TERMIN = `
-  id, owner, project_id, person_id, nazev, datum, poznamka, dulezite,
+  id, owner, project_id, person_id, nazev, datum, cas, poznamka, dulezite, komu,
   hotovo_at, reminder_id, created_at,
   osoba:map_people (id, name)
 `;
@@ -859,7 +859,8 @@ export async function nactiTerminy(projectId) {
     const { data, error } = await supabase
       .from("deal_terminy").select(TERMIN)
       .eq("project_id", projectId)
-      .order("datum", { ascending: true });
+      .order("datum", { ascending: true })
+      .order("cas", { ascending: true, nullsFirst: false });
     if (error) throw error;
     return data || [];
   } catch (e) {
@@ -891,6 +892,8 @@ export async function ulozTermin(owner, data, popisZakazky = "") {
     nazev: data.nazev.trim(),
     datum: data.datum,
     person_id: data.person_id || null,
+    cas: prazdnoNaNull(data.cas),
+    komu: prazdnoNaNull(data.komu),
     poznamka: prazdnoNaNull(data.poznamka),
     dulezite: !!data.dulezite,
   };
@@ -902,7 +905,7 @@ export async function ulozTermin(owner, data, popisZakazky = "") {
     let reminderId = data.reminder_id || null;
     if (data.pripomenout) {
       const text = `Termín: ${telo.nazev}${popisZakazky ? ` — ${popisZakazky}` : ""}`;
-      const kdy = new Date(telo.datum + "T09:00:00").toISOString();
+      const kdy = kdyPripomenout(telo.datum, telo.cas);
       reminderId = await ulozPripominku(owner, reminderId, text, kdy);
     } else if (reminderId) {
       await zrusPripominku(reminderId);
@@ -918,6 +921,55 @@ export async function ulozTermin(owner, data, popisZakazky = "") {
     return { ok: true, termin: row };
   } catch (e) {
     return selhalo("ulozTermin", e);
+  }
+}
+
+/* Kdy se ozvat. Termín bez hodiny platí na celý den a připomínka
+   se ozve ráno; s hodinou se ozve v tu hodinu.
+
+   Počítá se z místního času prohlížeče — new Date("2026-10-09T12:00")
+   bez Z je úmysl "dvanáct u mě", ne v Greenwichi. */
+export function kdyPripomenout(datum, cas) {
+  const h = (cas || "09:00").slice(0, 5);
+  const d = new Date(`${datum}T${h}:00`);
+  return isNaN(d.getTime())
+    ? new Date(`${datum}T09:00:00`).toISOString()
+    : d.toISOString();
+}
+
+/* Hotové termíny — koš. Odškrtnutý termín nemizí, spadne sem
+   a dá se vrátit. */
+export async function hotoveTerminy(dni = 60) {
+  try {
+    const { data, error } = await supabase.rpc("deal_terminy_hotove", { p_dni: dni });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("hotoveTerminy", e);
+    return [];
+  }
+}
+
+/* Posunutí termínu. Klient zavolá, že to stihne až ve tři — tohle
+   přepíše datum i hodinu a rovnou posune i připomínku, aby se
+   neozvala ve dvanáct na něco, co je domluvené na patnáctou. */
+export async function posunTermin(id, datum, cas, reminderId = null) {
+  if (!id || !datum) return { ok: false, chyba: "Chybí termín." };
+  try {
+    const { data, error } = await supabase
+      .from("deal_terminy")
+      .update({ datum, cas: cas || null })
+      .eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) return { ok: false, chyba: "Nenašlo se." };
+    if (reminderId) {
+      await supabase.from("reminders")
+        .update({ remind_at: kdyPripomenout(datum, cas), notified: false, dismissed_at: null })
+        .eq("id", reminderId);
+    }
+    return { ok: true };
+  } catch (e) {
+    return selhalo("posunTermin", e);
   }
 }
 

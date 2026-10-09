@@ -20,13 +20,66 @@
 
 import { useState, useEffect } from "react";
 import {
-  nactiTerminy, prehledTerminu, ulozTermin, splnTermin, smazTermin,
-  oznacTermin, nalehavost, barvaTerminu,
+  nactiTerminy, prehledTerminu, hotoveTerminy, ulozTermin, splnTermin,
+  smazTermin, oznacTermin, posunTermin, komuZadat, nalehavost, barvaTerminu,
 } from "./api.js";
 import { VyberOsoby } from "./Site.jsx";
-import { card, input, btn, btnMain, btnGhost, label, datumKratce } from "./ui.js";
+import {
+  card, input, btn, btnMain, btnGhost, label,
+  datumKratce, casKratce, zbyvaPopis, kdyPresne,
+} from "./ui.js";
 
 const DNES = () => new Date().toISOString().slice(0, 10);
+
+/* Stav termínu na jednom místě. Barva se řídí dny, text minutami —
+   "dnes" je u termínu na 12:00 v jednu odpoledne lež, ale "za 3 dny"
+   nepotřebuje minutovou přesnost.
+
+   zbyva_minut počítá databáze; když ho řádek nemá (detail zakázky
+   čte termíny přímo), dopočítá se tady ze dne a hodiny. */
+export function stav(t) {
+  const minut = Number(
+    t.zbyva_minut !== undefined && t.zbyva_minut !== null
+      ? t.zbyva_minut
+      : (new Date(`${t.datum}T${(t.cas || "23:59").slice(0, 5)}:00`) - Date.now()) / 60000
+  );
+  const dni = Number(
+    t.zbyva !== undefined && t.zbyva !== null
+      ? t.zbyva
+      : Math.round((new Date(t.datum + "T00:00:00") - new Date(DNES() + "T00:00:00")) / 86400000)
+  );
+  const zakladni = nalehavost(dni);
+  if (!isFinite(minut)) return zakladni;
+  return {
+    klic: minut < 0 ? "po" : zakladni.klic,
+    popis: zbyvaPopis(Math.round(minut), t.cas),
+  };
+}
+
+/* Hodiny, které v obchodě opravdu padají. "Do oběda" a "do konce
+   pracovní doby" jsou dvě nejčastější lhůty, co po telefonu zazní. */
+export const HODINY = [
+  { v: "09:00", t: "9:00" },
+  { v: "12:00", t: "do oběda" },
+  { v: "15:00", t: "15:00" },
+  { v: "17:00", t: "konec dne" },
+];
+
+/* Posunutí jedním klikem. Za hodinu a na patnáctou pokrývají ten
+   případ, kvůli kterému to vzniklo: klient volá, že to stihne později. */
+export function POSUNY() {
+  const d = new Date();
+  const zaHodinu = new Date(d.getTime() + 3600000);
+  const hh = String(zaHodinu.getHours()).padStart(2, "0");
+  const mm = String(zaHodinu.getMinutes()).padStart(2, "0");
+  const zitra = new Date(d); zitra.setDate(zitra.getDate() + 1);
+  return [
+    { t: "+1 h",     datum: DNES(), cas: `${hh}:${mm}` },
+    { t: "na 15:00", datum: DNES(), cas: "15:00" },
+    { t: "zítra 9h", datum: zitra.toISOString().slice(0, 10), cas: "09:00" },
+    { t: "+týden",   datum: ZA_DNI(7), cas: null },
+  ];
+}
 const ZA_DNI = (n) => {
   const d = new Date();
   d.setDate(d.getDate() + n);
@@ -89,7 +142,8 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
       )}
 
       {edituji && (
-        <TerminEditor theme={theme} owner={owner} ciselniky={ciselniky} t={edituji}
+        <TerminEditor theme={theme} owner={owner} ciselniky={ciselniky}
+          projectId={projectId} t={edituji}
           onUloz={uloz} onZrus={() => { setEdituji(null); setChyba(null); }} />
       )}
 
@@ -117,10 +171,7 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
 function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = true }) {
   const [pracuji, setPracuji] = useState(false);
   const hotovo = !!t.hotovo_at;
-  const zbyva = Math.round(
-    (new Date(t.datum + "T00:00:00") - new Date(DNES() + "T00:00:00")) / 86400000
-  );
-  const n = nalehavost(zbyva);
+  const n = stav(t);
   const barva = hotovo ? theme.textSub : barvaTerminu(theme, n.klic);
 
   const prepni = async () => {
@@ -175,6 +226,7 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
         }}>{t.nazev}</div>
         <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
           {datumKratce(t.datum)}
+          {t.cas ? ` v ${casKratce(t.cas)}` : ""}
           {t.osoba && (
             <>
               {" · "}
@@ -182,6 +234,7 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
                 style={{ color: theme.accent, cursor: "pointer" }}>{t.osoba.name}</span>
             </>
           )}
+          {t.komu ? ` · 👤 ${t.komu}` : ""}
           {t.reminder_id && !hotovo && " · ⏰"}
           {t.poznamka ? ` · ${t.poznamka}` : ""}
         </div>
@@ -196,6 +249,10 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
         <span style={{
           fontSize: "11px", fontWeight: 700, color: barva, whiteSpace: "nowrap",
         }}>{n.popis}</span>
+      )}
+
+      {moje && !hotovo && (
+        <Posun theme={theme} t={t} onHotovo={onZmena} />
       )}
 
       {moje && (
@@ -214,16 +271,68 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
   );
 }
 
-function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
+/* Posunutí bez otevírání editoru. Tohle je ta situace z telefonu:
+   termín byl do dvanácti, klient volá, že to stihne do tří. Dvě
+   kliknutí a je to — včetně připomínky, která se posune s ním. */
+function Posun({ theme, t, onHotovo, vlevo = false }) {
+  const [otevreno, setOtevreno] = useState(false);
+  const [pracuji, setPracuji] = useState(false);
+
+  const posun = async (v) => {
+    setPracuji(true);
+    await posunTermin(t.id, v.datum, v.cas, t.reminder_id);
+    setPracuji(false);
+    setOtevreno(false);
+    onHotovo?.();
+  };
+
+  return (
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={(e) => { e.stopPropagation(); setOtevreno(v => !v); }}
+        disabled={pracuji} title="Posunout na později" style={{
+          ...btn(), background: "transparent", color: theme.textSub,
+          fontSize: "12px", padding: "2px 4px",
+        }}>⏱</button>
+
+      {otevreno && (
+        <span onClick={(e) => e.stopPropagation()} style={{
+          position: "absolute", top: "100%", [vlevo ? "left" : "right"]: 0,
+          zIndex: 40, marginTop: 3, minWidth: 110,
+          ...card(theme), padding: 4,
+          boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
+          display: "flex", flexDirection: "column", gap: 2,
+        }}>
+          {POSUNY().map(v => (
+            <button key={v.t} onClick={() => posun(v)} disabled={pracuji} style={{
+              ...btn(), background: "transparent", color: theme.text,
+              fontSize: "11.5px", padding: "5px 8px", textAlign: "left",
+            }}>{v.t}</button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus }) {
   const [f, setF] = useState({
     id: t.id, nazev: t.nazev || "", datum: t.datum || ZA_DNI(7),
+    cas: (t.cas || "").slice(0, 5),
     person_id: t.person_id || null, osoba: t.osoba || null,
+    komu: t.komu || "",
     poznamka: t.poznamka || "", reminder_id: t.reminder_id || null,
     pripomenout: t.pripomenout !== false,
     dulezite: !!t.dulezite,
   });
   const [vybiram, setVybiram] = useState(false);
+  const [lide, setLide] = useState([]);
   const uprav = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  useEffect(() => {
+    let zrus = false;
+    komuZadat(owner, projectId).then(r => { if (!zrus) setLide(r || []); });
+    return () => { zrus = true; };
+  }, [owner, projectId]);
 
   const rychle = [
     { t: "zítra", d: 1 },
@@ -251,6 +360,59 @@ function TerminEditor({ theme, owner, ciselniky, t, onUloz, onZrus }) {
               style={btnGhost(theme)}>{r.t}</button>
           ))}
         </div>
+      </div>
+
+      {/* Hodina. Nepovinná — spousta termínů platí na celý den a
+          vynucená hodina by nutila něco si vymyslet. Ale "do dvanácti"
+          se bez ní zapsat nedá, a to je přesně ten případ, kdy na
+          termínu záleží. */}
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>V kolik — nepovinné</span>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+          <input type="time" value={f.cas || ""} onChange={e => uprav("cas", e.target.value)}
+            style={{ ...input(theme), maxWidth: 110, cursor: "pointer" }} />
+          {HODINY.map(h => (
+            <button key={h.v} onClick={() => uprav("cas", h.v)} style={{
+              ...btnGhost(theme),
+              background: f.cas === h.v ? theme.accentSoft : "transparent",
+              color: f.cas === h.v ? theme.accent : theme.textSub,
+              borderColor: f.cas === h.v ? theme.accentBorder : theme.cardBorder,
+            }}>{h.t}</button>
+          ))}
+          {f.cas && (
+            <button onClick={() => uprav("cas", "")} style={{
+              ...btn(), background: "transparent", color: theme.textDim,
+              fontSize: "13px", padding: "2px 5px",
+            }}>× celý den</button>
+          )}
+        </div>
+      </div>
+
+      {/* Dvě různé otázky, proto dvě pole. "S kým" je protistrana —
+          klient, majitel, investor. "Kdo to má udělat" je člověk
+          z naší strany, po kterém to pak chci. Dřív šlo vybrat jen
+          to první a v přehledu pak nebylo vidět, koho kontrolovat. */}
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Kdo to má udělat</span>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          {lide.map(o => {
+            const zap = (f.komu || owner) === o.name;
+            return (
+              <button key={o.name} onClick={() => uprav("komu", o.ja ? "" : o.name)} style={{
+                ...btnGhost(theme),
+                background: zap ? theme.accentSoft : "transparent",
+                color: zap ? theme.accent : theme.textSub,
+                borderColor: zap ? theme.accentBorder : theme.cardBorder,
+                fontWeight: zap ? 700 : 600,
+              }}>{o.ja ? "já" : o.name}{!o.ja && !o.vidi ? " *" : ""}</button>
+            );
+          })}
+        </div>
+        {f.komu && !lide.find(o => o.name === f.komu)?.vidi && (
+          <div style={{ fontSize: "11px", color: theme.yellow, marginTop: 4 }}>
+            * {f.komu} tuhle zakázku nevidí — termín si pohlídáš ty, jemu se neukáže.
+          </div>
+        )}
       </div>
 
       <div style={{ marginBottom: 8 }}>
@@ -371,6 +533,9 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
   const [jak, setJak] = useState(() => {
     try { return localStorage.getItem("ft_terminy_razeni") || "datum"; } catch (e) { return "datum"; }
   });
+  const [hotove, setHotove] = useState([]);
+  const [kos, setKos] = useState(false);
+  const [obnov, setObnov] = useState(0);
 
   useEffect(() => {
     try { localStorage.setItem("ft_terminy_razeni", jak); } catch (e) {}
@@ -381,7 +546,22 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
     setBusy(true);
     prehledTerminu(owner, rozsah).then(r => { if (!zrus) { setRadky(r || []); setBusy(false); } });
     return () => { zrus = true; };
-  }, [owner, rozsah]);
+  }, [owner, rozsah, obnov]);
+
+  /* Koš se načítá, až když ho otevřeš — dívá se do něj člověk jen
+     tehdy, když něco odklepl omylem nebo se ukázalo, že hotovo nebylo. */
+  useEffect(() => {
+    if (!kos) return;
+    let zrus = false;
+    hotoveTerminy(30).then(r => { if (!zrus) setHotove(r || []); });
+    return () => { zrus = true; };
+  }, [kos, obnov]);
+
+  const prekresli = () => setObnov(k => k + 1);
+  const splni = async (t, hotovo) => {
+    await splnTermin(t.id, hotovo, t.reminder_id);
+    prekresli();
+  };
 
   const serazene = serad(radky, jak);
 
@@ -403,7 +583,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
       ].map(s => ({
         ...s,
         barva: barvaTerminu(theme, s.klic),
-        polozky: serazene.filter(r => nalehavost(r.zbyva).klic === s.klic),
+        polozky: serazene.filter(r => stav(r).klic === s.klic),
       })).filter(s => s.polozky.length > 0);
 
   const prepinac = (pole, hodnota, nastav) => (
@@ -460,7 +640,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
           </div>
 
           {s.polozky.map(r => {
-            const n = nalehavost(r.zbyva);
+            const n = stav(r);
             const barva = barvaTerminu(theme, n.klic);
             return (
               <div key={r.id} onClick={() => onOtevriZakazku?.({ id: r.project_id })} style={{
@@ -468,6 +648,11 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
                 borderLeft: `3px solid ${barva}`, cursor: "pointer",
                 display: "flex", alignItems: "center", gap: 9,
               }}>
+                <button onClick={(e) => { e.stopPropagation(); splni(r, true); }}
+                  title="Hotovo" style={{
+                    ...btn(), background: "transparent", color: theme.textSub,
+                    fontSize: "14px", padding: "0 2px",
+                  }}>☐</button>
                 {r.dulezite && (
                   <span style={{ fontSize: "13px", color: theme.yellow }}>★</span>
                 )}
@@ -484,20 +669,55 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
                           style={{ color: theme.accent, cursor: "pointer" }}>{r.s_kym}</span>
                       </>
                     )}
+                    {r.komu ? ` · 👤 ${r.komu}` : ""}
                     {r.poznamka ? ` · ${r.poznamka}` : ""}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <div style={{ fontSize: "12px", fontWeight: 700, color: barva }}>{n.popis}</div>
                   <div style={{ fontSize: "10.5px", color: theme.textSub }}>
-                    {datumKratce(r.datum)}
+                    {datumKratce(r.datum)}{r.cas ? ` v ${casKratce(r.cas)}` : ""}
                   </div>
                 </div>
+                <Posun theme={theme} t={r} onHotovo={prekresli} />
               </div>
             );
           })}
         </div>
       ))}
+
+      {/* Koš splněných. Odškrtnutý termín se nemá ztratit: někdy se
+          odklepne omylem, někdy se ukáže, že hotovo zase není. */}
+      <button onClick={() => setKos(v => !v)} style={{
+        ...btnGhost(theme), width: "100%", textAlign: "left",
+        marginTop: 6, padding: "8px 11px",
+        borderStyle: "dashed", color: theme.textSub,
+      }}>{kos ? "▲ skrýt splněné" : "▼ splněné za posledních 30 dní"}</button>
+
+      {kos && (hotove.length === 0 ? (
+        <div style={{
+          fontSize: "11.5px", color: theme.textSub,
+          padding: "10px 4px", textAlign: "center",
+        }}>Za posledních 30 dní nic odškrtnutého.</div>
+      ) : hotove.map(t => (
+        <div key={t.id} style={{
+          ...card(theme), padding: "7px 11px", marginTop: 6,
+          display: "flex", alignItems: "center", gap: 9, opacity: 0.75,
+        }}>
+          <span style={{ fontSize: "13px", color: theme.green }}>☑</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: "12px", color: theme.textSub, textDecoration: "line-through",
+            }}>{t.nazev}</div>
+            <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 1 }}>
+              {[t.kod, t.zakazka, t.komu ? `👤 ${t.komu}` : null,
+                `hotovo ${kdyPresne(t.hotovo_at)}`].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné"
+            style={btnGhost(theme)}>↩ vrátit</button>
+        </div>
+      )))}
     </div>
   );
 }
@@ -516,9 +736,12 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
 
 export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
   const [radky, setRadky] = useState([]);
+  const [hotove, setHotove] = useState([]);
+  const [kos, setKos] = useState(false);
   const [jak, setJak] = useState(() => {
     try { return localStorage.getItem("ft_panel_razeni") || "datum"; } catch (e) { return "datum"; }
   });
+  const [obnov, setObnov] = useState(0);
 
   useEffect(() => {
     try { localStorage.setItem("ft_panel_razeni", jak); } catch (e) {}
@@ -529,9 +752,25 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
     let zrus = false;
     prehledTerminu(owner, 60).then(r => { if (!zrus) setRadky(r || []); });
     return () => { zrus = true; };
-  }, [owner]);
+  }, [owner, obnov]);
 
+  /* Koš se načítá, až když ho otevřeš. Při každém zobrazení panelu
+     tahat splněné termíny by bylo zbytečné — dívá se na ně člověk
+     jen tehdy, když něco odškrtl omylem. */
+  useEffect(() => {
+    if (!kos) return;
+    let zrus = false;
+    hotoveTerminy(30).then(r => { if (!zrus) setHotove(r || []); });
+    return () => { zrus = true; };
+  }, [kos, obnov]);
+
+  const prekresli = () => setObnov(k => k + 1);
   const serazene = serad(radky, jak).slice(0, limit);
+
+  const splni = async (t, hotovo) => {
+    await splnTermin(t.id, hotovo, t.reminder_id);
+    prekresli();
+  };
 
   return (
     <div>
@@ -560,32 +799,93 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
           Zadáš ho v detailu zakázky.
         </div>
       ) : serazene.map(t => {
-        const n = nalehavost(t.zbyva);
+        const n = stav(t);
         const barva = barvaTerminu(theme, n.klic);
         return (
-          <div key={t.id} onClick={() => onOtevriZakazku?.({ id: t.project_id })} style={{
-            padding: "8px 12px", cursor: "pointer",
-            borderTop: `1px solid ${theme.cardBorder}40`,
+          <div key={t.id} style={{
+            padding: "8px 12px", borderTop: `1px solid ${theme.cardBorder}40`,
+            display: "flex", alignItems: "flex-start", gap: 7,
           }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              {t.dulezite && <span style={{ fontSize: 11, color: theme.yellow }}>★</span>}
-              <span style={{
-                fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
+            {/* Odškrtnout jde rovnou odsud. Dosud se muselo přes zakázku,
+                což je u věci typu "zavoláno, hotovo" zbytečná cesta. */}
+            <button onClick={(e) => { e.stopPropagation(); splni(t, true); }}
+              title="Hotovo" style={{
+                ...btn(), background: "transparent", color: theme.textSub,
+                fontSize: "13px", padding: "0 2px", lineHeight: 1.3,
+              }}>☐</button>
+
+            <div onClick={() => onOtevriZakazku?.({ id: t.project_id })}
+              style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                {t.dulezite && <span style={{ fontSize: 11, color: theme.yellow }}>★</span>}
+                <span style={{
+                  fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>{t.nazev}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
+                  {n.popis}
+                </span>
+              </div>
+              <div style={{
+                fontSize: 10, color: theme.textSub, marginTop: 2,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-              }}>{t.nazev}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
-                {n.popis}
-              </span>
+              }}>
+                {[
+                  t.kod,
+                  t.cas ? `v ${casKratce(t.cas)}` : null,
+                  // Dvě různé role, proto dvě ikony: 👤 koho mám kontrolovat,
+                  // 🤝 s kým na druhé straně jednám.
+                  t.komu ? `👤 ${t.komu}` : null,
+                  t.s_kym ? `🤝 ${t.s_kym}` : null,
+                  t.zakazka,
+                ].filter(Boolean).join(" · ")}
+              </div>
             </div>
-            <div style={{
-              fontSize: 10, color: theme.textSub, marginTop: 2,
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }}>
-              {[t.kod, t.s_kym, t.zakazka].filter(Boolean).join(" · ")}
-            </div>
+
+            <Posun theme={theme} t={t} onHotovo={prekresli} />
           </div>
         );
       })}
+
+      {/* Koš. Odškrtnutý termín se nemá ztratit — někdy se odklepne
+          omylem, někdy se ukáže, že hotovo nebylo. */}
+      <button onClick={() => setKos(v => !v)} style={{
+        ...btn(), width: "100%", textAlign: "left",
+        padding: "7px 12px", background: "transparent", color: theme.textSub,
+        fontSize: 10, fontWeight: 700, letterSpacing: "0.4px",
+        textTransform: "uppercase", borderTop: `1px dashed ${theme.cardBorder}`,
+        borderRadius: 0,
+      }}>{kos ? "▲ skrýt splněné" : "▼ splněné (30 dní)"}</button>
+
+      {kos && (hotove.length === 0 ? (
+        <div style={{ padding: "10px 12px", fontSize: 10.5, color: theme.textSub, textAlign: "center" }}>
+          Za posledních 30 dní nic odškrtnutého.
+        </div>
+      ) : hotove.map(t => (
+        <div key={t.id} style={{
+          padding: "6px 12px", borderTop: `1px solid ${theme.cardBorder}40`,
+          display: "flex", alignItems: "center", gap: 7, opacity: 0.75,
+        }}>
+          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné" style={{
+            ...btn(), background: "transparent", color: theme.green,
+            fontSize: "13px", padding: "0 2px",
+          }}>☑</button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 11.5, color: theme.textSub, textDecoration: "line-through",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>{t.nazev}</div>
+            <div style={{ fontSize: 9.5, color: theme.textSub }}>
+              {[t.kod, t.komu ? `👤 ${t.komu}` : null, kdyPresne(t.hotovo_at)]
+                .filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <button onClick={() => splni(t, false)} title="Vrátit zpět" style={{
+            ...btn(), background: "transparent", color: theme.accent,
+            fontSize: "12px", padding: "2px 4px",
+          }}>↩</button>
+        </div>
+      )))}
     </div>
   );
 }

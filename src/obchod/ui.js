@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261009_1135";
+export const OBCHOD_VERZE = "261009_1210";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -200,6 +200,32 @@ export function zvyrazni(text, dotaz) {
     i = j + q.length;
   }
   return kusy.length ? kusy : [{ text: t, shoda: false }];
+}
+
+/* "12:00" z "12:00:00" i z "12:00". Prázdno znamená celý den. */
+export function casKratce(cas) {
+  if (!cas) return "";
+  const m = String(cas).match(/^(\d{1,2}):(\d{2})/);
+  return m ? `${Number(m[1])}:${m[2]}` : "";
+}
+
+/* Kolik zbývá. Do hodiny minuty, do dne hodiny, dál dny — "za 180 min"
+   si nikdo nepřeloží, stejně jako "za 0,02 dne". Záporné je po termínu.
+
+   minut počítá databáze, aby "do dvanácti" znamenalo dvanáct na serveru,
+   ne na notebooku přestaveném na jiné pásmo. */
+export function zbyvaPopis(minut, cas) {
+  const m = Number(minut);
+  if (!isFinite(m)) return "";
+  const a = Math.abs(m);
+  const text =
+    a < 60   ? `${Math.round(a)} min`
+  : a < 1440 ? `${Math.round(a / 60)} h`
+  : `${Math.round(a / 1440)} ${Math.round(a / 1440) === 1 ? "den" : Math.round(a / 1440) < 5 ? "dny" : "dní"}`;
+  if (m < 0) return `${text} po termínu`;
+  // Bez hodiny je "za 14 h" falešná přesnost — termín platí na celý den.
+  if (!cas && a < 1440) return "dnes";
+  return `za ${text}`;
 }
 
 /* Odznaky u zakázky: kolik na ní visí úkolů, poznámek a termínů.
