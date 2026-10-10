@@ -858,6 +858,8 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
   const nazevRef = useRef(null);
 
   const zakazkaId = zakazka?.id || ulozeno?.id || null;
+  const [novyTermin, setNovyTermin] = useState(0);
+  const terminyRef = useRef(null);
   const kod = zakazka?.kod || ulozeno?.kod || null;
 
   useEffect(() => { setTimeout(() => nazevRef.current?.focus(), 80); }, []);
@@ -979,6 +981,23 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           )}
         </div>
 
+        {/* Termín nahoře a velký. Nejčastější věc, kterou u otevřené
+            zakázky uděláš, je slíbit někomu, že se ozveš — a dolů
+            k sekci Termíny se cestou ten slib stihne zapomenout.
+            Tlačítko otevře stejný editor dole a sjede k němu. */}
+        {zakazkaId && (
+          <button onClick={() => {
+            setNovyTermin(k => k + 1);
+            setTimeout(() => terminyRef.current?.scrollIntoView({
+              behavior: "smooth", block: "start",
+            }), 60);
+          }} style={{
+            ...btnMain(theme), width: "100%", marginTop: 10,
+            padding: "12px 14px", fontSize: "14px", letterSpacing: "0.02em",
+            background: theme.purple,
+          }}>⏳ + TERMÍN — komu se mám ozvat a do kdy</button>
+        )}
+
         {ulozeno && !chyba && (
           <div style={{ fontSize: "11px", color: theme.green, marginTop: 8 }}>
             Uloženo {jakDavno(ulozeno.updated_at)}.
@@ -1057,7 +1076,9 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             <Geneze theme={theme} owner={owner} ciselniky={ciselniky} spravce={spravce}
               zakazka={{ id: zakazkaId, nazev: f.nazev }}
               onOtevriOsobu={onOtevriOsobu} />
+            <div ref={terminyRef} />
             <TerminySekce theme={theme} owner={owner} projectId={zakazkaId} spravce={spravce}
+              spustitNovy={novyTermin}
               ciselniky={ciselniky} nazevZakazky={f.nazev} onOtevriOsobu={onOtevriOsobu} />
 
             {/* Odkaz na složku se zadá jednou a pak se jen otvírá —

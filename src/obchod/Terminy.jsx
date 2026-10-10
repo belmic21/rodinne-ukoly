@@ -18,7 +18,7 @@
    je nakonec vždycky jen „kolik času zbývá".
    ═══════════════════════════════════════════════════════ */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import {
   nactiTerminy, prehledTerminu, hotoveTerminy, ulozTermin, splnTermin,
   smazTermin, oznacTermin, posunTermin, komuZadat, nalehavost, barvaTerminu,
@@ -91,7 +91,7 @@ const ZA_DNI = (n) => {
    ════════════════════════════════════════════════════════ */
 
 export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOsobu,
-  ciselniky, spravce = false }) {
+  ciselniky, spravce = false, spustitNovy = 0 }) {
   const [radky, setRadky] = useState([]);
   const [busy, setBusy] = useState(true);
   const [edituji, setEdituji] = useState(null);
@@ -104,6 +104,14 @@ export function TerminySekce({ theme, owner, projectId, nazevZakazky, onOtevriOs
     setBusy(false);
   };
   useEffect(() => { if (projectId) nacti(); }, [projectId]);  // eslint-disable-line
+
+  /* Tlačítko nahoře u zakázky sem pošle signál (číslo, které se zvětší).
+     Na číslo se čeká schválně: kdyby se posílalo true/false, druhé
+     kliknutí po zavření editoru by už nic neudělalo. */
+  useEffect(() => {
+    if (!spustitNovy) return;
+    setEdituji({ datum: DNES(), pripomenout: true });
+  }, [spustitNovy]);
 
   const uloz = async (data) => {
     setChyba(null);
@@ -189,10 +197,11 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
   };
 
   return (
-    <div style={{
+    <div className={!hotovo && n.klic === "po" ? "po-terminu" : undefined} style={{
       ...card(theme), padding: "8px 11px", marginBottom: 6,
       display: "flex", alignItems: "center", gap: 9,
       borderLeft: `3px solid ${barva}`,
+      background: !hotovo && n.klic === "po" ? `${theme.red}0e` : theme.card,
       opacity: hotovo ? 0.5 : 1,
     }}>
       <button onClick={prepni} disabled={pracuji || !moje}
@@ -335,6 +344,7 @@ function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus })
   }, [owner, projectId]);
 
   const rychle = [
+    { t: "dnes", d: 0 },
     { t: "zítra", d: 1 },
     { t: "do týdne", d: 7 },
     { t: "do 14 dní", d: 14 },
@@ -505,25 +515,54 @@ function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus })
 /* Řazení. Datum je výchozí, protože termín je ze své podstaty
    o čase. Zakázka se hodí, když řešíš jeden obchod a chceš mít
    jeho termíny pohromadě. Důležité je ruční přetřídění hvězdičkou. */
-export const RAZENI = [
-  { k: "datum",    t: "podle data" },
-  { k: "zakazka",  t: "podle zakázky" },
-  { k: "dulezite", t: "důležité první" },
+/* Tři pohledy, ne tři řazení.
+
+   Řazení byla chyba: při dvou nebo třech termínech vypadá seznam
+   seřazený podle data stejně jako seřazený podle důležitosti, takže
+   se tlačítka tvářila, že nic nedělají. Každý pohled teď mění, CO
+   je vidět nebo JAK je to rozdělené — a rozdíl je poznat vždycky.
+
+   HOŘÍ   — jen to, co je po termínu nebo dnes. Ranní pohled.
+   ZAKÁZKY — všechno, rozdělené po zakázkách s nadpisy.
+   DŮLEŽITÉ — jen termíny s hvězdičkou. */
+export const POHLEDY = [
+  { k: "hori",     t: "hoří",     kratce: "hoří" },
+  { k: "zakazka",  t: "po zakázkách", kratce: "zakázky" },
+  { k: "dulezite", t: "důležité", kratce: "důležité" },
+  { k: "vse",      t: "vše",      kratce: "vše" },
 ];
 
-export function serad(radky, jak) {
-  const r = [...(radky || [])];
-  if (jak === "zakazka") {
-    return r.sort((a, b) =>
-      (a.kod || "").localeCompare(b.kod || "", "cs") ||
-      Number(a.zbyva) - Number(b.zbyva));
+/* Zpětná kompatibilita: dřív se ukládalo "datum". */
+export function normalizujPohled(k) {
+  if (k === "datum") return "vse";
+  return POHLEDY.some(p => p.k === k) ? k : "vse";
+}
+
+/* Vybere a seřadí. Vrací i důvod prázdna, ať se nad prázdným
+   seznamem nedá přemýšlet, jestli je to chyba nebo opravdu nic. */
+export function pohled(radky, jak) {
+  const vse = [...(radky || [])];
+  const doData = (a, b) => Number(a.zbyva_minut ?? a.zbyva * 1440) - Number(b.zbyva_minut ?? b.zbyva * 1440);
+
+  if (jak === "hori") {
+    const v = vse.filter(r => Number(r.zbyva) <= 0).sort(doData);
+    return { polozky: v, prazdno: vse.length ? "Dnes nic nehoří. Nejbližší termín je dál." : null };
   }
   if (jak === "dulezite") {
-    return r.sort((a, b) =>
-      (b.dulezite ? 1 : 0) - (a.dulezite ? 1 : 0) ||
-      Number(a.zbyva) - Number(b.zbyva));
+    const v = vse.filter(r => r.dulezite).sort(doData);
+    return { polozky: v, prazdno: vse.length ? "Žádný termín nemáš označený hvězdičkou." : null };
   }
-  return r.sort((a, b) => Number(a.zbyva) - Number(b.zbyva));
+  if (jak === "zakazka") {
+    const v = vse.sort((a, b) =>
+      (a.kod || "").localeCompare(b.kod || "", "cs") || doData(a, b));
+    return { polozky: v, prazdno: null, skupinyPoZakazce: true };
+  }
+  return { polozky: vse.sort(doData), prazdno: null };
+}
+
+/* Starý název, ať se nic nerozbije, kdyby na něj něco zbylo. */
+export function serad(radky, jak) {
+  return pohled(radky, jak).polozky;
 }
 
 export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, onNaZakazky }) {
@@ -531,7 +570,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
   const [busy, setBusy] = useState(true);
   const [rozsah, setRozsah] = useState(30);
   const [jak, setJak] = useState(() => {
-    try { return localStorage.getItem("ft_terminy_razeni") || "datum"; } catch (e) { return "datum"; }
+    try { return normalizujPohled(localStorage.getItem("ft_terminy_razeni")); } catch (e) { return "vse"; }
   });
   const [hotove, setHotove] = useState([]);
   const [kos, setKos] = useState(false);
@@ -563,11 +602,10 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
     prekresli();
   };
 
-  const serazene = serad(radky, jak);
+  const { polozky: serazene, prazdno, skupinyPoZakazce } = pohled(radky, jak);
 
-  /* Podle data a podle důležitosti dávají smysl skupiny naléhavosti.
-     Podle zakázky ne — tam je přirozený oddíl samotná zakázka. */
-  const skupiny = jak === "zakazka"
+  /* Po zakázkách je přirozený oddíl sama zakázka; jinde naléhavost. */
+  const skupiny = skupinyPoZakazce
     ? [...new Map(serazene.map(r => [r.project_id, r])).values()].map(z => ({
         klic: z.project_id,
         nadpis: `${z.kod} · ${z.zakazka}`,
@@ -611,7 +649,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
           rozsah, setRozsah
         )}
         <span style={{ flex: 1 }} />
-        {prepinac(RAZENI, jak, setJak)}
+        {prepinac(POHLEDY, jak, setJak)}
       </div>
 
       {busy && radky.length === 0 && (
@@ -633,6 +671,20 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
         </div>
       )}
 
+      {/* Prázdno z filtru je něco jiného než prázdno vůbec — tohle
+          říká, že termíny existují, jen tenhle pohled je nepustí. */}
+      {!busy && radky.length > 0 && serazene.length === 0 && (
+        <div style={{
+          ...card(theme), padding: "16px", textAlign: "center",
+          color: theme.textSub, fontSize: "12px", lineHeight: 1.7,
+        }}>
+          {prazdno || "V tomhle pohledu nic není."}
+          <div style={{ marginTop: 8 }}>
+            <button onClick={() => setJak("vse")} style={btnGhost(theme)}>ukázat vše</button>
+          </div>
+        </div>
+      )}
+
       {skupiny.map(s => (
         <div key={s.klic} style={{ marginBottom: 14 }}>
           <div style={{ ...label(theme), marginBottom: 6, color: s.barva }}>
@@ -643,10 +695,12 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
             const n = stav(r);
             const barva = barvaTerminu(theme, n.klic);
             return (
-              <div key={r.id} onClick={() => onOtevriZakazku?.({ id: r.project_id })} style={{
+              <div key={r.id} onClick={() => onOtevriZakazku?.({ id: r.project_id })}
+                className={n.klic === "po" ? "po-terminu" : undefined} style={{
                 ...card(theme), padding: "9px 11px", marginBottom: 6,
                 borderLeft: `3px solid ${barva}`, cursor: "pointer",
                 display: "flex", alignItems: "center", gap: 9,
+                background: n.klic === "po" ? `${theme.red}0e` : theme.card,
               }}>
                 <button onClick={(e) => { e.stopPropagation(); splni(r, true); }}
                   title="Hotovo" style={{
@@ -739,7 +793,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
   const [hotove, setHotove] = useState([]);
   const [kos, setKos] = useState(false);
   const [jak, setJak] = useState(() => {
-    try { return localStorage.getItem("ft_panel_razeni") || "datum"; } catch (e) { return "datum"; }
+    try { return normalizujPohled(localStorage.getItem("ft_panel_razeni")); } catch (e) { return "vse"; }
   });
   const [obnov, setObnov] = useState(0);
 
@@ -765,7 +819,12 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
   }, [kos, obnov]);
 
   const prekresli = () => setObnov(k => k + 1);
-  const serazene = serad(radky, jak).slice(0, limit);
+  const { polozky, prazdno, skupinyPoZakazce } = pohled(radky, jak);
+  const serazene = polozky.slice(0, limit);
+  // Nadpis zakázky se v pohledu "po zakázkách" vypíše vždy u první
+  // položky dané zakázky — na šířku sloupce se nevejde vlastní řádek.
+  const prvniVeSkupine = (i) =>
+    skupinyPoZakazce && (i === 0 || serazene[i - 1].project_id !== serazene[i].project_id);
 
   const splni = async (t, hotovo) => {
     await splnTermin(t.id, hotovo, t.reminder_id);
@@ -778,8 +837,11 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
         display: "flex", gap: 4, padding: "7px 10px",
         borderBottom: `1px solid ${theme.cardBorder}`,
       }}>
-        {RAZENI.map(v => {
+        {POHLEDY.map(v => {
           const zap = jak === v.k;
+          // Kolik řádků ten pohled ukáže — ať je vidět, že se kliknutím
+          // něco stane, ještě než na něj člověk klikne.
+          const kolik = pohled(radky, v.k).polozky.length;
           return (
             <button key={v.k} onClick={() => setJak(v.k)} style={{
               ...btn(), flex: 1, padding: "3px 4px", fontSize: "10px",
@@ -788,23 +850,41 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
               color: zap ? theme.accent : theme.textSub,
               border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
               borderRadius: 6,
-            }}>{v.t.replace("podle ", "").replace(" první", "")}</button>
+            }}>{v.kratce}{kolik ? ` ${kolik}` : ""}</button>
           );
         })}
       </div>
 
       {serazene.length === 0 ? (
         <div style={{ padding: "16px 12px", fontSize: 11, color: theme.textSub, textAlign: "center", lineHeight: 1.6 }}>
-          Žádný termín do dvou měsíců.<br />
-          Zadáš ho v detailu zakázky.
+          {radky.length === 0 ? (
+            <>Žádný termín do dvou měsíců.<br />Zadáš ho v detailu zakázky.</>
+          ) : (
+            <>{prazdno || "V tomhle pohledu nic není."}<br />
+              <button onClick={() => setJak("vse")} style={{
+                ...btn(), background: "transparent", color: theme.accent,
+                fontSize: 11, fontWeight: 700, padding: "4px 2px",
+              }}>ukázat vše</button></>
+          )}
         </div>
-      ) : serazene.map(t => {
+      ) : serazene.map((t, i) => {
         const n = stav(t);
         const barva = barvaTerminu(theme, n.klic);
+        const hori = n.klic === "po";
         return (
-          <div key={t.id} style={{
-            padding: "8px 12px", borderTop: `1px solid ${theme.cardBorder}40`,
+          <Fragment key={t.id}>
+          {prvniVeSkupine(i) && (
+            <div style={{
+              padding: "7px 12px 2px", fontSize: 9, fontWeight: 800,
+              letterSpacing: "0.4px", color: theme.textSub, textTransform: "uppercase",
+              borderTop: `1px solid ${theme.cardBorder}`,
+            }}>{t.kod} · {t.zakazka}</div>
+          )}
+          <div className={hori ? "po-terminu" : undefined} style={{
+            padding: "8px 12px",
+            borderTop: prvniVeSkupine(i) ? "none" : `1px solid ${theme.cardBorder}40`,
             display: "flex", alignItems: "flex-start", gap: 7,
+            background: hori ? `${theme.red}0e` : "transparent",
           }}>
             {/* Odškrtnout jde rovnou odsud. Dosud se muselo přes zakázku,
                 což je u věci typu "zavoláno, hotovo" zbytečná cesta. */}
@@ -831,19 +911,20 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}>
                 {[
-                  t.kod,
+                  skupinyPoZakazce ? null : t.kod,
                   t.cas ? `v ${casKratce(t.cas)}` : null,
                   // Dvě různé role, proto dvě ikony: 👤 koho mám kontrolovat,
                   // 🤝 s kým na druhé straně jednám.
                   t.komu ? `👤 ${t.komu}` : null,
                   t.s_kym ? `🤝 ${t.s_kym}` : null,
-                  t.zakazka,
+                  skupinyPoZakazce ? null : t.zakazka,
                 ].filter(Boolean).join(" · ")}
               </div>
             </div>
 
             <Posun theme={theme} t={t} onHotovo={prekresli} />
           </div>
+          </Fragment>
         );
       })}
 
