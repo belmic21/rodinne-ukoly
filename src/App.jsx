@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261009_1210";
+const FILE_VERSION = "261010_1050";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -930,6 +930,75 @@ async function triggerNoteNotification(note) {
 }
 
 // Trigger push pro reminder
+/* ═══════════════════════════════════════════════════════
+   ZVUK PŘIPOMÍNKY
+
+   Krátká dvoutónová siréna. Schválně se negeneruje ze souboru —
+   zvukový soubor by se musel stáhnout, mohl by se nestáhnout a na
+   připomínce, která má člověka zvednout od stolu, se na to spolehnout
+   nedá. Tóny si prohlížeč vyrobí sám.
+
+   Dvě věci, které se u zvuku v prohlížeči dají snadno splést:
+
+   1. Zvuk nejde přehrát, dokud uživatel na stránku aspoň jednou
+      neklikl. Prohlížeč to blokuje a nedá vědět. Proto se zvuková
+      vrstva probouzí při prvním doteku a do té doby se tiše mlčí.
+
+   2. Vypínač musí existovat. Siréna, která se nedá ztišit, skončí
+      vypnutým zvukem celého prohlížeče — a pak nezazvoní ani to,
+      na čem záleží.
+   ═══════════════════════════════════════════════════════ */
+
+let zvukKontext = null;
+let zvukPovolen = false;
+
+function probudZvuk() {
+  if (zvukKontext) { if (zvukKontext.state === "suspended") zvukKontext.resume(); return; }
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    zvukKontext = new AC();
+  } catch (e) { /* bez zvuku se dá žít, bez aplikace ne */ }
+}
+
+function zvukZapnuty() {
+  try { return localStorage.getItem("ft_zvuk") !== "0"; } catch (e) { return true; }
+}
+
+function nastavZvuk(zap) {
+  try { localStorage.setItem("ft_zvuk", zap ? "1" : "0"); } catch (e) {}
+  zvukPovolen = !!zap;
+}
+
+/* Siréna: tři dvojice tónů, vzestupně. Dost na to, aby se člověk
+   otočil, a dost krátká, aby nešla na nervy. */
+function zahrajSirenu({ naplno = false } = {}) {
+  if (!zvukZapnuty()) return false;
+  probudZvuk();
+  if (!zvukKontext) return false;
+  try {
+    if (zvukKontext.state === "suspended") zvukKontext.resume();
+    const t0 = zvukKontext.currentTime;
+    const hlasitost = naplno ? 0.22 : 0.12;
+    const tony = naplno
+      ? [[880, 0], [660, 0.22], [880, 0.44], [660, 0.66], [880, 0.88]]
+      : [[880, 0], [660, 0.2]];
+    for (const [hz, kdy] of tony) {
+      const osc = zvukKontext.createOscillator();
+      const zesil = zvukKontext.createGain();
+      osc.type = "sine";
+      osc.frequency.value = hz;
+      // Náběh a doznění, ať to necvakne.
+      zesil.gain.setValueAtTime(0.0001, t0 + kdy);
+      zesil.gain.exponentialRampToValueAtTime(hlasitost, t0 + kdy + 0.02);
+      zesil.gain.exponentialRampToValueAtTime(0.0001, t0 + kdy + 0.19);
+      osc.connect(zesil); zesil.connect(zvukKontext.destination);
+      osc.start(t0 + kdy); osc.stop(t0 + kdy + 0.2);
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
 async function triggerReminderNotification(reminder) {
   const recipients = new Set([reminder.createdBy]);
   if (Array.isArray(reminder.sharedWith)) {
@@ -1052,8 +1121,10 @@ const THEMES = {
     textSub: "#506880",
     textDim: "#2a3a50",
     textMid: "#3a5060",
+    // Pole, do kterého se píše, musí jít poznat bez klikání: je tmavší
+    // než karta a má znatelný okraj. Dřív splývalo s pozadím.
     inputBg: "#080c12",
-    inputBorder: "#1a2438",
+    inputBorder: "#33475f",
     accent: "#3b82f6",
     accentSoft: "#3b82f612",
     accentBorder: "#3b82f625",
@@ -1082,8 +1153,11 @@ const THEMES = {
     textSub: "#64748b",
     textDim: "#cbd5e1",
     textMid: "#94a3b8",
-    inputBg: "#f1f5f9",
-    inputBorder: "#e2e8f0",
+    // Ve světlém režimu je to naopak: pole je bílé jako papír a drží
+    // ho zřetelný šedý okraj. Šedomodrá výplň s okrajem v barvě karty
+    // vypadala jako vypsaná hodnota, ne jako místo k psaní.
+    inputBg: "#ffffff",
+    inputBorder: "#94a3b8",
     accent: "#2563eb",
     accentSoft: "#2563eb10",
     accentBorder: "#2563eb20",
@@ -1190,6 +1264,26 @@ html, body {
   30% { box-shadow: 0 0 40px currentColor, 0 4px 20px currentColor; }
   100% { box-shadow: 0 0 30px currentColor, 0 4px 16px currentColor; }
 }
+/* Do čeho jde psát, se po kliknutí obtáhne. Barva je schválně stejná
+   v obou motivech — jde o signál „tady jsi“, ne o součást palety. */
+input:focus, textarea:focus, select:focus {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.22);
+}
+input:disabled, textarea:disabled, select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Propadlý termín. Nestačí ho obarvit — barvu v seznamu přehlédneš.
+   Tep je pomalý schválně: rychlé blikání v periferním vidění unavuje
+   a po půl hodině ho člověk přestane vnímat. */
+@keyframes poTerminu {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0.28); }
+}
+.po-terminu { animation: poTerminu 1.6s ease-in-out infinite; border-radius: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .po-terminu { animation: none; box-shadow: 0 0 0 2px rgba(239,68,68,0.35); }
+}
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 select { appearance: auto; }
 body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
@@ -3586,10 +3680,13 @@ async function apiSnoozeReminder(id, newRemindAt) {
   }
 }
 
-// Načti vyřízené reminders posledních 24 hodin (pro historii)
-async function apiLoadDismissedReminders() {
+/* Vyřízené připomínky do historie. Čtyřiadvacet hodin bylo málo —
+   v pondělí ráno se člověk neměl jak podívat, co odklepl v pátek.
+   Třicet dní pokrývá měsíc dozadu a pořád se to vejde do jednoho
+   dotazu. Nic se nemaže, jen se po třiceti dnech přestane vypisovat. */
+async function apiLoadDismissedReminders(dni = 30) {
   try {
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const dayAgo = new Date(Date.now() - dni * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from("reminders")
       .select("*")
@@ -5464,7 +5561,7 @@ const ODLOZIT = () => {
   return volby.filter(v => v.kdy.getTime() > ted.getTime());
 };
 
-function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate, onReactivate, onSnooze }) {
+function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onCreate, onReactivate, onSnooze, onDelete }) {
   useEscapeKey(onClose);
   const [dismissedHistory, setDismissedHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -5487,20 +5584,14 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
       setDismissedHistory(mine);
       setHistoryLoading(false);
 
-      // Auto-cleanup: vyřízené starší 24h → smazat z DB (ale apiLoadDismissedReminders už filtruje >24h, tak ne potřeba)
-      // Propadlé starší 7 dní → smazat (bezpečnost)
-      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      const veryOldExpired = reminders.filter(r =>
-        r.createdBy === currentUser?.name &&
-        !r.dismissedAt &&
-        new Date(r.remindAt).getTime() < sevenDaysAgo
-      );
-      for (const r of veryOldExpired) {
-        await apiDeleteReminder(r.id);
-      }
+      // Dřív se tady propadlé připomínky starší sedmi dnů mazaly samy.
+      // To byla chyba: zmeškaný termín je právě ta věc, kterou chce
+      // člověk vidět — a mizela potichu, bez ptaní a bez možnosti
+      // vrátit zpět. Propadlá připomínka teď zůstává, dokud ji
+      // neodklepneš nebo nesmažeš ručně.
     })();
     return () => { cancelled = true; };
-  }, [currentUser?.name, reminders]);
+  }, [currentUser?.name]);
 
   const myReminders = reminders.filter(r => {
     if (r.dismissedAt) return false;
@@ -5598,6 +5689,40 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
 
   /* Odložit — rozbalí nabídku časů. Vlastní stav na řádek, aby se
      neotevíralo všechno naráz. */
+  const [zvuk, setZvuk] = useState(() => zvukZapnuty());
+
+  /* Smazat natvrdo. Dva kliky schválně — propadlá připomínka je
+     záznam o tom, co se nestihlo, a jedno nedopatření ji nesmí
+     odnést. Vrátit zpět už se nedá. */
+  const SmazatTlacitko = ({ r, zHistorie = false }) => {
+    const [ptam, setPtam] = useState(false);
+    useEffect(() => {
+      if (!ptam) return;
+      const id = setTimeout(() => setPtam(false), 4000);
+      return () => clearTimeout(id);
+    }, [ptam]);
+    if (ptam) {
+      return (
+        <button onClick={() => {
+            setPtam(false);
+            if (zHistorie) setDismissedHistory(prev => prev.filter(x => x.id !== r.id));
+            onDelete?.(r.id, zHistorie);
+          }}
+          title="Opravdu smazat" style={{
+            ...buttonStyle(), padding: "5px 9px", fontSize: 11,
+            background: theme.red, color: "#fff", fontWeight: 700,
+          }}>smazat?</button>
+      );
+    }
+    return (
+      <button onClick={() => setPtam(true)} title="Smazat připomínku" style={{
+        ...buttonStyle(), padding: "5px 9px", fontSize: 13,
+        background: "transparent", color: theme.textSub,
+        border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+      }}>×</button>
+    );
+  };
+
   const OdlozitTlacitko = ({ r }) => {
     const [otevreno, setOtevreno] = useState(false);
     const volby = ODLOZIT();
@@ -5676,6 +5801,34 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
             marginBottom: 4,
           }}>+ Nová připomínka</button>
 
+          {/* Vypínač zvuku. Patří sem, ne do nastavení — člověk ho hledá
+              ve chvíli, kdy ho siréna právě vyrušila. Vedle je zkouška,
+              ať je hned jasné, co zazní. */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "7px 10px", marginBottom: 2,
+            border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
+          }}>
+            <button onClick={() => { const n = !zvuk; setZvuk(n); nastavZvuk(n); if (n) zahrajSirenu(); }}
+              style={{
+                ...buttonStyle(), padding: "4px 8px", fontSize: 13,
+                background: zvuk ? theme.accentSoft : "transparent",
+                color: zvuk ? theme.accent : theme.textSub,
+                border: `1px solid ${zvuk ? theme.accentBorder : theme.inputBorder}`,
+                fontWeight: 700,
+              }}>{zvuk ? "🔊 zvuk zapnutý" : "🔇 zvuk vypnutý"}</button>
+            <span style={{ fontSize: 11, color: theme.textSub, flex: 1, lineHeight: 1.45 }}>
+              Siréna zazní, až připomínka dojde — pokud je aplikace otevřená.
+            </span>
+            {zvuk && (
+              <button onClick={() => zahrajSirenu({ naplno: true })} style={{
+                ...buttonStyle(), padding: "4px 8px", fontSize: 11,
+                background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+              }}>zkusit</button>
+            )}
+          </div>
+
           {/* Aktivní (budoucí) */}
           {active.length > 0 && (
             <>
@@ -5713,14 +5866,19 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                         ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                         background: theme.green, color: "#fff", fontWeight: 700,
                       }}>✓</button>
+                      <SmazatTlacitko r={r} />
                     </>
                   } />
                 ))}
               </div>
+              <div style={{ fontSize: 10, color: theme.textSub, marginTop: 5, padding: "0 2px", lineHeight: 1.5 }}>
+                Propadlé připomínky tu zůstanou, dokud je neodklepneš (✓)
+                nebo nesmažeš (×). Samy nezmizí.
+              </div>
             </>
           )}
 
-          {/* Historie — vyřízené posledních 24h, sbalitelné */}
+          {/* Historie — vyřízené za posledních 30 dní, sbalitelné */}
           {history.length > 0 && (
             <>
               <button onClick={() => setHistoryExpanded(e => !e)} style={{
@@ -5731,18 +5889,21 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                 textTransform: "uppercase", letterSpacing: "0.4px",
                 display: "flex", alignItems: "center", justifyContent: "space-between",
               }}>
-                <span>✓ Historie · posledních 24 h ({history.length})</span>
+                <span>✓ Historie · posledních 30 dní ({history.length})</span>
                 <span style={{ fontSize: 10 }}>{historyExpanded ? "▲" : "▼"}</span>
               </button>
               {historyExpanded && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                   {history.map(r => (
                     <ReminderRow key={r.id} r={r} variant="history" actions={
-                      <button onClick={() => onReactivate(r)} title="Reaktivovat" style={{
-                        ...buttonStyle(), padding: "5px 9px", fontSize: 12,
-                        background: theme.inputBg, color: theme.text,
-                        border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
-                      }}>↻</button>
+                      <>
+                        <button onClick={() => onReactivate(r)} title="Reaktivovat" style={{
+                          ...buttonStyle(), padding: "5px 9px", fontSize: 12,
+                          background: theme.inputBg, color: theme.text,
+                          border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                        }}>↻</button>
+                        <SmazatTlacitko r={r} zHistorie />
+                      </>
                     } />
                   ))}
                 </div>
@@ -23266,6 +23427,17 @@ function App() {
     }
 
     // Register custom polling service worker + push subscription
+    // Prohlížeč nepustí zvuk, dokud uživatel na stránku aspoň jednou
+    // neklikne. Odchytíme první dotek a zvukovou vrstvu tím probudíme,
+    // ať siréna nezůstane němá právě tehdy, když je potřeba.
+    const prvniDotek = () => {
+      probudZvuk();
+      window.removeEventListener("pointerdown", prvniDotek);
+      window.removeEventListener("keydown", prvniDotek);
+    };
+    window.addEventListener("pointerdown", prvniDotek, { once: false });
+    window.addEventListener("keydown", prvniDotek, { once: false });
+
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw-polling.js", { scope: "/" })
         .then(async (reg) => {
@@ -24447,6 +24619,9 @@ function App() {
             console.warn("Notification show failed:", e?.message);
           }
         }
+        // Zvuk. Tohle je ta část, kvůli které nemusíš u aplikace sedět:
+        // notifikaci na druhém monitoru přehlédneš, sirénu ne.
+        zahrajSirenu({ naplno: true });
         // In-app toast (vždy, i když Notification API není dostupné)
         setActiveReminder(r);
       }
@@ -26918,6 +27093,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onDismiss={async (id) => {
               setReminders(prev => prev.filter(r => r.id !== id));
               await apiDismissReminder(id);
+            }}
+            onDelete={async (id) => {
+              // Zmizí hned ze seznamu i z historie; smazání v databázi
+              // doběhne vzápětí. Zpátky už se to nevrátí.
+              setReminders(prev => prev.filter(r => r.id !== id));
+              await apiDeleteReminder(id);
             }}
             onSnooze={async (id, novyCas) => {
               // Posune se hned v seznamu, ať je vidět, že se něco stalo;
