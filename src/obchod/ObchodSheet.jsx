@@ -27,6 +27,7 @@ import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
 import Ciselniky from "./Ciselniky.jsx";
 import Osoba from "./Osoba.jsx";
 import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
+import Lide from "./Lide.jsx";
 import Prilepene, { Odznaky } from "./Prilepene.jsx";
 
 const PRAZDNY_FILTR = {
@@ -57,7 +58,8 @@ function odKdy(obdobi) {
 }
 
 export default function ObchodSheet({ currentUser, theme, initialDraft = "",
-  initialOsoba = null, initialZakazka = null, onClose, onDataZmena }) {
+  initialOsoba = null, initialZakazka = null, initialZalozka = null,
+  onClose, onDataZmena }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
 
@@ -74,7 +76,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [statistika, setStatistika] = useState(false);
   const [prilepene, setPrilepene] = useState({});   // počty u řádků seznamu
   const [nalezy, setNalezy] = useState({});        // kde se co našlo při hledání
-  const [zalozka, setZalozka] = useState("zakazky");   // zakazky | sit | sdilene
+  const [zalozka, setZalozka] = useState(initialZalozka || "zakazky");
+  // zakazky | lide | sit | terminy | sdilene
   const [nastaveni, setNastaveni] = useState(null);   // uzivatele | ciselniky
   // Přehled člověka se otevírá jako překryv nad vším ostatním.
   // Schválně: co máš rozepsané v zakázce, zůstane pod ním nedotčené.
@@ -266,7 +269,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                 <div style={{ display: "flex", gap: 4, flex: 1 }}>
                   {[
                     { k: "zakazky", t: "Zakázky" },
-                    { k: "sit",     t: "Síť" },
+                    { k: "lide",    t: "Lidé" },
+                    { k: "sit",     t: "Karty" },
                     { k: "terminy", t: "Termíny" },
                     { k: "sdilene", t: "Sdíleno se mnou" },
                   ].map(z => {
@@ -365,7 +369,10 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
               )}
             </div>
 
-            {zalozka === "sit" ? (
+            {zalozka === "lide" ? (
+              <Lide theme={theme} owner={owner} ciselniky={ciselniky}
+                onOtevriOsobu={setOsobaId} />
+            ) : zalozka === "sit" ? (
               <Site theme={theme} owner={owner} ciselniky={ciselniky}
                 onOtevriOsobu={setOsobaId} />
             ) : zalozka === "terminy" ? (

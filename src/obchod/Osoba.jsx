@@ -12,7 +12,9 @@
    ═══════════════════════════════════════════════════════ */
 
 import { useState, useEffect } from "react";
-import { osobaPrehled, popis, nactiCiselniky, prehledPrilepenych } from "./api.js";
+import {
+  osobaPrehled, popis, nactiCiselniky, prehledPrilepenych, zakazkyProOsobu,
+} from "./api.js";
 import { KontaktEditor } from "./Site.jsx";
 import {
   card, btn, label,
@@ -207,6 +209,13 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
         </Sekce>
       )}
 
+      {/* Párování obráceně. Dosud se dalo jít jen od zakázky k lidem,
+          takže se nad otevřeným člověkem nešlo zeptat „co pro něj mám?“.
+          Počítá to stejná pravidla jako panel u zakázky, takže se
+          odpovědi nemůžou rozejít. Zakázky, které už mu poslané byly,
+          se tu neukazují. */}
+      <CoProNej theme={theme} personId={d.osoba?.id} onOtevriZakazku={onOtevriZakazku} />
+
       {d.karty.length > 0 && (
         <Sekce theme={theme} nadpis="Co hledá a co má">
           {d.karty.map(k => (
@@ -327,5 +336,56 @@ function Sekce({ theme, nadpis, children }) {
       <div style={{ ...label(theme), marginBottom: 6 }}>{nadpis}</div>
       {children}
     </div>
+  );
+}
+
+/* ── Co pro něj mám ──────────────────────────────────────
+   Obrácené párování. Načítá se zvlášť a až po zbytku detailu:
+   je to dotaz navíc a člověk na něj nečeká — zbytek karty už
+   mezitím čte. */
+function CoProNej({ theme, personId, onOtevriZakazku }) {
+  const [radky, setRadky] = useState([]);
+  const [busy, setBusy] = useState(true);
+
+  useEffect(() => {
+    if (!personId) return;
+    let zrus = false;
+    setBusy(true);
+    zakazkyProOsobu(personId, 20).then(r => {
+      if (!zrus) { setRadky(r || []); setBusy(false); }
+    });
+    return () => { zrus = true; };
+  }, [personId]);
+
+  if (busy || radky.length === 0) return null;
+
+  return (
+    <Sekce theme={theme} nadpis={`Co pro něj mám (${radky.length})`}>
+      <div style={{ fontSize: "11px", color: theme.textSub, marginBottom: 6, lineHeight: 1.6 }}>
+        Rozdělané zakázky, které sedí jeho kartě a ještě jsi mu je neposlal.
+      </div>
+      {radky.map(z => (
+        <div key={z.project_id} onClick={() => onOtevriZakazku?.({ id: z.project_id })} style={{
+          ...card(theme), padding: "8px 11px", marginBottom: 6, cursor: "pointer",
+          borderLeft: `3px solid ${theme.green}`,
+          display: "flex", alignItems: "center", gap: 9,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text }}>
+              {z.nazev}
+            </div>
+            <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
+              {[z.kod, z.cena ? penizeKratce(z.cena) : null].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          {(z.sedi || []).length > 0 && (
+            <div style={{
+              fontSize: "10.5px", color: theme.green, whiteSpace: "nowrap",
+              fontWeight: 600,
+            }}>sedí {z.sedi.join(", ")}</div>
+          )}
+        </div>
+      ))}
+    </Sekce>
   );
 }

@@ -548,6 +548,7 @@ export async function ulozRole(personId, role) {
 const KARTA = `
   id, person_id, smer, nazev, typy, kraje, cena_od, cena_do,
   velikost_od, jednotka, faze_min, pro_koho, poznamka,
+  forma, tiket_od, tiket_do, ltv_max, rychlost_dni, vystup, nebere,
   plati_od, plati_do, aktivni, created_at, updated_at,
   osoba:map_people (id, name, role_tagy)
 `;
@@ -589,6 +590,14 @@ export async function ulozKartu(owner, data) {
     faze_min: prazdnoNaNull(data.faze_min),
     pro_koho: prazdnoNaNull(data.pro_koho),
     poznamka: prazdnoNaNull(data.poznamka),
+    // Pole, která rozhodují o obchodu víc než cena.
+    forma: data.forma || [],
+    tiket_od: cislo(data.tiket_od),
+    tiket_do: cislo(data.tiket_do),
+    ltv_max: cislo(data.ltv_max),
+    rychlost_dni: cislo(data.rychlost_dni),
+    vystup: prazdnoNaNull(data.vystup),
+    nebere: data.nebere || [],
     plati_do: prazdnoNaNull(data.plati_do),
     aktivni: data.aktivni !== false,
   };
@@ -1105,6 +1114,55 @@ export async function kdoToSezene(owner, typy = [], kraje = [], limit = 30) {
     return data || [];
   } catch (e) {
     selhalo("kdoToSezene", e);
+    return [];
+  }
+}
+
+/* ── Lidé ────────────────────────────────────────────────
+   Jeden řádek na člověka: role, kolik má karet, kdy jsi ho naposledy
+   oslovil a — to podstatné — kolik rozdělaných zakázek mu teď sedí.
+   To poslední číslo je rozdíl mezi seznamem kontaktů a nástrojem. */
+
+export async function prehledLidi(role = null, limit = 500) {
+  try {
+    const { data, error } = await supabase.rpc("deal_lide_prehled", {
+      p_role: role || null, p_limit: limit,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("prehledLidi", e);
+    return [];
+  }
+}
+
+/* Párování obráceně: co z rozdělaného sedí tomuhle člověku.
+   Zakázky, které už mu jednou poslané byly, vynechává — nabídnout
+   podruhé totéž je horší než nenabídnout nic. */
+export async function zakazkyProOsobu(personId, limit = 20) {
+  if (!personId) return [];
+  try {
+    const { data, error } = await supabase.rpc("deal_match_projects", {
+      p_person_id: personId, p_limit: limit,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("zakazkyProOsobu", e);
+    return [];
+  }
+}
+
+/* Komu jsi dlouho nic neposlal, i když mu něco sedí. */
+export async function zanedbani(dni = 90, limit = 30) {
+  try {
+    const { data, error } = await supabase.rpc("deal_zanedbani", {
+      p_dni: dni, p_limit: limit,
+    });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("zanedbani", e);
     return [];
   }
 }

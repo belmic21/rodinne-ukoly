@@ -514,6 +514,8 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
       smer: "poptavka", nazev: "", typy: [], kraje: [],
       cena_od: "", cena_do: "", velikost_od: "", jednotka: "byt",
       faze_min: "", pro_koho: "sam", poznamka: "", plati_do: "", aktivni: true,
+      forma: [], tiket_od: "", tiket_do: "", ltv_max: "", rychlost_dni: "",
+      vystup: "", nebere: [],
       ...karta,
     };
     // Ceny se v polích ukazují po tisících, datum musí být YYYY-MM-DD.
@@ -662,6 +664,93 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
             </select>
+          </div>
+        </div>
+      )}
+
+      {/* Jak do toho jde a za kolik. Tahle část rozhoduje o obchodu
+          víc než cena nemovitosti: kdo půjčí proti zástavě, nebere
+          vlastnický podíl, a naopak. Všechno nepovinné — nevyplněné
+          pole prostě nefiltruje. */}
+      {f.smer === "poptavka" && (
+        <div style={{
+          ...card(theme), padding: "10px 12px", marginBottom: 11,
+          background: "transparent",
+        }}>
+          <div style={{ ...label(theme), marginBottom: 7 }}>Jak do toho jde</div>
+
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+            {aktivni(ciselniky, "forma_vstupu").map(v => {
+              const zap = (f.forma || []).includes(v.key);
+              return (
+                <button key={v.key} onClick={() => uprav("forma",
+                  zap ? (f.forma || []).filter(x => x !== v.key) : [...(f.forma || []), v.key]
+                )} style={{
+                  ...btnGhost(theme),
+                  background: zap ? theme.accentSoft : "transparent",
+                  color: zap ? theme.accent : theme.textSub,
+                  borderColor: zap ? theme.accentBorder : theme.cardBorder,
+                  fontWeight: zap ? 700 : 600,
+                }}>{v.label}</button>
+              );
+            })}
+          </div>
+
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            gap: 9, marginBottom: 9,
+          }}>
+            <div>
+              <span style={label(theme)}>Tiket od</span>
+              <input value={f.tiket_od || ""} onChange={e => uprav("tiket_od", e.target.value)}
+                placeholder="5 mil" style={input(theme)} />
+            </div>
+            <div>
+              <span style={label(theme)}>Tiket do</span>
+              <input value={f.tiket_do || ""} onChange={e => uprav("tiket_do", e.target.value)}
+                placeholder="30 mil" style={input(theme)} />
+            </div>
+            <div>
+              <span style={label(theme)}>Max LTV %</span>
+              <input value={f.ltv_max || ""} onChange={e => uprav("ltv_max", e.target.value)}
+                placeholder="70" style={input(theme)} />
+            </div>
+            <div>
+              <span style={label(theme)}>Rozhodne do (dní)</span>
+              <input value={f.rychlost_dni || ""} onChange={e => uprav("rychlost_dni", e.target.value)}
+                placeholder="7" style={input(theme)} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 9 }}>
+            <span style={label(theme)}>Co za to chce</span>
+            <input value={f.vystup || ""} onChange={e => uprav("vystup", e.target.value)}
+              placeholder="12 % p.a. / podíl na zisku 30 %" style={input(theme)} />
+          </div>
+
+          <div>
+            <span style={label(theme)}>Co zásadně nebere</span>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3 }}>
+              {aktivni(ciselniky, "typ").map(t => {
+                const zap = (f.nebere || []).includes(t.key);
+                return (
+                  <button key={t.key} onClick={() => uprav("nebere",
+                    zap ? (f.nebere || []).filter(x => x !== t.key) : [...(f.nebere || []), t.key]
+                  )} style={{
+                    ...btnGhost(theme),
+                    background: zap ? `${theme.red}18` : "transparent",
+                    color: zap ? theme.red : theme.textSub,
+                    borderColor: zap ? `${theme.red}44` : theme.cardBorder,
+                    fontWeight: zap ? 700 : 600,
+                  }}>{t.label}</button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 5, lineHeight: 1.5 }}>
+              Tohle jediné vyřazuje natvrdo — co tu označíš, se mu
+              nikdy nenabídne. Tiket naopak nevyřazuje: velký projekt
+              se dá složit z víc investorů.
+            </div>
           </div>
         </div>
       )}
