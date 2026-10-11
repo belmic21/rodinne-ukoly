@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261010_1050";
+const FILE_VERSION = "261011_1030";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -23141,6 +23141,8 @@ function App() {
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
   // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
   const [showObchodSheet, setShowObchodSheet] = useState(false);
+  // Na kterou záložku obchod otevřít. null = Zakázky, "lide" = Lidé.
+  const [obchodZalozka, setObchodZalozka] = useState(null);
   const [obchodDraft, setObchodDraft] = useState("");
   const [obchodOsoba, setObchodOsoba] = useState(null);
   const [obchodZakazka, setObchodZakazka] = useState(null);
@@ -26266,9 +26268,29 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🗺️
           </button>
+          {/* 👥 Lidé — investoři, zprostředkovatelé, developeři.
+              Vlastní ikona schválně: dosud byli schovaní pod 💼 → Síť →
+              Kontakty, tedy na třetí kliknutí a pod názvem, který
+              nikomu nic neřekl. */}
+          <button onClick={() => {
+            setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+            setObchodZalozka("lide");
+            setShowObchodSheet(true);
+          }}
+            title="Lidé — investoři a zprostředkovatelé"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: "16px", padding: "6px 8px",
+              borderRadius: "6px",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            👥
+          </button>
           {/* 💼 Obchod — zakázky a investoři */}
           <button onClick={() => {
             setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+            setObchodZalozka(null);
             setShowObchodSheet(true);
           }}
             title="Obchod — zakázky a investoři"
@@ -27427,10 +27449,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialDraft={obchodDraft}
             initialOsoba={obchodOsoba}
             initialZakazka={obchodZakazka}
+            initialZalozka={obchodZalozka}
             onDataZmena={obnovZObchodu}
             onClose={async () => {
               setShowObchodSheet(false); setObchodDraft("");
               setObchodOsoba(null); setObchodZakazka(null);
+              setObchodZalozka(null);
               await obnovZObchodu();
             }}
           />
