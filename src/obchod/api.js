@@ -226,8 +226,9 @@ export async function nactiPanel(owner) {
 
 const SLOUPCE = `
   id, owner, cislo, kod, nazev, typ, velikost, jednotka,
-  zeme, kraj, mesto, lokalita_text, faze, cena, mena,
-  odmena, stav, souhrn, slozka_odkaz, navazuje_na,
+  zeme, kraj, okres, mesto, mesto_kod, lokalita_text, faze, cena, mena,
+  odmena, stav, duvod_nerealizace, spi_do, uzavreno_at,
+  souhrn, slozka_odkaz, navazuje_na,
   created_at, updated_at
 `;
 
@@ -264,6 +265,9 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
     else if (filtr.kraj) q = q.eq("kraj", filtr.kraj);
     if (filtr.faze)      q = q.eq("faze", filtr.faze);
     if (filtr.stav)      q = q.eq("stav", filtr.stav);
+    // Hotové, padlé a spící z výchozího seznamu pryč. Nemažou se,
+    // jen netříští pozornost — a dají se kdykoli zapnout.
+    else if (!filtr.archiv) q = q.not("stav", "in", "(vyplaceno,nerealizovano,spi)");
     if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
     if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);
     // Od kdy byla zadaná. Hranici počítá aplikace, ne databáze —
@@ -371,7 +375,83 @@ function ocisti(d) {
   delete out.kod;
   delete out.created_at;
   delete out.updated_at;
+  // Razí je databáze, ne formulář. Kdyby je aplikace poslala zpátky,
+  // přepsala by kód, který je na disku v názvu složky.
+  delete out.uzavreno_at;
   return out;
+}
+
+/* ── Obce ────────────────────────────────────────────────
+   Našeptávač měst. Vybráním města se doplní okres i kraj, takže
+   si nemůžou protiřečit — a kód zakázky z nich pak vyjde správně.
+
+   Hledá se nejdřív na začátek názvu, a teprve když to nic nevrátí,
+   i uvnitř. Jinak by „nad“ vysypalo dvě stě obcí s „nad Labem“
+   dřív než samotný Nadějkov. */
+
+export async function hledejObce(dotaz, limit = 15) {
+  const q = (dotaz || "").trim();
+  if (q.length < 2) return [];
+  try {
+    const { data, error } = await supabase.rpc("obce_hledej", { p_dotaz: q, p_limit: limit });
+    if (error) throw error;
+    if (data && data.length) return data;
+    const volne = await supabase.rpc("obce_hledej_volne", { p_dotaz: q, p_limit: limit });
+    if (volne.error) throw volne.error;
+    return volne.data || [];
+  } catch (e) {
+    selhalo("hledejObce", e);
+    return [];
+  }
+}
+
+/* ── Fáze zakázky ───────────────────────────────────────
+   Pás s počty nad seznamem. Vrací všechny fáze včetně prázdných,
+   aby pás nepřeskakoval pokaždé, když se poslední zakázka ve fázi
+   posune dál. */
+
+export async function prehledFazi(kdo = null) {
+  try {
+    const { data, error } = await supabase.rpc("deal_prehled_fazi", { p_kdo: kdo || null });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("prehledFazi", e);
+    return [];
+  }
+}
+
+/* Spící zakázky, kterým nastal den probuzení, se vrátí mezi živé.
+   Volá se při otevření seznamu — cron by na to byl zbytečný. */
+export async function probudSpici() {
+  try {
+    const { data, error } = await supabase.rpc("deal_probud_spici");
+    if (error) throw error;
+    return Number(data) || 0;
+  } catch (e) {
+    selhalo("probudSpici", e);
+    return 0;
+  }
+}
+
+/* Přerazit kód. Jde jen u zakázky ve fázi Nová — dál už na disku
+   existuje složka a kód je na ni jediná cesta. */
+export async function prerazitKod(projectId) {
+  if (!projectId) return { ok: false, chyba: "Chybí zakázka." };
+  try {
+    const { data, error } = await supabase.rpc("deal_prerazit_kod", { p_project_id: projectId });
+    if (error) throw error;
+    return { ok: true, kod: data };
+  } catch (e) {
+    return selhalo("prerazitKod", e);
+  }
+}
+
+/* Název složky na disk. Kód zůstává čistý, složka čitelná:
+   ST-PZ_2610_00042 — Hala Rudná (David Jedlička) */
+export function nazevSlozky(z, zdroj = null) {
+  const casti = [z?.kod, z?.nazev].filter(Boolean).join(" — ");
+  return zdroj ? `${casti} (${zdroj})` : casti;
 }
 
 /* ── Lidé ────────────────────────────────────────────────

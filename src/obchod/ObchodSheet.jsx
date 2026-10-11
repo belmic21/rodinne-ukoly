@@ -15,6 +15,7 @@ import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
   kolikZakazek, prirustekZakazek, prehledPrilepenych, hledejVObsahu, nactiZakazku as nactiCelou,
+  prehledFazi, probudSpici, prerazitKod, nazevSlozky, hledejObce,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
@@ -74,6 +75,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
   const [statistika, setStatistika] = useState(false);
+  const [faze, setFaze] = useState([]);
   const [prilepene, setPrilepene] = useState({});   // počty u řádků seznamu
   const [nalezy, setNalezy] = useState({});        // kde se co našlo při hledání
   const [zalozka, setZalozka] = useState(initialZalozka || "zakazky");
@@ -161,6 +163,23 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
     }, filtr.hledat ? 280 : 0);
     return () => { zrus = true; clearTimeout(id); };
   }, [owner, filtr, kolik, obnov, zalozka, ciselniky]);
+
+  /* Fáze a probuzení spících. Spící zakázka se v den D vrátí mezi
+     živé sama — řeší se to tady při otevření seznamu, aby na to
+     nemusel běžet cron kvůli pár řádkům. */
+  useEffect(() => {
+    if (!owner || zalozka !== "zakazky") return;
+    let zrus = false;
+    (async () => {
+      const probuzeno = await probudSpici();
+      if (zrus) return;
+      const f = await prehledFazi();
+      if (zrus) return;
+      setFaze(f || []);
+      if (probuzeno > 0) setObnov(k => k + 1);
+    })();
+    return () => { zrus = true; };
+  }, [owner, zalozka, obnov]);
 
   const zmenFiltr = useCallback((k, v) => {
     setKolik(KROK);
@@ -359,6 +378,12 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       );
                     })}
                   </div>
+
+                  {/* Pás s fázemi. Odpověď na „na čem se dělá“ bez
+                      otevírání čehokoli — a klik je rovnou filtr.
+                      Archiv je na konci, oddělený a sbalený: hotové
+                      a padlé zakázky nemají tříštit pozornost. */}
+                  <PasFazi theme={theme} faze={faze} filtr={filtr} zmen={zmenFiltr} />
 
                   {statistika && <Statistika theme={theme} owner={owner} />}
 
@@ -706,7 +731,8 @@ function SelectKraj({ theme, hodnota, polozky, onZmena }) {
   );
 }
 
-function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false }) {
+function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false,
+  bezPrazdne = false, prazdne = "vše" }) {
   const sk = useMemo(() => {
     if (!skupiny) return null;
     const m = new Map();
@@ -723,7 +749,7 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false }) {
       <span style={label(theme)}>{nadpis}</span>
       <select value={hodnota || ""} onChange={e => onZmena(e.target.value)}
         style={{ ...input(theme), cursor: "pointer" }}>
-        <option value="">vše</option>
+        {!bezPrazdne && <option value="">{prazdne}</option>}
         {sk
           ? sk.map(([g, items]) => (
               <optgroup key={g} label={g}>
@@ -846,7 +872,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
   const [f, setF] = useState(() => {
     const z = {
       nazev: "", typ: "", velikost: "", jednotka: "byt",
-      zeme: "CZ", kraj: "", mesto: "", lokalita_text: "",
+      zeme: "CZ", kraj: "", okres: "", mesto: "", mesto_kod: "", lokalita_text: "",
       faze: "", cena: "", odmena: "", stav: novy ? "novy" : "",
       souhrn: "", slozka_odkaz: "",
       ...(zakazka || {}),
@@ -866,6 +892,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
 
   const zakazkaId = zakazka?.id || ulozeno?.id || null;
   const [novyTermin, setNovyTermin] = useState(0);
+  const [zkopirovano, setZkopirovano] = useState(false);
   const terminyRef = useRef(null);
   const kod = zakazka?.kod || ulozeno?.kod || null;
 
@@ -976,6 +1003,11 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           }}>{chyba}</div>
         )}
 
+        {/* Fáze je to, co se u zakázky mění nejčastěji, takže patří
+            na oči a ne pod „víc“. Posun doprava znamená, že se obchod
+            hýbe — proto jsou v řadě, ne v rozbalovátku. */}
+        <FazeVolba theme={theme} ciselniky={ciselniky} f={f} uprav={uprav} />
+
         <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={uloz} disabled={uklada} style={{
             ...btnMain(theme), opacity: uklada ? 0.6 : 1,
@@ -1028,8 +1060,6 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
               polozky={aktivni(ciselniky, "typ")} onZmena={v => uprav("typ", v)} />
             <Select theme={theme} nadpis="Fáze přípravy" hodnota={f.faze}
               polozky={aktivni(ciselniky, "faze")} onZmena={v => uprav("faze", v)} />
-            <Select theme={theme} nadpis="Stav zakázky" hodnota={f.stav}
-              polozky={aktivni(ciselniky, "stav_zakazky")} onZmena={v => uprav("stav", v)} />
 
             <div>
               <span style={label(theme)}>Akviziční cena</span>
@@ -1051,14 +1081,41 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
               </div>
             </div>
 
-            <Select theme={theme} nadpis="Kraj" hodnota={f.kraj} skupiny
-              polozky={aktivni(ciselniky, "kraj")} onZmena={v => uprav("kraj", v)} />
+            {/* Země rozhoduje, co se ptá dál a jak se razí kód:
+                doma kraj a okres, v zahraničí město. */}
+            <Select theme={theme} nadpis="Země" hodnota={f.zeme || "CZ"} skupiny
+              polozky={aktivni(ciselniky, "zeme")} bezPrazdne
+              onZmena={v => uprav("zeme", v)} />
 
-            <div>
-              <span style={label(theme)}>Město</span>
-              <input value={f.mesto || ""} onChange={e => uprav("mesto", e.target.value)}
-                placeholder="Praha" style={input(theme)} />
-            </div>
+            {(f.zeme || "CZ") === "CZ" ? (
+              <>
+                {/* Kraj a okres se vyplní výběrem města. Měnit je jde
+                    pořád — u pozemku mezi dvěma vesnicemi se hodí
+                    zapsat okres a město nechat být. */}
+                <Select theme={theme} nadpis="Kraj" hodnota={f.kraj} skupiny
+                  polozky={aktivni(ciselniky, "kraj")}
+                  onZmena={v => { uprav("kraj", v); uprav("okres", ""); }} />
+
+                {/* Okres se nabízí jen z vybraného kraje. Bez toho
+                    je to 77 položek v jednom seznamu. */}
+                <Select theme={theme} nadpis="Okres" hodnota={f.okres}
+                  polozky={aktivni(ciselniky, "okres")
+                    .filter(o => !f.kraj || o.skupina === f.kraj)}
+                  onZmena={v => uprav("okres", v)} />
+              </>
+            ) : (
+              <div>
+                <span style={label(theme)}>Zkratka města do kódu</span>
+                <input value={f.mesto_kod || ""} maxLength={4}
+                  onChange={e => uprav("mesto_kod", e.target.value.toUpperCase())}
+                  placeholder="WIEN" style={input(theme)} />
+                <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 3 }}>
+                  Nevyplníš-li, udělá se z názvu města.
+                </div>
+              </div>
+            )}
+
+            <VyberMesta theme={theme} f={f} uprav={uprav} ciselniky={ciselniky} />
 
             <div>
               <span style={label(theme)}>Odměna</span>
@@ -1093,6 +1150,20 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             <div style={{ marginTop: 16 }}>
         <div style={{ marginBottom: 14 }}>
           <span style={label(theme)}>Odkaz na složku s podklady</span>
+          {/* Název složky do schránky. Kód zůstává čistý, složka
+              čitelná — a na disku je hned vidět, o co jde. */}
+          {zakazkaId && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+              <code style={{
+                fontSize: "11.5px", color: theme.textSub, background: theme.inputBg,
+                border: `1px solid ${theme.cardBorder}`, borderRadius: 6, padding: "3px 7px",
+              }}>{nazevSlozky({ kod: ulozeno?.kod || zakazka?.kod, nazev: f.nazev })}</code>
+              <button onClick={() => {
+                const t = nazevSlozky({ kod: ulozeno?.kod || zakazka?.kod, nazev: f.nazev });
+                try { navigator.clipboard.writeText(t); setZkopirovano(true); setTimeout(() => setZkopirovano(false), 2000); } catch (e) {}
+              }} style={btnGhost(theme)}>{zkopirovano ? "✓ zkopírováno" : "kopírovat název složky"}</button>
+            </div>
+          )}
           <input value={f.slozka_odkaz || ""} onChange={e => uprav("slozka_odkaz", e.target.value)}
             placeholder="https://… (OneDrive, Dropbox)" style={input(theme)} />
           {f.slozka_odkaz && (
@@ -1244,5 +1315,280 @@ function Smazat({ theme, mazu, onSmaz }) {
       }}>{mazu ? "MAŽU…" : "ANO"}</button>
       <button onClick={() => setPtam(false)} style={btnGhost(theme)}>Ne</button>
     </span>
+  );
+}
+
+
+/* ── Pás s fázemi ────────────────────────────────────────
+   Kolik zakázek je v které fázi, klik = filtr. Živé fáze jsou
+   vždycky vidět, i prázdné — jinak by pás přeskakoval pokaždé,
+   když se poslední zakázka ve fázi posune dál, a oko by ztratilo
+   orientaci.
+
+   Archiv je schválně až za oddělovačem a sbalený. Hotové a padlé
+   zakázky mají být po ruce, ne na očích. */
+function PasFazi({ theme, faze, filtr, zmen }) {
+  const [archivOtevreny, setArchivOtevreny] = useState(false);
+  if (!faze || faze.length === 0) return null;
+
+  const zive = faze.filter(f => f.skupina === "zive");
+  const jinde = faze.filter(f => f.skupina !== "zive");
+  const vArchivu = jinde.reduce((a, f) => a + (f.pocet || 0), 0);
+
+  const Dlazdice = ({ f }) => {
+    const zap = filtr.stav === f.stav;
+    return (
+      <button onClick={() => zmen("stav", zap ? "" : f.stav)} style={{
+        ...btn(),
+        background: zap ? theme.accentSoft : "transparent",
+        border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
+        color: zap ? theme.accent : (f.pocet ? theme.text : theme.textSub),
+        fontSize: "11.5px", padding: "4px 10px", borderRadius: 13,
+        fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+        display: "inline-flex", alignItems: "center", gap: 5,
+        opacity: f.pocet ? 1 : 0.55,
+      }}>
+        {f.label}
+        <span style={{
+          fontVariantNumeric: "tabular-nums",
+          color: zap ? theme.accent : theme.textSub, fontWeight: 700,
+        }}>{f.pocet}</span>
+        {/* Kolik z nich se dva týdny nehnulo. Tohle číslo odhalí
+            problém dřív, než o něm někdo řekne. */}
+        {f.nehybe_se > 0 && (
+          <span title={`${f.nehybe_se} se nehýbe přes 14 dní`} style={{
+            color: theme.yellow, fontWeight: 700,
+          }}>⚠{f.nehybe_se}</span>
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        {zive.map(f => <Dlazdice key={f.stav} f={f} />)}
+
+        {jinde.length > 0 && (
+          <>
+            <span style={{ color: theme.cardBorder, padding: "0 2px" }}>|</span>
+            <button onClick={() => setArchivOtevreny(v => !v)} style={{
+              ...btn(), background: "transparent", color: theme.textSub,
+              fontSize: "11.5px", padding: "4px 8px", fontWeight: 600,
+            }}>{archivOtevreny ? "▲" : "▼"} archiv {vArchivu}</button>
+          </>
+        )}
+      </div>
+
+      {archivOtevreny && (
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+          {jinde.map(f => <Dlazdice key={f.stav} f={f} />)}
+          <span style={{ fontSize: "10.5px", color: theme.textSub, alignSelf: "center" }}>
+            Archiv se v seznamu neukazuje, dokud na fázi neklikneš.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ── Volba fáze ──────────────────────────────────────────
+   Devět fází v řadě. Živé jsou vidět vždycky, ukončovací až po
+   kliknutí na „ukončit“ — aby se omylem neodklepla hotová zakázka
+   místo posunu o krok dál.
+
+   Dvě fáze si vynucují doplnění: Nerealizováno chce důvod (jinak
+   se nikdy nedozvíš, proč ti padá každá třetí zakázka) a Spí chce
+   datum, kdy se má vrátit. */
+function FazeVolba({ theme, ciselniky, f, uprav }) {
+  const vse = aktivni(ciselniky, "stav_zakazky");
+  const zive = vse.filter(x => (x.skupina || "zive") === "zive");
+  const konec = vse.filter(x => (x.skupina || "zive") !== "zive");
+  const jeKonec = konec.some(x => x.key === f.stav);
+  const [ukoncuji, setUkoncuji] = useState(jeKonec);
+
+  const Dlazdice = ({ x, barva }) => {
+    const zap = f.stav === x.key;
+    return (
+      <button onClick={() => uprav("stav", x.key)} style={{
+        ...btn(),
+        background: zap ? (barva ? `${barva}18` : theme.accentSoft) : "transparent",
+        border: `1px solid ${zap ? (barva || theme.accentBorder) : theme.cardBorder}`,
+        color: zap ? (barva || theme.accent) : theme.textSub,
+        fontSize: "12px", padding: "5px 11px", borderRadius: 14,
+        fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+      }}>{x.label}</button>
+    );
+  };
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <span style={label(theme)}>Fáze zakázky</span>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        {zive.map(x => <Dlazdice key={x.key} x={x} />)}
+        {!ukoncuji && !jeKonec && (
+          <button onClick={() => setUkoncuji(true)} style={{
+            ...btn(), background: "transparent", color: theme.textSub,
+            fontSize: "12px", padding: "5px 9px", fontWeight: 600,
+          }}>… ukončit</button>
+        )}
+        {(ukoncuji || jeKonec) && konec.map(x => (
+          <Dlazdice key={x.key} x={x}
+            barva={x.key === "nerealizovano" ? theme.red
+                 : x.key === "vyplaceno" ? theme.green : theme.textSub} />
+        ))}
+      </div>
+
+      {f.stav === "nerealizovano" && (
+        <div style={{ marginTop: 8 }}>
+          <span style={label(theme)}>Proč to padlo</span>
+          <select value={f.duvod_nerealizace || ""}
+            onChange={e => uprav("duvod_nerealizace", e.target.value)}
+            style={{ ...input(theme), cursor: "pointer", maxWidth: 280 }}>
+            <option value="">— vyber důvod —</option>
+            {aktivni(ciselniky, "duvod_nerealizace").map(d => (
+              <option key={d.key} value={d.key}>{d.label}</option>
+            ))}
+          </select>
+          {!f.duvod_nerealizace && (
+            <div style={{ fontSize: "11px", color: theme.yellow, marginTop: 4 }}>
+              Bez důvodu se nikdy nedozvíš, na čem ti obchody padají.
+            </div>
+          )}
+        </div>
+      )}
+
+      {f.stav === "spi" && (
+        <div style={{ marginTop: 8 }}>
+          <span style={label(theme)}>Vrátit se k ní</span>
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+            <input type="date" value={f.spi_do || ""}
+              onChange={e => uprav("spi_do", e.target.value)}
+              style={{ ...input(theme), maxWidth: 160, cursor: "pointer" }} />
+            {[{ t: "za měsíc", d: 30 }, { t: "za čtvrt roku", d: 90 }, { t: "za půl roku", d: 180 }].map(v => (
+              <button key={v.d} onClick={() => {
+                const d = new Date(); d.setDate(d.getDate() + v.d);
+                uprav("spi_do", d.toISOString().slice(0, 10));
+              }} style={btnGhost(theme)}>{v.t}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 4 }}>
+            V ten den se zakázka sama vrátí mezi živé jako Nová.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Výběr města ─────────────────────────────────────────
+   Píšeš název, vybereš ze seznamu a kraj s okresem se doplní samy.
+   Jedna volba místo tří — a hlavně si nemůžou protiřečit.
+
+   Že to není zbytečné: Rudná je v Česku dvakrát (Praha-západ
+   a Svitavy), Čistá třikrát. Volný text by to tipl, seznam se ptá.
+
+   V zahraničí se seznam nepoužívá — není kde ho vzít — a město
+   zůstává volným polem. */
+function VyberMesta({ theme, f, uprav, ciselniky }) {
+  const [q, setQ] = useState("");
+  const [nalezy, setNalezy] = useState([]);
+  const [otevreno, setOtevreno] = useState(false);
+  const [hleda, setHleda] = useState(false);
+  const zahranici = (f.zeme || "CZ") !== "CZ";
+
+  useEffect(() => {
+    if (zahranici || !otevreno) return;
+    const text = q.trim();
+    if (text.length < 2) { setNalezy([]); return; }
+    let zrus = false;
+    setHleda(true);
+    const id = setTimeout(async () => {
+      const r = await hledejObce(text, 15);
+      if (!zrus) { setNalezy(r || []); setHleda(false); }
+    }, 220);
+    return () => { zrus = true; clearTimeout(id); };
+  }, [q, otevreno, zahranici]);
+
+  const vyber = (o) => {
+    uprav("mesto", o.nazev);
+    uprav("okres", o.okres);
+    uprav("kraj", o.kraj);
+    setOtevreno(false);
+    setQ("");
+  };
+
+  if (zahranici) {
+    return (
+      <div>
+        <span style={label(theme)}>Město</span>
+        <input value={f.mesto || ""} onChange={e => uprav("mesto", e.target.value)}
+          placeholder="Wien" style={input(theme)} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <span style={label(theme)}>Město</span>
+      <input
+        value={otevreno ? q : (f.mesto || "")}
+        onChange={e => { setQ(e.target.value); setOtevreno(true); }}
+        onFocus={() => { setQ(f.mesto || ""); setOtevreno(true); }}
+        onBlur={() => setTimeout(() => setOtevreno(false), 150)}
+        placeholder="Začni psát — Rudná, Čistá…"
+        style={input(theme)} />
+
+      {otevreno && q.trim().length >= 2 && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          marginTop: 3, ...card(theme), padding: 3, maxHeight: 240,
+          overflowY: "auto", boxShadow: "0 8px 22px rgba(0,0,0,0.22)",
+        }}>
+          {hleda && nalezy.length === 0 && (
+            <div style={{ padding: "7px 9px", fontSize: "11.5px", color: theme.textSub }}>
+              hledám…
+            </div>
+          )}
+
+          {!hleda && nalezy.length === 0 && (
+            <div style={{ padding: "7px 9px", fontSize: "11.5px", color: theme.textSub, lineHeight: 1.6 }}>
+              Žádná obec toho jména.
+              <button onMouseDown={(e) => { e.preventDefault(); uprav("mesto", q.trim()); setOtevreno(false); }}
+                style={{
+                  ...btn(), background: "transparent", color: theme.accent,
+                  fontSize: "11.5px", fontWeight: 700, padding: "2px 4px",
+                }}>zapsat „{q.trim()}“ ručně</button>
+              <div style={{ color: theme.textSub, marginTop: 2 }}>
+                Kraj a okres pak vyber sám.
+              </div>
+            </div>
+          )}
+
+          {nalezy.map(o => (
+            <div key={o.kod} onMouseDown={(e) => { e.preventDefault(); vyber(o); }} style={{
+              padding: "6px 9px", cursor: "pointer", borderRadius: 6,
+              display: "flex", alignItems: "baseline", gap: 7,
+            }}>
+              <span style={{ fontSize: "12.5px", fontWeight: 600, color: theme.text }}>
+                {o.nazev}
+              </span>
+              {/* Okres a kraj musí být vidět hned: při dvou Rudných
+                  je to jediné, čím je od sebe rozeznáš. */}
+              <span style={{ fontSize: "11px", color: theme.textSub }}>
+                {[o.okres_nazev, o.kraj_nazev].filter(Boolean).join(" · ")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {f.mesto && !otevreno && f.okres && (
+        <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 3 }}>
+          {popis(ciselniky, "okres", f.okres)} · {popis(ciselniky, "kraj", f.kraj)}
+        </div>
+      )}
+    </div>
   );
 }
