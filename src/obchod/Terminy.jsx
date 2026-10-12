@@ -618,6 +618,10 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
         { klic: "tyden", nadpis: "Tento týden" },
         { klic: "mesic", nadpis: "Tento měsíc" },
         { klic: "dale",  nadpis: "Později" },
+        // Záchytná skupina. nalehavost() umí vrátit i "zadny", když
+        // datum nedává číslo — takový termín by se dřív nevypsal
+        // nikde a zmizel by, aniž by kdokoli věděl že existuje.
+        { klic: "zadny", nadpis: "Bez použitelného data" },
       ].map(s => ({
         ...s,
         barva: barvaTerminu(theme, s.klic),

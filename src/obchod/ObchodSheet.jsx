@@ -995,62 +995,11 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             style={{ ...input(theme), resize: "vertical", lineHeight: 1.6 }} />
         </div>
 
-        {chyba && (
-          <div style={{
-            background: `${theme.red}18`, border: `1px solid ${theme.red}44`,
-            borderRadius: 8, padding: "8px 11px", fontSize: "12px",
-            color: theme.red, marginBottom: 10,
-          }}>{chyba}</div>
-        )}
-
-        {/* Fáze je to, co se u zakázky mění nejčastěji, takže patří
-            na oči a ne pod „víc“. Posun doprava znamená, že se obchod
-            hýbe — proto jsou v řadě, ne v rozbalovátku. */}
-        <FazeVolba theme={theme} ciselniky={ciselniky} f={f} uprav={uprav} />
-
-        <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={uloz} disabled={uklada} style={{
-            ...btnMain(theme), opacity: uklada ? 0.6 : 1,
-          }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
-
-          <span style={{ flex: 1 }} />
-
-          {zakazkaId && (
-            <Smazat theme={theme} mazu={mazu} onSmaz={smaz} />
-          )}
-        </div>
-
-        {/* Termín nahoře a velký. Nejčastější věc, kterou u otevřené
-            zakázky uděláš, je slíbit někomu, že se ozveš — a dolů
-            k sekci Termíny se cestou ten slib stihne zapomenout.
-            Tlačítko otevře stejný editor dole a sjede k němu. */}
-        {zakazkaId && (
-          <button onClick={() => {
-            setNovyTermin(k => k + 1);
-            setTimeout(() => terminyRef.current?.scrollIntoView({
-              behavior: "smooth", block: "start",
-            }), 60);
-          }} style={{
-            ...btnMain(theme), width: "100%", marginTop: 10,
-            padding: "12px 14px", fontSize: "14px", letterSpacing: "0.02em",
-            background: theme.purple,
-          }}>⏳ + TERMÍN — komu se mám ozvat a do kdy</button>
-        )}
-
-        {ulozeno && !chyba && (
-          <div style={{ fontSize: "11px", color: theme.green, marginTop: 8 }}>
-            Uloženo {jakDavno(ulozeno.updated_at)}.
-          </div>
-        )}
-
-        </>
-        )}
-
-        {zakazkaId && (
-          <>
-            {/* Technické údaje. Vyplňují se při zakládání a pak se k nim
-                člověk vrací málokdy — proto jsou sbalené. U nové zakázky
-                jsou rozbalené, tam je naopak potřebuješ hned. */}
+        {/* Parametry zakázky. U NOVÉ jsou rozbalené a vyplníš je spolu
+            s názvem na jedné obrazovce — tohle byla chyba: celý blok byl
+            zabalený v podmínce „jen u uložené zakázky“, takže při zakládání
+            nebyl vidět vůbec a cenu ani lokalitu nešlo zadat.
+            U uložené se sbalí do přehledu a otevírají se tužkou. */}
             <Podrobnosti theme={theme} ciselniky={ciselniky} f={f} otevreno={!zakazkaId}>
         <div style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
@@ -1131,6 +1080,60 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
           </div>
 
             </Podrobnosti>
+
+        {chyba && (
+          <div style={{
+            background: `${theme.red}18`, border: `1px solid ${theme.red}44`,
+            borderRadius: 8, padding: "8px 11px", fontSize: "12px",
+            color: theme.red, marginBottom: 10,
+          }}>{chyba}</div>
+        )}
+
+        {/* Fáze je to, co se u zakázky mění nejčastěji, takže patří
+            na oči a ne pod „víc“. Posun doprava znamená, že se obchod
+            hýbe — proto jsou v řadě, ne v rozbalovátku. */}
+        <FazeVolba theme={theme} ciselniky={ciselniky} f={f} uprav={uprav} />
+
+        <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={uloz} disabled={uklada} style={{
+            ...btnMain(theme), opacity: uklada ? 0.6 : 1,
+          }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
+
+          <span style={{ flex: 1 }} />
+
+          {zakazkaId && (
+            <Smazat theme={theme} mazu={mazu} onSmaz={smaz} />
+          )}
+        </div>
+
+        {/* Termín nahoře a velký. Nejčastější věc, kterou u otevřené
+            zakázky uděláš, je slíbit někomu, že se ozveš — a dolů
+            k sekci Termíny se cestou ten slib stihne zapomenout.
+            Tlačítko otevře stejný editor dole a sjede k němu. */}
+        {zakazkaId && (
+          <button onClick={() => {
+            setNovyTermin(k => k + 1);
+            setTimeout(() => terminyRef.current?.scrollIntoView({
+              behavior: "smooth", block: "start",
+            }), 60);
+          }} style={{
+            ...btnMain(theme), width: "100%", marginTop: 10,
+            padding: "12px 14px", fontSize: "14px", letterSpacing: "0.02em",
+            background: theme.purple,
+          }}>⏳ + TERMÍN — komu se mám ozvat a do kdy</button>
+        )}
+
+        {ulozeno && !chyba && (
+          <div style={{ fontSize: "11px", color: theme.green, marginTop: 8 }}>
+            Uloženo {jakDavno(ulozeno.updated_at)}.
+          </div>
+        )}
+
+        </>
+        )}
+
+        {zakazkaId && (
+          <>
 
             <Prilepene theme={theme} owner={owner} projectId={zakazkaId}
               kod={kod} spravce={spravce} skocSem={skocNa === "prilepene"}
@@ -1496,6 +1499,7 @@ function VyberMesta({ theme, f, uprav, ciselniky }) {
   const [nalezy, setNalezy] = useState([]);
   const [otevreno, setOtevreno] = useState(false);
   const [hleda, setHleda] = useState(false);
+  const [mimo, setMimo] = useState(false);
   const zahranici = (f.zeme || "CZ") !== "CZ";
 
   useEffect(() => {
@@ -1505,11 +1509,25 @@ function VyberMesta({ theme, f, uprav, ciselniky }) {
     let zrus = false;
     setHleda(true);
     const id = setTimeout(async () => {
-      const r = await hledejObce(text, 15);
-      if (!zrus) { setNalezy(r || []); setHleda(false); }
+      // Bere se víc řádků, než se ukáže: když je okres nebo kraj už
+      // vybraný, většina nálezů se zahodí. "Nová Ves" je v Česku
+      // přes třicetkrát a při limitu 15 by ta správná vypadla.
+      const r = await hledejObce(text, 50);
+      if (zrus) return;
+      const vse = r || [];
+      // Vybraný okres je tvrdší filtr než kraj. Když máš Mladou
+      // Boleslav, nemá smysl nabízet Čistou u Rakovníka.
+      const uzsi = f.okres ? vse.filter(o => o.okres === f.okres)
+                 : f.kraj  ? vse.filter(o => o.kraj === f.kraj)
+                 : vse;
+      // Kdyby v tom okrese nic nebylo, ukáže se radši všechno než nic —
+      // s poznámkou, že to je mimo vybraný okres.
+      setNalezy((uzsi.length ? uzsi : vse).slice(0, 15));
+      setMimo(uzsi.length === 0 && vse.length > 0 && !!(f.okres || f.kraj));
+      setHleda(false);
     }, 220);
     return () => { zrus = true; clearTimeout(id); };
-  }, [q, otevreno, zahranici]);
+  }, [q, otevreno, zahranici, f.okres, f.kraj]);
 
   const vyber = (o) => {
     uprav("mesto", o.nazev);
@@ -1563,6 +1581,16 @@ function VyberMesta({ theme, f, uprav, ciselniky }) {
               <div style={{ color: theme.textSub, marginTop: 2 }}>
                 Kraj a okres pak vyber sám.
               </div>
+            </div>
+          )}
+
+          {mimo && (
+            <div style={{
+              padding: "6px 9px", fontSize: "10.5px", color: theme.yellow,
+              lineHeight: 1.5,
+            }}>
+              Ve vybraném okrese žádná taková obec není — tohle je odjinud.
+              Vybráním se okres i kraj přepíšou.
             </div>
           )}
 

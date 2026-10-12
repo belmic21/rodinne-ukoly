@@ -264,9 +264,17 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
               }}>{datumKratce(z.happened_at)}</span>
               <span style={{ flex: 1, fontSize: "12px", color: theme.text, lineHeight: 1.6 }}>
                 {z.content}
-                {z.projekt && (
+                {/* Záznam o člověku platí dál, i když zakázka zmizela.
+                    Jen se u něj nesmí svítit její kód, jako by šlo
+                    o něco živého — jde na ni kliknout a nic tam není. */}
+                {z.projekt && !z.projekt.deleted_at && (
                   <span style={{ color: theme.textSub, fontSize: "11px" }}>
                     {" "}· {z.projekt.kod}
+                  </span>
+                )}
+                {z.projekt && z.projekt.deleted_at && (
+                  <span style={{ color: theme.textDim, fontSize: "11px" }}>
+                    {" "}· smazaná zakázka
                   </span>
                 )}
                 {z.context && (

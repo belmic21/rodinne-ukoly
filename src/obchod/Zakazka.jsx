@@ -274,7 +274,20 @@ export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu, spravc
       );
       return;
     }
-    setParovani(null);
+    // Částečný výsledek se dřív tvářil jako úspěch: vybereš pět lidí,
+    // dva mají skrytý záznam, přidají se tři a okno se zavře. O těch
+    // dvou ses nedozvěděl — a přitom sis myslel, že jsi je oslovil.
+    if (pridano < vybrani.length) {
+      const chybi = vybrani.length - pridano;
+      setChyba(
+        `Přidáno ${pridano} z ${vybrani.length}. ` +
+        `${chybi === 1 ? "Jeden člověk" : `${chybi} lidí`} u téhle zakázky ` +
+        "už jednou oslovený byl a pak odebraný — jeho záznam je skrytý, " +
+        "ne smazaný, a znovu se nevloží."
+      );
+    } else {
+      setParovani(null);
+    }
     nacti();
   };
 

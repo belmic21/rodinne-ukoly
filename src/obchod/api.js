@@ -62,25 +62,37 @@ export async function osobaPrehled(owner, personId) {
   if (!owner || !personId) return null;
   const prazdne = { osoba: null, ucast: [], osloveni: [], karty: [], zaznamy: [] };
   try {
-    const projekt = "projekt:deal_projects (id, kod, nazev, typ, kraj, mesto, cena, stav, faze, created_at)";
+    // !inner znamená "bez projektu řádek nevracej". Teprve s ním jde
+    // filtrovat na projekt.deleted_at — jinak PostgREST filtr zahodí.
+    const projektInner = "projekt:deal_projects!inner (id, kod, nazev, typ, kraj, mesto, cena, stav, faze, created_at, deleted_at)";
     const [osoba, ucast, osloveni, karty, zaznamy] = await Promise.all([
       supabase.from("map_people")
         .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
         .eq("id", personId).maybeSingle(),
       // Bez filtru na vlastníka: u zakázky ve spolupráci patří k člověku
       // i to, co zapsal partner. Co vidět nemáš, ti databáze nevydá.
+      // !inner a filtr na deleted_at: bez nich zůstane u člověka viset
+      // zakázka, kterou jsi mezitím smazal. Vložený vztah se totiž
+      // sám nefiltruje — PostgREST vrátí řádek vazby a projekt v něm,
+      // smazaný nebo ne.
       supabase.from("deal_participants")
-        .select(`id, owner, role, podil, poradi, forma_dohody, poznamka, ${projekt}`)
-        .eq("person_id", personId),
+        .select(`id, owner, role, podil, poradi, forma_dohody, poznamka, ${projektInner}`)
+        .eq("person_id", personId)
+        .is("projekt.deleted_at", null),
       supabase.from("deal_approaches")
         .select(`id, owner, stav, aktualne, aktualne_at, odeslano_at, cena_jednana,
-                 pripominka_at, poznamka, ${projekt}`)
-        .eq("person_id", personId).is("deleted_at", null),
+                 pripominka_at, poznamka, ${projektInner}`)
+        .eq("person_id", personId)
+        .is("deleted_at", null)
+        .is("projekt.deleted_at", null),
       supabase.from("deal_cards")
         .select("id, smer, nazev, typy, kraje, cena_od, cena_do, velikost_od, jednotka, aktivni, poznamka")
         .eq("owner", owner).eq("person_id", personId),
       supabase.from("map_facts")
-        .select("id, owner, content, context, happened_at, projekt:deal_projects (kod, nazev)")
+        // deleted_at se tahá schválně: záznam o člověku platí dál,
+        // i když zakázka zmizela — jen se u něj nesmí svítit její kód
+        // jako odkaz na něco živého.
+        .select("id, owner, content, context, happened_at, projekt:deal_projects (kod, nazev, deleted_at)")
         .eq("person_id", personId)
         .order("happened_at", { ascending: false }).limit(60),
     ]);
@@ -118,6 +130,12 @@ export async function pouzitiCiselniku(owner, kind, key) {
     try {
       let q = supabase.from(tabulka).select("id", { count: "exact", head: true }).eq("owner", owner);
       q = pole ? q.contains(sloupec, [key]) : q.eq(sloupec, key);
+      // Smazané zakázky a skrytá oslovení se počítat nesmí: jinak
+      // položka číselníku hlásí "používá se u 3 záznamů", ty tři
+      // zakázky jsou dávno smazané a smazat ji nejde nikdy.
+      if (tabulka === "deal_projects" || tabulka === "deal_approaches") {
+        q = q.is("deleted_at", null);
+      }
       const { count, error } = await q;
       if (error) throw error;
       celkem += count || 0;
@@ -267,7 +285,14 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
     if (filtr.stav)      q = q.eq("stav", filtr.stav);
     // Hotové, padlé a spící z výchozího seznamu pryč. Nemažou se,
     // jen netříští pozornost — a dají se kdykoli zapnout.
-    else if (!filtr.archiv) q = q.not("stav", "in", "(vyplaceno,nerealizovano,spi)");
+    //
+    // Ten "stav.is.null" tam musí být. V SQL je NULL not in (…) zase
+    // NULL, ne pravda — takže zakázka bez vyplněné fáze by se ze
+    // seznamu tiše ztratila. Přesně to se stalo zakázkám založeným
+    // dřív, než fáze vůbec existovaly: v databázi byly, v seznamu ne.
+    else if (!filtr.archiv) {
+      q = q.or("stav.is.null,stav.not.in.(vyplaceno,nerealizovano,spi)");
+    }
     if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
     if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);
     // Od kdy byla zadaná. Hranici počítá aplikace, ne databáze —
@@ -296,11 +321,16 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
   }
 }
 
+/* Pozor na .is("deleted_at", null): bez něj se smazaná zakázka vrátí
+   při hledání do seznamu a otevře se jako plný editovatelný detail —
+   dal by se do ní zapsat termín i sdílení. Tohle je jediná cesta
+   k detailu, takže filtr musí být přímo tady. */
 export async function nactiZakazku(id) {
   if (!id) return null;
   try {
     const { data, error } = await supabase
-      .from("deal_projects").select(SLOUPCE).eq("id", id).maybeSingle();
+      .from("deal_projects").select(SLOUPCE).eq("id", id)
+      .is("deleted_at", null).maybeSingle();
     if (error) throw error;
     return data;
   } catch (e) {
@@ -346,6 +376,19 @@ export async function upravZakazku(id, patch) {
 export async function smazZakazku(id) {
   if (!id) return { ok: false, chyba: "Chybí ID." };
   try {
+    // Napřed si schovat termíny i s jejich připomínkami. Kdyby se to
+    // dělalo až po smazání zakázky, nemusely by už být vidět.
+    //
+    // Tohle byla tichá vada: smazala se zakázka, ale připomínky jejích
+    // termínů zůstaly a za dva dny zazvonily — „Termín: zavolat —
+    // Zakázka X“ k zakázce, která už nikde není a není kam kliknout.
+    let terminy = [];
+    try {
+      const { data: t } = await supabase
+        .from("deal_terminy").select("id, reminder_id").eq("project_id", id);
+      terminy = t || [];
+    } catch (e) { /* úklid nesmí shodit samotné mazání */ }
+
     const { data, error } = await supabase
       .from("deal_projects")
       .update({ deleted_at: new Date().toISOString() })
@@ -355,7 +398,23 @@ export async function smazZakazku(id) {
     if (!data || data.length === 0) {
       return { ok: false, chyba: "Zakázka se nenašla nebo ti nepatří." };
     }
-    return { ok: true };
+
+    // Úklid běží až po úspěšném smazání a jeho selhání se nehlásí:
+    // zakázka už smazaná je a tohle jsou jen zbytky.
+    const ted = new Date().toISOString();
+    for (const t of terminy) {
+      if (t.reminder_id) await zrusPripominku(t.reminder_id);
+    }
+    try {
+      await supabase.from("deal_terminy")
+        .update({ hotovo_at: ted, reminder_id: null }).eq("project_id", id);
+    } catch (e) { /* zbytek */ }
+    try {
+      await supabase.from("deal_approaches")
+        .update({ deleted_at: ted }).eq("project_id", id).is("deleted_at", null);
+    } catch (e) { /* zbytek */ }
+
+    return { ok: true, uklizeno: terminy.length };
   } catch (e) {
     return selhalo("smazZakazku", e);
   }
@@ -572,7 +631,11 @@ export async function nactiLidi(owner, filtr = {}, limit = 300) {
       .eq("owner", owner);
 
     if (filtr.role) q = q.contains("role_tagy", [filtr.role]);
-    if (filtr.bezRole) q = q.eq("role_tagy", "{}");
+    // Člověk bez role může mít prázdné pole NEBO NULL — záleží na tom,
+    // jak vznikl. Rychlé založení jménem do role_tagy nesahá vůbec,
+    // takže zůstane NULL a filtr "bez role" takového člověka
+    // nenašel — přesně na obrazovce, kde si role doplňuješ.
+    if (filtr.bezRole) q = q.or("role_tagy.is.null,role_tagy.eq.{}");
 
     const h = (filtr.hledat || "").trim();
     if (h) {

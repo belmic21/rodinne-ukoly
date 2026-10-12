@@ -29,6 +29,13 @@ const SEZNAMY = [
   { kind: "forma_dohody",  t: "Formy dohody",     popis: "Jak pevně je domluvená provize." },
   { kind: "jednotka",      t: "Jednotky velikosti", popis: "Bytů, domů, m², lůžek." },
   { kind: "kraj",          t: "Kraje",            popis: "Skupina slouží jako zkratka — Čechy, Morava." },
+  // Tyhle čtyři se v aplikaci používaly, ale nebyly tu — takže je
+  // nešlo přejmenovat ani vypnout a při prázdném číselníku byla
+  // rozbalovátka tiše prázdná, aniž bylo poznat proč.
+  { kind: "okres",         t: "Okresy",           popis: "Skupina drží klíč kraje. Zkratka jde do kódu zakázky, tu neměň — je v názvech složek na disku." },
+  { kind: "zeme",          t: "Země",             popis: "Pro zahraniční zakázky. Kód jde do čísla zakázky." },
+  { kind: "forma_vstupu",  t: "Formy vstupu",     popis: "Jak investor do obchodu jde — úvěr proti zástavě, spoluinvestice, odkup." },
+  { kind: "duvod_nerealizace", t: "Důvody nerealizace", popis: "Proč zakázka padla. Bez nich nezjistíš, na čem ti obchody krachují." },
 ];
 
 export default function Ciselniky({ theme, owner, onZmena }) {
