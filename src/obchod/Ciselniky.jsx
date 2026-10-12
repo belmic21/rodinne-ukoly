@@ -157,12 +157,12 @@ function Seznam({ theme, owner, kind, popis, polozky, onZmena }) {
           borderBottom: i < polozky.length - 1 ? `1px solid ${theme.cardBorder}55` : "none",
         }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-            <button onClick={() => posun(i, -1)} disabled={i === 0 || pracuji} title="Nahoru" style={{
+            <button onClick={() => posun(i, -1)} disabled={i === 0 || pracuji} title="Nahoru" aria-label="Nahoru" style={{
               ...btn(), background: "transparent", color: i === 0 ? theme.textDim : theme.textSub,
               fontSize: "9px", padding: 0, lineHeight: 1,
             }}>▲</button>
             <button onClick={() => posun(i, 1)} disabled={i === polozky.length - 1 || pracuji}
-              title="Dolů" style={{
+              title="Dolů" aria-label="Dolů" style={{
                 ...btn(), background: "transparent",
                 color: i === polozky.length - 1 ? theme.textDim : theme.textSub,
                 fontSize: "9px", padding: 0, lineHeight: 1,
@@ -185,7 +185,7 @@ function Seznam({ theme, owner, kind, popis, polozky, onZmena }) {
                   <span style={{ color: theme.textSub, fontSize: "10.5px" }}> · vypnuto</span>
                 )}
               </span>
-              <button onClick={() => setEdituji(p.id)} title="Přejmenovat" style={{
+              <button onClick={() => setEdituji(p.id)} title="Přejmenovat" aria-label="Přejmenovat" style={{
                 ...btn(), background: "transparent", color: theme.textSub,
                 fontSize: "11px", padding: "2px 4px",
               }}>✎</button>
@@ -208,7 +208,7 @@ function Seznam({ theme, owner, kind, popis, polozky, onZmena }) {
           style={{ ...input(theme), flex: 1 }} />
         <button onClick={pridej} disabled={!novy.trim() || pracuji} style={{
           ...btnMain(theme), opacity: novy.trim() && !pracuji ? 1 : 0.5,
-        }}>přidat</button>
+        }}>Přidat</button>
       </div>
     </div>
   );
@@ -238,7 +238,7 @@ function Prejmenovani({ theme, owner, p, skupiny, onHotovo, onZrus, onChyba }) {
       )}
       <button onClick={uloz} disabled={uklada} style={{
         ...btnMain(theme), padding: "5px 10px", fontSize: "11px",
-      }}>ok</button>
+      }}>Přidat</button>
       <button onClick={onZrus} style={{
         ...btnGhost(theme), padding: "5px 8px", fontSize: "11px",
       }}>×</button>
@@ -258,7 +258,7 @@ function Smazani({ theme, onSmaz, pracuji }) {
 
   if (!ptam) {
     return (
-      <button onClick={() => setPtam(true)} title="Smazat" style={{
+      <button onClick={() => setPtam(true)} title="Smazat" aria-label="Smazat" style={{
         ...btn(), background: "transparent", color: theme.textDim,
         fontSize: "13px", padding: "2px 4px",
       }}>×</button>

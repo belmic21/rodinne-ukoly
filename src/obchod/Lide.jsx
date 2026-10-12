@@ -89,7 +89,7 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
     return (
       <div style={{ padding: "12px 16px 18px" }}>
         <button onClick={() => setNovy(false)} style={{ ...btnGhost(theme), marginBottom: 10 }}>
-          ← zpět na lidi
+          ← Zpět na lidi
         </button>
         <KontaktEditor theme={theme} owner={owner} ciselniky={ciselniky}
           onHotovo={(o) => {

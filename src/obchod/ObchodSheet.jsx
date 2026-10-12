@@ -231,7 +231,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
               padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
               display: "flex", alignItems: "center", gap: 8,
             }}>
-              <button onClick={() => setNastaveni(null)} title="Zpět" style={{
+              <button onClick={() => setNastaveni(null)} title="Zpět" aria-label="Zpět" style={{
                 ...btn(), background: "transparent", color: theme.textSub,
                 fontSize: "15px", padding: "2px 6px",
               }}>←</button>
@@ -307,7 +307,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                   })}
                 </div>
                 {currentUser?.admin && (
-                  <button onClick={() => setNastaveni("uzivatele")} title="Nastavení" style={{
+                  <button onClick={() => setNastaveni("uzivatele")} title="Nastavení" aria-label="Nastavení" style={{
                     ...btn(), background: "transparent", color: theme.textSub,
                     fontSize: "14px", padding: "2px 6px",
                   }}>⚙</button>
@@ -347,7 +347,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       borderColor: vicFiltru || filtrAktivni ? theme.accentBorder : theme.cardBorder,
                       whiteSpace: "nowrap",
                     }}>filtry</button>
-                    <button onClick={() => setStatistika(v => !v)} title="Kolik zakázek v čase"
+                    <button onClick={() => setStatistika(v => !v)} title="Kolik zakázek v čase" aria-label="Kolik zakázek v čase"
                       style={{
                         ...btnGhost(theme),
                         background: statistika ? theme.accentSoft : "transparent",
@@ -357,7 +357,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       }}>statistika</button>
                     {filtrAktivni && (
                       <button onClick={() => { setFiltr(PRAZDNY_FILTR); setKolik(KROK); }}
-                        style={{ ...btnGhost(theme), whiteSpace: "nowrap" }}>zrušit</button>
+                        style={{ ...btnGhost(theme), whiteSpace: "nowrap" }}>Zrušit</button>
                     )}
                   </div>
 
@@ -943,7 +943,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
         padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
         display: "flex", alignItems: "center", gap: 8,
       }}>
-        <button onClick={onBack} title="Zpět" style={{
+        <button onClick={onBack} title="Zpět" aria-label="Zpět" style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "15px", padding: "2px 6px",
         }}>←</button>
@@ -1307,7 +1307,7 @@ function Smazat({ theme, mazu, onSmaz }) {
     return (
       <button onClick={() => setPtam(true)} style={{
         ...btnGhost(theme), color: theme.red, borderColor: `${theme.red}44`,
-      }}>🗑 smazat</button>
+      }}>🗑 Smazat</button>
     );
   }
   return (
@@ -1316,7 +1316,7 @@ function Smazat({ theme, mazu, onSmaz }) {
       <button onClick={onSmaz} disabled={mazu} style={{
         ...btnMain(theme), background: theme.red, opacity: mazu ? 0.6 : 1,
       }}>{mazu ? "MAŽU…" : "ANO"}</button>
-      <button onClick={() => setPtam(false)} style={btnGhost(theme)}>Ne</button>
+      <button onClick={() => setPtam(false)} style={btnGhost(theme)}>Zrušit</button>
     </span>
   );
 }

@@ -27,7 +27,7 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
   return (
     <div style={{ padding: "12px 16px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <button onClick={onZpet} title="Zpět" style={{
+        <button onClick={onZpet} title="Zpět" aria-label="Zpět" style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "15px", padding: "2px 6px",
         }}>←</button>
@@ -143,7 +143,7 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
           }}>{popis(ciselniky, "role", r)}</span>
         ))}
         <span style={{ flex: 1 }} />
-        <button onClick={() => setUpravuji(true)} title="Upravit kontakt" style={{
+        <button onClick={() => setUpravuji(true)} title="Upravit kontakt" aria-label="Upravit kontakt" style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "12px", padding: "2px 6px",
         }}>✎ upravit</button>

@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261012_1200";
+export const OBCHOD_VERZE = "261012_1700";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -22,17 +22,49 @@ export const card = (th) => ({
   borderRadius: "12px",
 });
 
+/* ── POLE ────────────────────────────────────────────────
+   Jediná definice vstupního pole v celé aplikaci. Importuje
+   si ji i App.jsx, který měl do verze 261012 vlastní kopii
+   s jiným odsazením (10/12 vs 8/10) a jiným písmem (14 vs 13).
+   Právě proto vypadal obchod jinak než úkoly, aniž by to
+   kdokoli zamýšlel.
+
+   Okraj je 1,5 px, aby pole bylo vidět i na přímém slunci.
+   Barvu nese token inputBorder, který má proti výplni
+   kontrast 4,76 : 1 (světlý) a 4,81 : 1 (tmavý).
+   Prstenec při psaní řeší globální CSS, ne tenhle objekt.
+   Viz JAZYK.md, oddíl 4. */
 export const input = (th) => ({
   background: th.inputBg,
-  border: `1px solid ${th.inputBorder}`,
+  border: `1.5px solid ${th.inputBorder}`,
   borderRadius: "8px",
   color: th.text,
-  padding: "8px 10px",
-  fontSize: "13px",
+  padding: "10px 12px",
+  fontSize: "14px",
   fontFamily: FONT,
   outline: "none",
   width: "100%",
   boxSizing: "border-box",
+});
+
+/* Zmenšená varianta — filtry, úpravy v řádku, nic jiného.
+   Třetí velikost už neexistuje. */
+export const inputMale = (th) => ({
+  ...input(th),
+  padding: "7px 10px",
+  fontSize: "13px",
+});
+
+/* Hodnota, která se jen ukazuje a nejde přepsat. Schválně
+   nemá výplň ani okraj — pravidlo zní „co má okraj, do toho
+   se píše". Dokud tohle neplatilo, svádělo to klikat na kód
+   zakázky a na vypočítané údaje. */
+export const hodnota = (th) => ({
+  padding: "10px 0",
+  fontSize: "14px",
+  fontWeight: 500,
+  color: th.textSub,
+  fontFamily: FONT,
 });
 
 export const btn = () => ({

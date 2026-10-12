@@ -270,7 +270,7 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
             ...btn(), background: "transparent", color: theme.textSub,
             fontSize: "12px", padding: "2px 4px",
           }}>✎</button>
-          <button onClick={smaz} disabled={pracuji} title="Smazat" style={{
+          <button onClick={smaz} disabled={pracuji} title="Smazat" aria-label="Smazat" style={{
             ...btn(), background: "transparent", color: theme.textDim,
             fontSize: "14px", padding: "2px 4px",
           }}>×</button>
@@ -298,7 +298,7 @@ function Posun({ theme, t, onHotovo, vlevo = false }) {
   return (
     <span style={{ position: "relative", display: "inline-block" }}>
       <button onClick={(e) => { e.stopPropagation(); setOtevreno(v => !v); }}
-        disabled={pracuji} title="Posunout na později" style={{
+        disabled={pracuji} title="Posunout na později" aria-label="Posunout na později" style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "12px", padding: "2px 4px",
         }}>⏱</button>
@@ -498,7 +498,7 @@ function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus })
 
       <div style={{ display: "flex", gap: 6 }}>
         <button onClick={() => onUloz(f)} style={btnMain(theme)}>ULOŽIT</button>
-        <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>
       </div>
     </div>
   );
@@ -707,7 +707,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
                 background: n.klic === "po" ? `${theme.red}0e` : theme.card,
               }}>
                 <button onClick={(e) => { e.stopPropagation(); splni(r, true); }}
-                  title="Hotovo" style={{
+                  title="Hotovo" aria-label="Hotovo" style={{
                     ...btn(), background: "transparent", color: theme.textSub,
                     fontSize: "14px", padding: "0 2px",
                   }}>☐</button>
@@ -772,7 +772,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
                 `hotovo ${kdyPresne(t.hotovo_at)}`].filter(Boolean).join(" · ")}
             </div>
           </div>
-          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné"
+          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné" aria-label="Vrátit mezi nesplněné"
             style={btnGhost(theme)}>↩ vrátit</button>
         </div>
       )))}
@@ -893,7 +893,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
             {/* Odškrtnout jde rovnou odsud. Dosud se muselo přes zakázku,
                 což je u věci typu "zavoláno, hotovo" zbytečná cesta. */}
             <button onClick={(e) => { e.stopPropagation(); splni(t, true); }}
-              title="Hotovo" style={{
+              title="Hotovo" aria-label="Hotovo" style={{
                 ...btn(), background: "transparent", color: theme.textSub,
                 fontSize: "13px", padding: "0 2px", lineHeight: 1.3,
               }}>☐</button>
@@ -951,7 +951,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
           padding: "6px 12px", borderTop: `1px solid ${theme.cardBorder}40`,
           display: "flex", alignItems: "center", gap: 7, opacity: 0.75,
         }}>
-          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné" style={{
+          <button onClick={() => splni(t, false)} title="Vrátit mezi nesplněné" aria-label="Vrátit mezi nesplněné" style={{
             ...btn(), background: "transparent", color: theme.green,
             fontSize: "13px", padding: "0 2px",
           }}>☑</button>
@@ -965,7 +965,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
                 .filter(Boolean).join(" · ")}
             </div>
           </div>
-          <button onClick={() => splni(t, false)} title="Vrátit zpět" style={{
+          <button onClick={() => splni(t, false)} title="Vrátit zpět" aria-label="Vrátit zpět" style={{
             ...btn(), background: "transparent", color: theme.accent,
             fontSize: "12px", padding: "2px 4px",
           }}>↩</button>

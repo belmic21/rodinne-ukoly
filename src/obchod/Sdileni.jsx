@@ -141,7 +141,7 @@ export function SdileniZakazky({ theme, owner, projectId }) {
             ...btn(), background: "transparent", color: theme.textSub,
             fontSize: "12px", padding: "2px 5px",
           }}>✎</button>
-          <button onClick={() => zrus(s.id)} title="Přestat sdílet" style={{
+          <button onClick={() => zrus(s.id)} title="Přestat sdílet" aria-label="Přestat sdílet" style={{
             ...btn(), background: "transparent", color: theme.textDim,
             fontSize: "14px", padding: "2px 5px",
           }}>×</button>
@@ -263,7 +263,7 @@ function SdileniEditor({ theme, s, volni, onUloz, onZrus }) {
         <button onClick={() => onUloz(f)} style={btnMain(theme)}>
           {novy ? "SDÍLET" : "ULOŽIT"}
         </button>
-        <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>
       </div>
 
       <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 8, lineHeight: 1.6 }}>
@@ -493,7 +493,7 @@ export function Uzivatele({ theme, owner }) {
         <div style={{ display: "flex", marginBottom: 10 }}>
           <span style={{ flex: 1 }} />
           <button onClick={() => setNovy({ email: "", jmeno: "", is_admin: false })}
-            style={btnMain(theme)}>+ přidat</button>
+            style={btnMain(theme)}>+ Přidat</button>
         </div>
       )}
 
@@ -541,7 +541,7 @@ export function Uzivatele({ theme, owner }) {
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={pozvi} style={btnMain(theme)}>PŘIPRAVIT PŘÍSTUP</button>
-            <button onClick={() => { setNovy(null); setChyba(null); }} style={btnGhost(theme)}>zrušit</button>
+            <button onClick={() => { setNovy(null); setChyba(null); }} style={btnGhost(theme)}>Zrušit</button>
           </div>
           <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 8, lineHeight: 1.6 }}>
             Jméno zadáváš ty, ne systém. Je to podpis pod všemi jeho záznamy
@@ -598,7 +598,7 @@ export function Uzivatele({ theme, owner }) {
               <button onClick={async () => {
                 const r = await zrusPozvanku(p.email);
                 if (r.ok) nacti(); else setChyba(r.chyba);
-              }} title="Zrušit pozvánku" style={{
+              }} title="Zrušit pozvánku" aria-label="Zrušit pozvánku" style={{
                 ...btn(), background: "transparent", color: theme.textDim,
                 fontSize: "14px", padding: "2px 5px",
               }}>×</button>

@@ -275,7 +275,7 @@ export function VyberOsoby({ theme, owner, ciselniky, onVyber, onZrus }) {
           }}
           placeholder="Koho hledáš? Piš jméno…"
           style={{ ...input(theme), flex: 1 }} />
-        <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>
       </div>
 
       {busy && lidi.length === 0 && (
@@ -499,7 +499,7 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
         <button onClick={uloz} disabled={!f.name.trim() || uklada} style={{
           ...btnMain(theme), opacity: f.name.trim() && !uklada ? 1 : 0.5,
         }}>{uklada ? "UKLÁDÁM…" : novy ? "ZALOŽIT" : "ULOŽIT"}</button>
-        {onZrus && <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>}
+        {onZrus && <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>}
         {extra}
       </div>
     </div>
@@ -797,12 +797,12 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
         <button onClick={uloz} disabled={uklada} style={{
           ...btnMain(theme), opacity: uklada ? 0.6 : 1,
         }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
-        <button onClick={onZpet} style={btnGhost(theme)}>zpět</button>
+        <button onClick={onZpet} style={btnGhost(theme)}>Zpět</button>
         <span style={{ flex: 1 }} />
         {f.id && !ptamSe && (
           <button onClick={() => setPtamSe(true)} style={{
             ...btnGhost(theme), color: theme.red, borderColor: `${theme.red}44`,
-          }}>🗑 smazat</button>
+          }}>🗑 Smazat</button>
         )}
         {f.id && ptamSe && (
           <>
@@ -810,7 +810,7 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
             <button onClick={smaz} disabled={mazu} style={{
               ...btnMain(theme), background: theme.red, opacity: mazu ? 0.6 : 1,
             }}>{mazu ? "MAŽU…" : "ANO"}</button>
-            <button onClick={() => setPtamSe(false)} style={btnGhost(theme)}>Ne</button>
+            <button onClick={() => setPtamSe(false)} style={btnGhost(theme)}>Zrušit</button>
           </>
         )}
       </div>
@@ -975,7 +975,7 @@ function Kontakty({ theme, owner, ciselniky, onOtevri }) {
             )}
           </div>
           <button onClick={(e) => { e.stopPropagation(); setUpravuji(o.id); }}
-            title="Upravit kontakt" style={{
+            title="Upravit kontakt" aria-label="Upravit kontakt" style={{
               ...btn(), background: "transparent", color: theme.textSub,
               fontSize: "12px", padding: "2px 5px",
             }}>✎</button>

@@ -129,7 +129,7 @@ export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu, spr
                 ...btn(), background: "transparent", color: theme.textSub,
                 fontSize: "12px", padding: "2px 5px",
               }}>✎</button>
-              <button onClick={() => smazat(u.id)} title="Odebrat" style={{
+              <button onClick={() => smazat(u.id)} title="Odebrat" aria-label="Odebrat" style={{
                 ...btn(), background: "transparent", color: theme.textDim,
                 fontSize: "14px", padding: "2px 5px",
               }}>×</button>
@@ -203,7 +203,7 @@ function UcastnikEditor({ theme, ciselniky, u, onUloz, onZrus }) {
         style={{ ...input(theme), marginBottom: 8 }} />
       <div style={{ display: "flex", gap: 6 }}>
         <button onClick={() => onUloz(f)} style={btnMain(theme)}>ULOŽIT</button>
-        <button onClick={onZrus} style={btnGhost(theme)}>zrušit</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>
       </div>
     </div>
   );
@@ -484,7 +484,7 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu, moj
               <button onClick={() => zaDni(14)} style={btnGhost(theme)}>za 14 dní</button>
               <button onClick={() => zaDni(30)} style={btnGhost(theme)}>za měsíc</button>
               {f.pripominka_at && (
-                <button onClick={() => uprav("pripominka_at", "")} style={btnGhost(theme)}>zrušit</button>
+                <button onClick={() => uprav("pripominka_at", "")} style={btnGhost(theme)}>Zrušit</button>
               )}
             </div>
           </div>
@@ -502,7 +502,7 @@ function OsloveniRadek({ r, theme, owner, ciselniky, onZmena, onOtevriOsobu, moj
             <button onClick={uloz} disabled={uklada} style={{
               ...btnMain(theme), opacity: uklada ? 0.6 : 1,
             }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
-            <button onClick={() => setOtevreno(false)} style={btnGhost(theme)}>zavřít</button>
+            <button onClick={() => setOtevreno(false)} style={btnGhost(theme)}>Zavřít</button>
             <span style={{ flex: 1 }} />
             <button onClick={smaz} style={{
               ...btnGhost(theme), color: theme.red, borderColor: `${theme.red}44`,
@@ -708,7 +708,7 @@ function VyberKohoOslovit({ theme, owner, ciselniky, projectId, jizOsloveni, onO
           style={{ ...btnMain(theme), opacity: vybrani.size === 0 ? 0.5 : 1 }}>
           OSLOVIT ({vybrani.size})
         </button>
-        <button onClick={onZrus} style={btnGhost(theme)}>zavřít</button>
+        <button onClick={onZrus} style={btnGhost(theme)}>Zavřít</button>
       </div>
 
       <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 7, lineHeight: 1.6 }}>
