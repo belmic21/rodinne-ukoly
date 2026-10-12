@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261012_1010";
+const FILE_VERSION = "261012_1050";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -26256,65 +26256,85 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔍
           </button>
-          {/* 🗺️ Mapa — znalostní báze vztahů */}
-          <button onClick={() => setShowMapaSheet(true)}
-            title="Mapa — co mi kdo řekl"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
+          {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
+              takže se nedá dostat k nastavení. Tyhle jsou tam
+              pod ☰ s popiskem. */}
+          {windowWidth >= 720 && (<>
+  {/* 🗺️ Mapa — znalostní báze vztahů */}
+            <button onClick={() => setShowMapaSheet(true)}
+              title="Mapa — co mi kdo řekl"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              🗺️
+            </button>
+          </>)}
+          {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
+              takže se nedá dostat k nastavení. Tyhle jsou tam
+              pod ☰ s popiskem. */}
+          {windowWidth >= 720 && (<>
+  {/* 👥 Lidé — investoři, zprostředkovatelé, developeři.
+                Vlastní ikona schválně: dosud byli schovaní pod 💼 → Síť →
+                Kontakty, tedy na třetí kliknutí a pod názvem, který
+                nikomu nic neřekl. */}
+            <button onClick={() => {
+              setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+              setObchodZalozka("lide");
+              setShowObchodSheet(true);
             }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            🗺️
-          </button>
-          {/* 👥 Lidé — investoři, zprostředkovatelé, developeři.
-              Vlastní ikona schválně: dosud byli schovaní pod 💼 → Síť →
-              Kontakty, tedy na třetí kliknutí a pod názvem, který
-              nikomu nic neřekl. */}
-          <button onClick={() => {
-            setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
-            setObchodZalozka("lide");
-            setShowObchodSheet(true);
-          }}
-            title="Lidé — investoři a zprostředkovatelé"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
+              title="Lidé — investoři a zprostředkovatelé"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              👥
+            </button>
+          </>)}
+          {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
+              takže se nedá dostat k nastavení. Tyhle jsou tam
+              pod ☰ s popiskem. */}
+          {windowWidth >= 720 && (<>
+  {/* 💼 Obchod — zakázky a investoři */}
+            <button onClick={() => {
+              setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+              setObchodZalozka(null);
+              setShowObchodSheet(true);
             }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            👥
-          </button>
-          {/* 💼 Obchod — zakázky a investoři */}
-          <button onClick={() => {
-            setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
-            setObchodZalozka(null);
-            setShowObchodSheet(true);
-          }}
-            title="Obchod — zakázky a investoři"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            💼
-          </button>
-          {/* 📔 Denní příběh */}
-          <button onClick={() => setShowStorySheet(true)}
-            title="Denní příběh"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: "16px", padding: "6px 8px",
-              borderRadius: "6px",
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
-            onMouseLeave={e => e.currentTarget.style.background = "none"}>
-            📔
-          </button>
+              title="Obchod — zakázky a investoři"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              💼
+            </button>
+          </>)}
+          {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
+              takže se nedá dostat k nastavení. Tyhle jsou tam
+              pod ☰ s popiskem. */}
+          {windowWidth >= 720 && (<>
+  {/* 📔 Denní příběh */}
+            <button onClick={() => setShowStorySheet(true)}
+              title="Denní příběh"
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: "16px", padding: "6px 8px",
+                borderRadius: "6px",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              📔
+            </button>
+          </>)}
           {/* Stats ikona — jen na PC/tablet, na mobilu je v menu */}
           {windowWidth >= 720 && (
             <button onClick={() => setShowStatsSheet(true)}
@@ -26525,6 +26545,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           <button onClick={() => setShowUserMenu(s => !s)}
             title="Uživatel"
             style={{
+              flexShrink: 0,   // nikdy se nesmí vytlačit z lišty — je to jediná cesta k nastavení
               fontSize: "12px", fontWeight: 600, color: theme.text,
               padding: "5px 10px", background: theme.accentSoft,
               border: `1px solid ${theme.accentBorder}`, borderRadius: "6px",
@@ -26579,6 +26600,46 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             {windowWidth < 720 && (
               <>
                 <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+                <button onClick={() => { setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null); setObchodZalozka("lide"); setShowObchodSheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>👥</span><span>Lidé — investoři a kontakty</span>
+                </button>
+                <button onClick={() => { setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null); setObchodZalozka(null); setShowObchodSheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>💼</span><span>Obchod — zakázky</span>
+                </button>
+                <button onClick={() => { setShowMapaSheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>🗺️</span><span>Mapa — co mi kdo řekl</span>
+                </button>
+                <button onClick={() => { setShowStorySheet(true); setShowUserMenu(false); }}
+                  style={{
+                    ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
+                    background: "transparent", color: theme.text, border: "none",
+                    textAlign: "left", display: "flex", alignItems: "center", gap: "8px",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span>📔</span><span>Denní příběh</span>
+                </button>
                 <button onClick={() => { setShowStatsSheet(true); setShowUserMenu(false); }}
                   style={{
                     ...buttonStyle(), padding: "8px 12px", fontSize: "12px",
