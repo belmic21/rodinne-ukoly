@@ -80,8 +80,10 @@ export async function osobaPrehled(owner, personId) {
         .eq("person_id", personId)
         .is("projekt.deleted_at", null),
       supabase.from("deal_approaches")
+        // kanal se tahá kvůli přehledu u člověka: "čím to odešlo"
+        // je půlka odpovědi na otázku, co a kdy jsi komu poslal.
         .select(`id, owner, stav, aktualne, aktualne_at, odeslano_at, cena_jednana,
-                 pripominka_at, poznamka, ${projektInner}`)
+                 kanal, pripominka_at, poznamka, ${projektInner}`)
         .eq("person_id", personId)
         .is("deleted_at", null)
         .is("projekt.deleted_at", null),

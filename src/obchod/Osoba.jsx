@@ -201,7 +201,15 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
                 stav={popis(ciselniky, "stav_osloveni", a.stav)}
                 stavBarva={a.stav === "dohodnuto" ? theme.green : konec ? theme.textSub : theme.accent}
                 podtext={[
-                  a.aktualne ? `${a.aktualne} · ${jakDavno(a.aktualne_at)}` : `osloven ${datumKratce(a.odeslano_at)}`,
+                  // Datum odeslání tu bylo jen tehdy, když nebyl zapsaný
+                  // průběh — takže u rozjednaných se nedalo zjistit, KDY
+                  // to vlastně odešlo. Teď je vidět vždycky.
+                  `odesláno ${datumKratce(a.odeslano_at)}`,
+                  a.kanal ? popis(ciselniky, "kanal", a.kanal) || a.kanal : null,
+                  // Kdo oslovil. U zakázky ve spolupráci je to to první,
+                  // co chceš vědět — jestli jsi to byl ty, nebo David.
+                  a.owner && a.owner !== owner ? `přes ${a.owner}` : null,
+                  a.aktualne ? `${a.aktualne} · ${jakDavno(a.aktualne_at)}` : null,
                   a.pripominka_at ? `⏰ ${datumKratce(a.pripominka_at)}` : null,
                 ].filter(Boolean).join("  ·  ")} />
             );

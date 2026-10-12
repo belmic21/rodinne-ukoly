@@ -120,9 +120,11 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
           </strong>{" "}
           má co nabídnout
           {sKartou === 0 && radky.length > 0 && (
-            <div style={{ color: theme.yellow, marginTop: 4 }}>
-              Nikdo zatím nemá kartu. Bez ní se nedá párovat — otevři
-              člověka a vyplň mu, co hledá.
+            <div style={{ color: theme.yellow, marginTop: 4, lineHeight: 1.6 }}>
+              Nikomu zatím není vyplněné, <strong>co hledá</strong>. Jméno
+              a telefon na párování nestačí — otevři člověka a v sekci
+              „Co hledá a co má“ mu přidej kartu: typ, kraj, cenové
+              rozpětí, formu vstupu. Teprve pak ho zakázka najde.
             </div>
           )}
         </div>
@@ -242,7 +244,12 @@ function Radek({ r, theme, ciselniky, dotaz, onOtevri }) {
           {[
             (r.role_tagy || []).map(t => popis(ciselniky, "role", t)).filter(Boolean).join(", "),
             r.kontakt,
-            r.karet > 0 ? `🗂 ${pocet(r.karet, "karta", "karty", "karet")}` : "bez karty",
+            // "bez karty" se snadno plete s "bez kontaktu". Kontakt je
+            // jméno a telefon, karta je to, CO ten člověk hledá — a jen
+            // podle ní se dá párovat. Text to teď říká rovnou.
+            r.karet > 0
+              ? `🗂 ${pocet(r.karet, "karta", "karty", "karet")}`
+              : "nevyplněno, co hledá",
             dni === null
               ? "nikdy neoslovený"
               : dni === 0 ? "osloven dnes" : `osloven před ${dni} dny`,
