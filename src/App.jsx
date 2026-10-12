@@ -54,6 +54,7 @@ import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
 import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
 import { TerminyPanel } from "./obchod/Terminy.jsx";
+import { input as polePlne } from "./obchod/ui.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -99,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261012_1200";
+const FILE_VERSION = "261012_1700";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1113,6 +1114,7 @@ function sanitizeCompletedChecklists(tasks, users) {
 
 const THEMES = {
   dark: {
+    scheme: "dark",
     bg: "#0c1017",
     card: "#131a24",
     cardBorder: "#1a2233",
@@ -1123,8 +1125,14 @@ const THEMES = {
     textMid: "#3a5060",
     // Pole, do kterého se píše, musí jít poznat bez klikání: je tmavší
     // než karta a má znatelný okraj. Dřív splývalo s pozadím.
-    inputBg: "#080c12",
-    inputBorder: "#33475f",
+    // Okraj pole musí mít proti výplni kontrast aspoň 3:1, jinak ho na
+    // jasném světle nevidíš. Starý #33475f měl 2,06:1 — propadal.
+    // Nový #64809e má 4,81:1. Viz JAZYK.md, oddíl 4.
+    inputBg: "#070b11",
+    inputBorder: "#64809e",
+    inputFocus: "#3b82f6",
+    inputRing: "rgba(59,130,246,0.26)",
+    inputError: "#f87171",
     accent: "#3b82f6",
     accentSoft: "#3b82f612",
     accentBorder: "#3b82f625",
@@ -1145,6 +1153,7 @@ const THEMES = {
     },
   },
   light: {
+    scheme: "light",
     bg: "#f5f7fa",
     card: "#ffffff",
     cardBorder: "#e2e8f0",
@@ -1156,8 +1165,13 @@ const THEMES = {
     // Ve světlém režimu je to naopak: pole je bílé jako papír a drží
     // ho zřetelný šedý okraj. Šedomodrá výplň s okrajem v barvě karty
     // vypadala jako vypsaná hodnota, ne jako místo k psaní.
+    // Totéž ve světlém: #94a3b8 mělo proti bílému poli 2,56:1 a na slunci
+    // zmizelo. #64748b má 4,76:1. Viz JAZYK.md, oddíl 4.
     inputBg: "#ffffff",
-    inputBorder: "#94a3b8",
+    inputBorder: "#64748b",
+    inputFocus: "#2563eb",
+    inputRing: "rgba(37,99,235,0.16)",
+    inputError: "#b91c1c",
     accent: "#2563eb",
     accentSoft: "#2563eb10",
     accentBorder: "#2563eb20",
@@ -1182,10 +1196,13 @@ const THEMES = {
 // Pozn.: písmo DM Sans se načítá odkazem v index.html, ne @importem zde.
 // GLOBAL_CSS se vkládá na třech místech, takže @import stahoval každý řez
 // písma třikrát a navíc blokoval vykreslení.
-const GLOBAL_CSS = `
+const globalCss = (th) => `
 html, body {
   /* Safe area pro iPhone notch — viewport-fit=cover v index.html doplní funkčnost */
   -webkit-tap-highlight-color: transparent;
+  /* Řekne prohlížeči, v jakém režimu jsme. Bez toho kreslí zaškrtávátka,
+     kalendáře, posuvníky a rolovací lišty světle i v tmavé aplikaci. */
+  color-scheme: ${th.scheme};
 }
 @supports (padding: env(safe-area-inset-top)) {
   body {
@@ -1343,6 +1360,43 @@ body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
 }
 .tiptap-editor-content p { margin: 4px 0; }
 .tiptap-editor-content:focus { outline: none; }
+
+/* ══ POLE — jeden jazyk pro celou aplikaci (JAZYK.md, oddíl 4) ══
+   Tyhle řádky platí pro všech 192 vstupních prvků najednou, i pro ta
+   pole, která mají styl napsaný na místě. Schválně tu NENÍ !important
+   u okraje: jedenáct polí je schválně bez rámečku (leží uvnitř
+   orámovaného obalu) a vynucený okraj by je rozbil. Barvu okraje mění
+   token inputBorder, ten je společný. */
+
+/* Kam zrovna píšu, musí být vidět i koutkem oka. Prstenec je box-shadow,
+   který na poli jinak nikde není, takže nic nepřebíjí. */
+input:focus, textarea:focus, select:focus {
+  box-shadow: 0 0 0 3px ${th.inputRing};
+  outline: none;
+}
+
+/* Našeptávka nesmí vypadat jako vyplněná hodnota. */
+input::placeholder, textarea::placeholder {
+  color: ${th.textSub};
+  opacity: 1;
+}
+
+/* Zaškrtávátka kreslí prohlížeč — deset jich v aplikaci nemá žádný styl.
+   color-scheme je donutí v tmavém režimu zčernat místo bílé plochy,
+   accent-color dá fajfce naši modrou. Platí i pro kalendář u typu date
+   a pro posuvníky. */
+input[type="checkbox"], input[type="radio"] {
+  accent-color: ${th.inputFocus};
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* Vypnutý prvek vypadá vypnutě, ne rozbitě. */
+input:disabled, textarea:disabled, select:disabled, button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 `;
 
 /* ═══ Style helpers ═══ */
@@ -1382,18 +1436,12 @@ const cardStyle = (th) => ({
   borderRadius: "12px",
 });
 
-const inputStyle = (th) => ({
-  background: th.inputBg,
-  border: `1px solid ${th.inputBorder}`,
-  borderRadius: "8px",
-  color: th.text,
-  padding: "10px 12px",
-  fontSize: "14px",
-  fontFamily: FONT,
-  outline: "none",
-  width: "100%",
-  boxSizing: "border-box",
-});
+/* Pole má jedinou definici, a ta žije v obchod/ui.js. Tohle je
+   jen přejmenování, aby se nemuselo přepisovat 67 míst, která
+   inputStyle() volají. Do verze 261012 tu stála vlastní kopie,
+   která se od té v obchodu lišila odsazením i velikostí písma —
+   proto obchod vypadal jinak než úkoly. Viz JAZYK.md, oddíl 4. */
+const inputStyle = (th) => polePlne(th);
 
 const buttonStyle = () => ({
   border: "none",
@@ -2005,7 +2053,7 @@ function AttachmentThumb({ attachment, theme, size = 80, onClick, onDelete, canD
         <button
           type="button"
           onClick={handleDelete}
-          title="Smazat přílohu"
+          title="Smazat přílohu" aria-label="Smazat přílohu"
           style={{
             position: "absolute",
             top: 2,
@@ -5536,7 +5584,7 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze, onClose }) {
             <span style={{ color: theme.textSub }}>· {relativeLabel}</span>
           </div>
         </div>
-        <button onClick={onClose || onDismiss} title="Zavřít (připomínka zůstane aktivní)" style={{
+        <button onClick={onClose || onDismiss} title="Zavřít (připomínka zůstane aktivní)" aria-label="Zavřít (připomínka zůstane aktivní)" style={{
           background: "none", border: "none", color: theme.textSub,
           fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
         }}>×</button>
@@ -5732,14 +5780,14 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
             if (zHistorie) setDismissedHistory(prev => prev.filter(x => x.id !== r.id));
             onDelete?.(r.id, zHistorie);
           }}
-          title="Opravdu smazat" style={{
+          title="Opravdu smazat" aria-label="Opravdu smazat" style={{
             ...buttonStyle(), padding: "5px 9px", fontSize: 11,
             background: theme.red, color: "#fff", fontWeight: 700,
-          }}>smazat?</button>
+          }}>Smazat?</button>
       );
     }
     return (
-      <button onClick={() => setPtam(true)} title="Smazat připomínku" style={{
+      <button onClick={() => setPtam(true)} title="Smazat připomínku" aria-label="Smazat připomínku" style={{
         ...buttonStyle(), padding: "5px 9px", fontSize: 13,
         background: "transparent", color: theme.textSub,
         border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
@@ -5752,7 +5800,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
     const volby = ODLOZIT();
     return (
       <span style={{ position: "relative", display: "inline-block" }}>
-        <button onClick={() => setOtevreno(v => !v)} title="Odložit na později" style={{
+        <button onClick={() => setOtevreno(v => !v)} title="Odložit na později" aria-label="Odložit na později" style={{
           ...buttonStyle(), padding: "5px 9px", fontSize: 12,
           background: otevreno ? theme.accentSoft : theme.inputBg,
           color: otevreno ? theme.accent : theme.text,
@@ -5862,7 +5910,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                   <ReminderRow key={r.id} r={r} variant="active" actions={
                     <>
                       <OdlozitTlacitko r={r} />
-                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
+                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" aria-label="Označit jako vyřízené" style={{
                         ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                         background: theme.green, color: "#fff", fontWeight: 700,
                       }}>✓</button>
@@ -5882,11 +5930,11 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                   <ReminderRow key={r.id} r={r} variant="expired" actions={
                     <>
                       <OdlozitTlacitko r={r} />
-                      <button onClick={() => onReactivate(r)} title="Reaktivovat (znovu nastavit čas)" style={{
+                      <button onClick={() => onReactivate(r)} title="Reaktivovat (znovu nastavit čas)" aria-label="Reaktivovat (znovu nastavit čas)" style={{
                         ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                         background: theme.accent, color: "#fff", fontWeight: 700,
                       }}>↻</button>
-                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" style={{
+                      <button onClick={() => onDismiss(r.id)} title="Označit jako vyřízené" aria-label="Označit jako vyřízené" style={{
                         ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                         background: theme.green, color: "#fff", fontWeight: 700,
                       }}>✓</button>
@@ -5921,7 +5969,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                   {history.map(r => (
                     <ReminderRow key={r.id} r={r} variant="history" actions={
                       <>
-                        <button onClick={() => onReactivate(r)} title="Reaktivovat" style={{
+                        <button onClick={() => onReactivate(r)} title="Reaktivovat" aria-label="Reaktivovat" style={{
                           ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                           background: theme.inputBg, color: theme.text,
                           border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
@@ -6321,7 +6369,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
               minWidth: 0,
             }}
           />
-          <button onClick={onClose} title="Zavřít" style={{
+          <button onClick={onClose} title="Zavřít" aria-label="Zavřít" style={{
             background: "none", border: "none", color: theme.textSub,
             fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1, flexShrink: 0,
           }}>×</button>
@@ -6382,7 +6430,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
           <span style={{ flex: 1 }} />
 
           {canEdit && !isNew && (
-            <button onClick={handleConvert} title="Vytvořit úkol z této poznámky" style={{
+            <button onClick={handleConvert} title="Vytvořit úkol z této poznámky" aria-label="Vytvořit úkol z této poznámky" style={{
               ...buttonStyle(), padding: "6px 10px", fontSize: 12,
               background: theme.inputBg, color: theme.text,
               border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
@@ -6392,13 +6440,13 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
 
           {!isNew && (
             isArchived ? (
-              <button onClick={handleUnarchive} title="Vrátit z archivu" style={{
+              <button onClick={handleUnarchive} title="Vrátit z archivu" aria-label="Vrátit z archivu" style={{
                 ...buttonStyle(), padding: "6px 10px", fontSize: 12,
                 background: `${theme.green}15`, color: theme.green,
                 border: `1px solid ${theme.green}40`, fontWeight: 600,
               }}>↩ Z archivu</button>
             ) : (
-              <button onClick={handleArchive} title="Archivovat poznámku (jen ty ji neuvidíš)" style={{
+              <button onClick={handleArchive} title="Archivovat poznámku (jen ty ji neuvidíš)" aria-label="Archivovat poznámku (jen ty ji neuvidíš)" style={{
                 ...buttonStyle(), padding: "6px 10px", fontSize: 12,
                 background: `${theme.accent}10`, color: theme.accent,
                 border: `1px solid ${theme.accent}30`, fontWeight: 600,
@@ -6408,7 +6456,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
 
 
           {canEdit && !isNew && (
-            <button onClick={handleDelete} title="Smazat poznámku" style={{
+            <button onClick={handleDelete} title="Smazat poznámku" aria-label="Smazat poznámku" style={{
               ...buttonStyle(), padding: "6px 10px", fontSize: 12,
               background: "transparent", color: theme.red,
               border: `1px solid ${theme.red}40`, fontWeight: 600,
@@ -6475,7 +6523,7 @@ function NoteAttachmentsSection({ noteId, currentUser, theme }) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || attachments.length >= 5}
-          title="Přidat přílohu"
+          title="Přidat přílohu" aria-label="Přidat přílohu"
           style={{
             background: theme.buttonBg,
             border: `1px solid ${theme.inputBorder}`,
@@ -6853,14 +6901,14 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
       }}>{title}</span>
       <span style={{ fontSize: 10, color: theme.textSub }}>{count}</span>
       {onAdd && (
-        <button onClick={onAdd} title="Nová" style={{
+        <button onClick={onAdd} title="Nová" aria-label="Nová" style={{
           ...buttonStyle(), padding: "2px 7px", fontSize: 11, fontWeight: 700,
           background: `${accentColor}15`, color: accentColor,
           border: `1px solid ${accentColor}30`,
         }}>+</button>
       )}
       {onShowAll && (
-        <button onClick={onShowAll} title="Vše" style={{
+        <button onClick={onShowAll} title="Vše" aria-label="Vše" style={{
           ...buttonStyle(), padding: "2px 7px", fontSize: 10, fontWeight: 600,
           background: "transparent", color: theme.textSub,
           border: `1px solid ${theme.inputBorder}`,
@@ -7416,7 +7464,7 @@ function ScratchEntryRow({ entry, currentUser, theme, editingId, editText, setEd
               }}
             >📷</button>
             <button onClick={() => startEdit(entry)}
-              title="Upravit"
+              title="Upravit" aria-label="Upravit"
               style={{
                 background: "none", border: "none",
                 color: theme.textDim, cursor: "pointer", fontSize: "12px",
@@ -7425,7 +7473,7 @@ function ScratchEntryRow({ entry, currentUser, theme, editingId, editText, setEd
               ✏️
             </button>
             <button onClick={() => deleteEntry(entry.id)}
-              title="Smazat"
+              title="Smazat" aria-label="Smazat"
               style={{
                 background: "none", border: "none",
                 color: theme.textDim, cursor: "pointer", fontSize: "12px",
@@ -7691,13 +7739,13 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
               {/* Action buttons */}
               {editingItem === item.id ? (
                 <>
-                  <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }} title="Uložit" style={{
+                  <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }} title="Uložit" aria-label="Uložit" style={{
                     ...buttonStyle(), width: "26px", height: "22px", padding: 0,
                     background: theme.green, color: "#fff", border: "none",
                     fontSize: "13px", fontWeight: 800,
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>✓</button>
-                  <button onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }} title="Zrušit" style={{
+                  <button onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }} title="Zrušit" aria-label="Zrušit" style={{
                     ...buttonStyle(), width: "24px", height: "22px", padding: 0,
                     background: "transparent", color: theme.textSub,
                     border: `1px solid ${theme.inputBorder}`, fontSize: "12px",
@@ -7709,7 +7757,7 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
                   {/* Delete button */}
                   <button
                     onClick={() => deleteItem(item.id)}
-                    title="Smazat položku"
+                    title="Smazat položku" aria-label="Smazat položku"
                     style={{
                       ...buttonStyle(), width: "24px", height: "22px", padding: 0,
                       background: "transparent", color: theme.red,
@@ -7942,7 +7990,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
         border: `1px solid ${theme.red}30`,
         display: "flex", alignItems: "center", gap: "4px",
       }}>
-        🗑 {permanent ? "Trvale smazat" : "Smazat úkol"}
+        🗑 {permanent ? "Smazat natrvalo" : "Smazat úkol"}
       </button>
     );
   }
@@ -7957,7 +8005,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
     }}>
       <div style={{ fontSize: "12px", color: theme.text, marginBottom: "8px" }}>
         {permanent
-          ? <>Trvale smazat <strong>"{shortTitle}"</strong>? Nelze vrátit zpět.</>
+          ? <>Smazat natrvalo <strong>"{shortTitle}"</strong>? Nelze vrátit zpět.</>
           : <>Smazat <strong>"{shortTitle}"</strong>? Přesune se do koše (30 dní).</>
         }
       </div>
@@ -7965,7 +8013,7 @@ function DeleteButton({ taskId, taskTitle, onDelete, theme, permanent }) {
         <button onClick={() => { onDelete(taskId); setConfirming(false); }} style={{
           ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
           background: theme.red, color: "#fff",
-        }}>{permanent ? "Trvale smazat" : "Ano, do koše"}</button>
+        }}>{permanent ? "Smazat natrvalo" : "Smazat do koše"}</button>
         <button onClick={() => setConfirming(false)} style={{
           ...buttonStyle(), padding: "6px 14px", fontSize: "12px",
           background: "transparent", color: theme.textSub,
@@ -8057,7 +8105,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
         {/* Edit + Delete — compact, next to reactions.
             Reject (❌) NENÍ tady — je v hlavní action liště úkolu, jako velké tlačítko. */}
         {onEdit && task.status !== "deleted" && (
-          <button onClick={onEdit} title="Upravit úkol" style={{
+          <button onClick={onEdit} title="Upravit úkol" aria-label="Upravit úkol" style={{
             ...buttonStyle(),
             padding: "3px 8px", fontSize: "12px",
             background: theme.accentSoft, color: theme.accent,
@@ -8069,7 +8117,7 @@ function TaskComments({ task, comments, currentUser, onAdd, onToggleReaction, on
           </button>
         )}
         {onDelete && task.status !== "deleted" && (
-          <button onClick={onDelete} title="Smazat úkol" style={{
+          <button onClick={onDelete} title="Smazat úkol" aria-label="Smazat úkol" style={{
             ...buttonStyle(),
             padding: "3px 8px", fontSize: "12px",
             background: `${theme.red}08`, color: theme.red,
@@ -8233,7 +8281,7 @@ function CommentInputWithAttach({ onSubmit, currentUser, task, theme }) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || pendingAttachments.length >= ATTACH_MAX_FILES}
-          title="Přidat přílohu"
+          title="Přidat přílohu" aria-label="Přidat přílohu"
           style={{
             ...buttonStyle(),
             background: theme.buttonBg,
@@ -8341,7 +8389,7 @@ function TaskAttachmentsSection({ task, currentUser, theme }) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading || attachments.length >= ATTACH_MAX_FILES}
-          title="Přidat přílohu"
+          title="Přidat přílohu" aria-label="Přidat přílohu"
           style={{
             background: theme.buttonBg,
             border: `1px solid ${theme.inputBorder}`,
@@ -8752,7 +8800,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   justifyContent: "flex-end", flexWrap: "wrap",
                 }}>
                   {task.status !== "deleted" && (
-                    <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
+                    <button onClick={() => setIsEditing(true)} title="Upravit úkol" aria-label="Upravit úkol" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: theme.accentSoft, color: theme.accent,
@@ -8769,7 +8817,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       if (confirm(`Archivovat úkol "${task.title}"?\n\nÚkol zmizí ze seznamu, ale zůstane v archivu.`)) {
                         onArchive(task.id);
                       }
-                    }} title="Archivovat úkol" style={{
+                    }} title="Archivovat úkol" aria-label="Archivovat úkol" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.accent}10`, color: theme.accent,
@@ -8782,7 +8830,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   )}
                   {/* 📓 Převést na poznámku */}
                   {onConvertTaskToNote && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
-                    <button onClick={() => onConvertTaskToNote(task)} title="Převést úkol na poznámku" style={{
+                    <button onClick={() => onConvertTaskToNote(task)} title="Převést úkol na poznámku" aria-label="Převést úkol na poznámku" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
@@ -8794,7 +8842,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     </button>
                   )}
                   {onDelete && task.status !== "deleted" && (
-                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
+                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" aria-label="Smazat úkol" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.red}08`, color: theme.red,
@@ -8840,7 +8888,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   paddingTop: "10px", borderTop: `1px solid ${theme.cardBorder}`,
                   justifyContent: "flex-end", flexWrap: "wrap",
                 }}>
-                  <button onClick={() => setIsEditing(true)} title="Upravit úkol" style={{
+                  <button onClick={() => setIsEditing(true)} title="Upravit úkol" aria-label="Upravit úkol" style={{
                     ...buttonStyle(),
                     padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                     background: theme.accentSoft, color: theme.accent,
@@ -8856,7 +8904,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       if (confirm(`Archivovat úkol "${task.title}"?\n\nÚkol zmizí ze seznamu, ale zůstane v archivu.`)) {
                         onArchive(task.id);
                       }
-                    }} title="Archivovat úkol" style={{
+                    }} title="Archivovat úkol" aria-label="Archivovat úkol" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.accent}10`, color: theme.accent,
@@ -8869,7 +8917,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   )}
                   {/* 📓 Převést na poznámku — jen pro vlastní aktivní/hotové úkoly */}
                   {task.createdBy === currentUser.name && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
-                    <button onClick={() => onConvertTaskToNote && onConvertTaskToNote(task)} title="Převést úkol na poznámku" style={{
+                    <button onClick={() => onConvertTaskToNote && onConvertTaskToNote(task)} title="Převést úkol na poznámku" aria-label="Převést úkol na poznámku" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
@@ -8907,7 +8955,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     </button>
                   )}
                   {onDelete && (
-                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" style={{
+                    <button onClick={() => onDelete(task.id)} title="Smazat úkol" aria-label="Smazat úkol" style={{
                       ...buttonStyle(),
                       padding: "5px 12px", fontSize: "12px", fontWeight: 600,
                       background: `${theme.red}08`, color: theme.red,
@@ -8941,7 +8989,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
       }}>
         <button
           onClick={(e) => { e.stopPropagation(); setIsEditing(false); }}
-          title="Zpět na detail (bez uložení)"
+          title="Zpět na detail (bez uložení)" aria-label="Zpět na detail (bez uložení)"
           style={{
             ...buttonStyle(),
             padding: "6px 10px", fontSize: "12px",
@@ -9511,7 +9559,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           )}
           {onDelete && (
             <button onClick={() => {
-              if (confirm(`Trvale smazat odmítnutý úkol "${task.title}"?\n\nPůjde do koše (30 dní), pak zmizí navždy.`)) {
+              if (confirm(`Smazat natrvalo odmítnutý úkol "${task.title}"?\n\nPůjde do koše (30 dní), pak zmizí navždy.`)) {
                 onDelete(task.id);
               }
             }} style={{
@@ -9651,7 +9699,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
 
   if (!expanded) {
     return (
-      <button onClick={() => setExpanded(true)} title="Přidat poznámku k položce" style={{
+      <button onClick={() => setExpanded(true)} title="Přidat poznámku k položce" aria-label="Přidat poznámku k položce" style={{
         width: "24px", height: "24px", minWidth: "24px",
         borderRadius: "5px", border: "none",
         background: "transparent", cursor: "pointer",
@@ -9687,7 +9735,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
           <button onClick={() => setExpanded(false)} style={{
             background: "transparent", border: "none", color: theme.textSub,
             fontSize: "12px", cursor: "pointer", padding: 0,
-          }} title="Schovat">▲</button>
+          }} title="Schovat" aria-label="Schovat">▲</button>
         </div>
 
         {/* List existing notes */}
@@ -9718,11 +9766,11 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
               <span><strong style={{ color: theme.text }}>{n.author}</strong> · {formatTimeTrace(n.createdAt)}</span>
               {n.author === currentUser.name && editingId !== n.id && (
                 <span style={{ display: "flex", gap: "4px" }}>
-                  <button onClick={() => startEdit(n)} title="Upravit" style={{
+                  <button onClick={() => startEdit(n)} title="Upravit" aria-label="Upravit" style={{
                     background: "transparent", border: "none", cursor: "pointer",
                     color: theme.textSub, fontSize: "11px", padding: "0 2px",
                   }}>✏️</button>
-                  <button onClick={() => deleteNote(n.id)} title="Smazat" style={{
+                  <button onClick={() => deleteNote(n.id)} title="Smazat" aria-label="Smazat" style={{
                     background: "transparent", border: "none", cursor: "pointer",
                     color: theme.red, fontSize: "11px", padding: "0 2px",
                   }}>🗑</button>
@@ -9824,7 +9872,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            title="Přidat foto"
+            title="Přidat foto" aria-label="Přidat foto"
             style={{
               ...buttonStyle(), padding: "6px 8px", fontSize: "13px",
               background: theme.inputBg, color: theme.textSub,
@@ -10396,7 +10444,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
             boxShadow: actionAnim === "restore" ? `0 0 0 10px ${theme.accent}25, 0 4px 20px ${theme.accent}60` : "none",
             animation: actionAnim === "restore" ? "completePulse 0.55s ease-out" : "none",
-          }} title="Obnovit z koše">
+          }} title="Obnovit z koše" aria-label="Obnovit z koše">
             ↩
           </button>
         ) : !taskIsDone && canAct ? (
@@ -10476,7 +10524,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
             boxShadow: actionAnim === "reopen" ? `0 0 0 10px ${theme.accent}25, 0 4px 20px ${theme.accent}60` : "none",
             animation: actionAnim === "reopen" ? "completePulse 0.55s ease-out" : "none",
-          }} title="Vrátit zpět do aktivních">
+          }} title="Vrátit zpět do aktivních" aria-label="Vrátit zpět do aktivních">
             ↩
           </button>
         )}
@@ -10591,7 +10639,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               <button onClick={(e) => {
                 e.stopPropagation();
                 onMarkSeen(task.id);
-              }} title="Označit jako přečteno — úkol se zařadí do své kategorie" style={{
+              }} title="Označit jako přečteno — úkol se zařadí do své kategorie" aria-label="Označit jako přečteno — úkol se zařadí do své kategorie" style={{
                 fontSize: "10px", fontWeight: 700,
                 color: theme.green,
                 background: `${theme.green}15`,
@@ -10866,7 +10914,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 e.stopPropagation();
                 onStartFocus(task.id);
               }}
-              title="Soustředit se na tento úkol (Focus mode)"
+              title="Soustředit se na tento úkol (Focus mode)" aria-label="Soustředit se na tento úkol (Focus mode)"
               style={{
                 ...buttonStyle(),
                 width: "34px", height: "34px", padding: "0",
@@ -10895,7 +10943,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 e.stopPropagation();
                 onRemindTask(task);
               }}
-              title="Připomenout v daný čas"
+              title="Připomenout v daný čas" aria-label="Připomenout v daný čas"
               style={{
                 ...buttonStyle(),
                 width: "34px", height: "34px", padding: "0",
@@ -10924,7 +10972,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 e.stopPropagation();
                 setSnoozeMenuOpen(!snoozeMenuOpen);
               }}
-              title="Odložit úkol na později"
+              title="Odložit úkol na později" aria-label="Odložit úkol na později"
               style={{
                 ...buttonStyle(),
                 width: "34px", height: "34px", padding: "0",
@@ -10945,7 +10993,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 e.stopPropagation();
                 onUnarchive(task.id);
               }}
-              title="Vrátit z archivu zpět mezi aktivní"
+              title="Vrátit z archivu zpět mezi aktivní" aria-label="Vrátit z archivu zpět mezi aktivní"
               style={{
                 ...buttonStyle(),
                 width: "34px", height: "34px", padding: "0",
@@ -11031,7 +11079,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                       setSnoozeMenuOpen(false);
                       setIsOpen(false);
                     }}
-                    title="Archivovat — trvalé uložení mimo aktivní seznam (nemaže se po 30 dnech)"
+                    title="Archivovat — trvalé uložení mimo aktivní seznam (nemaže se po 30 dnech)" aria-label="Archivovat — trvalé uložení mimo aktivní seznam (nemaže se po 30 dnech)"
                     style={{
                       ...buttonStyle(),
                       padding: "7px 10px", fontSize: "12px",
@@ -11662,7 +11710,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               }
               if (showFull) fullSubmit(); else quickSubmit();
             }}
-            title="Přidat úkol"
+            title="Přidat úkol" aria-label="Přidat úkol"
             style={{
               ...buttonStyle(), width: "32px", height: "32px",
               background: theme.green, color: "#fff",
@@ -11687,7 +11735,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               setOpenSegment(null);
               setShowFull(false);
             }}
-            title="Zavřít — vrátit zpět k filtrům"
+            title="Zavřít — vrátit zpět k filtrům" aria-label="Zavřít — vrátit zpět k filtrům"
             style={{
               ...buttonStyle(), width: "32px", height: "32px",
               background: theme.inputBg, color: theme.textSub,
@@ -12209,7 +12257,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     padding: "8px", fontSize: "12px", fontWeight: 600,
                     background: theme.accent, color: "#fff",
                     border: "none", borderRadius: "6px", marginTop: "6px",
-                  }}>Hotovo</button>
+                  }}>Zavřít</button>
               </div>
             )}
 
@@ -12750,7 +12798,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               ...buttonStyle(), padding: "13px 16px",
               background: "transparent", color: theme.textSub,
               border: `1px solid ${theme.cardBorder}`, fontSize: "14px",
-            }}>Storno</button>
+            }}>Zrušit</button>
           </div>
         </div>
       )}
@@ -13099,7 +13147,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 }}>
                 <div style={{ fontWeight: 700, marginBottom: "2px" }}>🗑 Smazat seznam i úkoly</div>
                 <div style={{ fontSize: "10px", opacity: 0.85 }}>
-                  Trvale odstranit všech {tasksInList} úkol{tasksInList === 1 ? "" : tasksInList < 5 ? "y" : "ů"}
+                  Smazat natrvalo všech {tasksInList} úkol{tasksInList === 1 ? "" : tasksInList < 5 ? "y" : "ů"}
                 </div>
               </button>
 
@@ -13232,7 +13280,7 @@ function MoreFiltersSheet({
                     </div>
                     {isOwner && (
                       <button onClick={(e) => { e.stopPropagation(); onClose(); onEditList && onEditList(list); }}
-                        title="Upravit seznam"
+                        title="Upravit seznam" aria-label="Upravit seznam"
                         style={{
                           ...buttonStyle(),
                           padding: "6px 10px", fontSize: "11px",
@@ -15031,11 +15079,11 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
         <span>{fmtDate(r.happened_at)}</span>
         <span style={{ flex: 1 }} />
         <button onClick={() => setEditingFact(editingFact === r.id ? null : r.id)}
-          title="Upravit záznam" style={{
+          title="Upravit záznam" aria-label="Upravit záznam" style={{
             ...buttonStyle(), background: "transparent", color: theme.textDim,
             fontSize: "12px", padding: "0 4px",
           }}>✎</button>
-        <button onClick={() => removeFact(r.id)} title="Smazat záznam" style={{
+        <button onClick={() => removeFact(r.id)} title="Smazat záznam" aria-label="Smazat záznam" style={{
           ...buttonStyle(), background: "transparent", color: theme.textDim,
           fontSize: "13px", padding: "0 4px",
         }}>×</button>
@@ -15092,7 +15140,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                 <span style={{ fontSize: "16px" }}>🗺️</span>
                 <div style={{ flex: 1, fontSize: "14px", fontWeight: 700, color: theme.text }}>Mapa</div>
-                <button onClick={() => setShowHelp(v => !v)} title="Jak to funguje" style={{
+                <button onClick={() => setShowHelp(v => !v)} title="Jak to funguje" aria-label="Jak to funguje" style={{
                   ...buttonStyle(),
                   background: showHelp ? theme.accentSoft : "transparent",
                   border: `1px solid ${showHelp ? theme.accentBorder : theme.cardBorder}`,
@@ -15124,7 +15172,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                   }}>
                     {/* Zpět = zrušit výběr člověka a vrátit se k hledání */}
                     <button onClick={() => { setWho(null); setPickerOpen(true); }}
-                      title="Zpět — vybrat jiného člověka" style={{
+                      title="Zpět — vybrat jiného člověka" aria-label="Zpět — vybrat jiného člověka" style={{
                         ...buttonStyle(), background: "transparent", color: theme.textSub,
                         fontSize: "14px", padding: "0 4px",
                       }}>←</button>
@@ -15136,7 +15184,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                     )}
                     <span style={{ flex: 1 }} />
                     <button onClick={() => openPerson(who)}
-                      title="Otevřít stránku — historie, úpravy, smazání" style={{
+                      title="Otevřít stránku — historie, úpravy, smazání" aria-label="Otevřít stránku — historie, úpravy, smazání" style={{
                         ...buttonStyle(),
                         background: theme.card, color: theme.accent,
                         border: `1px solid ${theme.accentBorder}`, borderRadius: 6,
@@ -15465,14 +15513,14 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
         padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-          <button onClick={onBack} title="Zpět" style={{
+          <button onClick={onBack} title="Zpět" aria-label="Zpět" style={{
             ...buttonStyle(), background: "transparent", color: theme.textSub,
             fontSize: "15px", padding: "2px 6px",
           }}>←</button>
           <div style={{ flex: 1, fontSize: "15px", fontWeight: 700, color: theme.text }}>
             {person.name}
           </div>
-          <button onClick={() => setEditMeta(v => !v)} title="Upravit" style={{
+          <button onClick={() => setEditMeta(v => !v)} title="Upravit" aria-label="Upravit" style={{
             ...buttonStyle(), background: "transparent", color: theme.textSub,
             fontSize: "13px", padding: "2px 6px",
           }}>✎</button>
@@ -15500,12 +15548,12 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                 <>
                   <span style={{ flex: 1 }} />
                   <button onClick={() => { setConfirmDelete(v => !v); setPickMerge(false); }}
-                    title="Smazat tohoto člověka" style={{
+                    title="Smazat tohoto člověka" aria-label="Smazat tohoto člověka" style={{
                       ...buttonStyle(), background: "transparent", color: theme.red,
                       padding: "5px 10px", fontSize: "11px",
                       border: `1px solid ${theme.red}44`, borderRadius: 6,
-                    }}>🗑 smazat</button>
-                  <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" style={{
+                    }}>🗑 Smazat</button>
+                  <button onClick={() => setPickMerge(v => !v)} title="Je tenhle člověk uložený dvakrát?" aria-label="Je tenhle člověk uložený dvakrát?" style={{
                     ...buttonStyle(), background: "transparent", color: theme.textSub,
                     padding: "5px 10px", fontSize: "11px",
                     border: `1px solid ${theme.cardBorder}`, borderRadius: 6,
@@ -15541,7 +15589,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                   <button onClick={() => { setConfirmDelete(false); setDeleteErr(null); }} style={{
                     ...buttonStyle(), background: "transparent", color: theme.textSub,
                     padding: "5px 10px", fontSize: "11px",
-                  }}>Ne</button>
+                  }}>Zrušit</button>
                   {deleteErr && (
                     <span style={{ fontSize: "11px", color: theme.red }}>{deleteErr}</span>
                   )}
@@ -15583,7 +15631,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                       {" "}{person.introduced_name}
                     </span>
                   </span>
-                  <button onClick={clearIntroducer} title="Zrušit vazbu" style={{
+                  <button onClick={clearIntroducer} title="Zrušit vazbu" aria-label="Zrušit vazbu" style={{
                     ...buttonStyle(), background: "transparent", color: theme.textDim,
                     fontSize: "12px", padding: "0 3px",
                   }}>×</button>
@@ -15737,11 +15785,11 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                   )}
                 </div>
                 <button onClick={() => setEditingFact(editingFact === r.id ? null : r.id)}
-                  title="Upravit" style={{
+                  title="Upravit" aria-label="Upravit" style={{
                     ...buttonStyle(), background: "transparent", color: theme.textDim,
                     fontSize: "12px", padding: "0 4px", flex: "0 0 auto",
                   }}>✎</button>
-                <button onClick={() => remove(r.id)} title="Smazat" style={{
+                <button onClick={() => remove(r.id)} title="Smazat" aria-label="Smazat" style={{
                   ...buttonStyle(), background: "transparent", color: theme.textDim,
                   fontSize: "13px", padding: "0 4px", flex: "0 0 auto",
                 }}>×</button>
@@ -16618,7 +16666,7 @@ function SetupScreen({ onDone }) {
       color: theme.text, display: "flex", alignItems: "center",
       justifyContent: "center", padding: "20px",
     }}>
-      <style>{GLOBAL_CSS}</style>
+      <style>{globalCss(theme)}</style>
       <div style={{ width: "300px", textAlign: "center", animation: "fadeIn 0.4s" }}>
         <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px" }}>Rodinné úkoly</div>
         <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "28px" }}>
@@ -16726,7 +16774,7 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
       color: theme.text, display: "flex", alignItems: "center",
       justifyContent: "center", padding: "20px",
     }}>
-      <style>{GLOBAL_CSS}</style>
+      <style>{globalCss(theme)}</style>
       <form onSubmit={submit} style={{ width: "320px", animation: "fadeIn 0.4s" }}>
         <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px", textAlign: "center" }}>
           Rodinné úkoly
@@ -16823,7 +16871,7 @@ function LoginScreen({ users, onLogin, themeName }) {
       color: theme.text, display: "flex", alignItems: "center",
       justifyContent: "center", padding: "20px",
     }}>
-      <style>{GLOBAL_CSS}</style>
+      <style>{globalCss(theme)}</style>
       <div style={{ width: "320px", textAlign: "center", animation: "fadeIn 0.4s" }}>
         <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px" }}>Rodinné úkoly</div>
         <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: "28px" }}>Vyber se a zadej PIN</div>
@@ -17154,7 +17202,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
         display: "flex", alignItems: "center", gap: "8px",
       }}>
         <button onClick={() => { saveTimeSpent(); onClose(false); }}
-          title="Zavřít Focus"
+          title="Zavřít Focus" aria-label="Zavřít Focus"
           style={{
             ...buttonStyle(), padding: "6px 10px", fontSize: "13px",
             background: theme.inputBg, color: theme.textSub,
@@ -17165,7 +17213,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
         <span style={{ flex: 1, fontSize: "12px", color: theme.textSub, textAlign: "center" }}>
           🎯 Fokus — úkol {currentIdx + 1} / {todaysTasks.length}
         </span>
-        <button onClick={() => setShowSettings(!showSettings)} title="Nastavení"
+        <button onClick={() => setShowSettings(!showSettings)} title="Nastavení" aria-label="Nastavení"
           style={{
             ...buttonStyle(), padding: "6px 10px", fontSize: "14px",
             background: showSettings ? theme.accentSoft : "transparent",
@@ -17424,7 +17472,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
                   </span>
                   {entry.author === currentUser.name && (
                     <button onClick={() => deleteScratchEntry(entry.id)}
-                      title="Smazat"
+                      title="Smazat" aria-label="Smazat"
                       style={{
                         background: "none", border: "none",
                         color: theme.textDim, cursor: "pointer", fontSize: "12px",
@@ -18257,9 +18305,9 @@ function FolderManagerPanel({
                   )}
                 </span>
                 <button onClick={() => moveCategoryUp(cat.id)} disabled={idx === 0}
-                  title="Posunout nahoru" style={btnStyle}>↑</button>
+                  title="Posunout nahoru" aria-label="Posunout nahoru" style={btnStyle}>↑</button>
                 <button onClick={() => moveCategoryDown(cat.id)} disabled={idx === orderedCategories.length - 1}
-                  title="Posunout dolů" style={btnStyle}>↓</button>
+                  title="Posunout dolů" aria-label="Posunout dolů" style={btnStyle}>↓</button>
                 <button onClick={() => toggleHiddenCategory(cat.id)}
                   title={isHidden ? "Zobrazit" : "Skrýt"} style={{
                     ...btnStyle,
@@ -18305,9 +18353,9 @@ function FolderManagerPanel({
                     )}
                   </span>
                   <button onClick={() => moveListUp(list.id)} disabled={idx === 0}
-                    title="Posunout nahoru" style={btnStyle}>↑</button>
+                    title="Posunout nahoru" aria-label="Posunout nahoru" style={btnStyle}>↑</button>
                   <button onClick={() => moveListDown(list.id)} disabled={idx === orderedLists.length - 1}
-                    title="Posunout dolů" style={btnStyle}>↓</button>
+                    title="Posunout dolů" aria-label="Posunout dolů" style={btnStyle}>↓</button>
                   <button onClick={() => toggleHiddenList(list.id)}
                     title={isHidden ? "Zobrazit" : "Skrýt"} style={{
                       ...btnStyle,
@@ -18319,13 +18367,13 @@ function FolderManagerPanel({
                   {isMine && (
                     <>
                       <button onClick={() => onEditList(list)}
-                        title="Upravit (název, ikona)" style={{
+                        title="Upravit (název, ikona)" aria-label="Upravit (název, ikona)" style={{
                           ...btnStyle,
                           color: theme.accent,
                           background: `${theme.accent}10`,
                         }}>✏️</button>
                       <button onClick={() => handleDeleteList(list)}
-                        title="Smazat složku" style={{
+                        title="Smazat složku" aria-label="Smazat složku" style={{
                           ...btnStyle,
                           color: theme.red,
                           background: `${theme.red}10`,
@@ -18356,7 +18404,7 @@ function FolderManagerPanel({
             border: "none", borderRadius: "8px", cursor: "pointer", fontFamily: FONT,
             flex: 1,
           }}>
-            Hotovo
+            Zavřít
           </button>
         </div>
       </div>
@@ -18434,7 +18482,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                   </div>
                 </div>
                 {b.mode === "block" ? (
-                  <button onClick={() => onBlock(b.blocked_name, "mute")} title="Změnit na Ztlumit"
+                  <button onClick={() => onBlock(b.blocked_name, "mute")} title="Změnit na Ztlumit" aria-label="Změnit na Ztlumit"
                     style={{
                       ...buttonStyle(),
                       padding: "4px 10px", fontSize: 11, fontWeight: 600,
@@ -18444,7 +18492,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                     🔇
                   </button>
                 ) : (
-                  <button onClick={() => onBlock(b.blocked_name, "block")} title="Změnit na Blokovat"
+                  <button onClick={() => onBlock(b.blocked_name, "block")} title="Změnit na Blokovat" aria-label="Změnit na Blokovat"
                     style={{
                       ...buttonStyle(),
                       padding: "4px 10px", fontSize: 11, fontWeight: 600,
@@ -18454,7 +18502,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                     🚫
                   </button>
                 )}
-                <button onClick={() => onUnblock(b.blocked_name)} title="Zrušit"
+                <button onClick={() => onUnblock(b.blocked_name)} title="Zrušit" aria-label="Zrušit"
                   style={{
                     ...buttonStyle(),
                     padding: "4px 10px", fontSize: 11, fontWeight: 600,
@@ -18818,7 +18866,7 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
                 background: "transparent", color: theme.textSub,
                 border: `1px solid ${theme.inputBorder}`,
               }}>
-                Odstranit
+                Smazat
               </button>
             </div>
           )}
@@ -19529,7 +19577,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                   <button onClick={() => {
                     setEditingPinFor(u.name);
                     setNewPinInput("");
-                  }} title="Resetovat PIN" style={{
+                  }} title="Resetovat PIN" aria-label="Resetovat PIN" style={{
                     ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
                     background: theme.accentSoft, color: theme.accent,
                     border: `1px solid ${theme.accentBorder}`, fontWeight: 600,
@@ -19572,7 +19620,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                     }} />
                   <button
                     onClick={() => setNewPinInput(generateRandomPin())}
-                    title="Vygenerovat náhodný PIN"
+                    title="Vygenerovat náhodný PIN" aria-label="Vygenerovat náhodný PIN"
                     style={{
                       ...buttonStyle(), padding: "6px 10px", fontSize: "11px",
                       background: theme.inputBg, color: theme.text,
@@ -20441,7 +20489,7 @@ function SyncStatusBar({ theme, onRetry }) {
       )}
       <button
         onClick={() => { if (severity === "error") acknowledgeLostWrites(); setHidden(true); }}
-        title="Skrýt"
+        title="Skrýt" aria-label="Skrýt"
         style={{
           ...buttonStyle(),
           background: "transparent",
@@ -20647,7 +20695,7 @@ function StoryQuotePersonInput({ value, suggestions, onChange, theme }) {
         {value && (
           <button
             onClick={() => onChange("")}
-            title="Smazat autora"
+            title="Smazat autora" aria-label="Smazat autora"
             style={{
               background: "none", border: "none", cursor: "pointer",
               color: theme.textSub, fontSize: 16, padding: "0 4px",
@@ -21047,7 +21095,7 @@ function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden }) {
         )}
         <button
           onClick={() => setMenu(m => !m)}
-          title="Přidat do deníku"
+          title="Přidat do deníku" aria-label="Přidat do deníku"
           style={{
             width: 52, height: 52, borderRadius: "50%",
             border: "none", cursor: "pointer",
@@ -21509,7 +21557,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                             <div style={{ display: "flex", gap: 2 }}>
                               <button
                                 onClick={() => { setEditingId(e.id); setEditText(e.text); }}
-                                title="Upravit"
+                                title="Upravit" aria-label="Upravit"
                                 style={{
                                   background: "none", border: "none", cursor: "pointer",
                                   color: theme.textSub, fontSize: 12, padding: "2px 5px",
@@ -21517,7 +21565,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                               >✎</button>
                               <button
                                 onClick={() => removeEntry(e.id)}
-                                title="Smazat"
+                                title="Smazat" aria-label="Smazat"
                                 style={{
                                   background: "none", border: "none", cursor: "pointer",
                                   color: theme.textSub, fontSize: 12, padding: "2px 5px",
@@ -21606,11 +21654,11 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                         ...buttonStyle(), padding: "5px 12px", fontSize: 12,
                         background: theme.inputBg, color: theme.text,
                         border: `1px solid ${theme.inputBorder}`,
-                      }}>Ne</button>
+                      }}>Zrušit</button>
                       <button onClick={deleteDay} style={{
                         ...buttonStyle(), padding: "5px 12px", fontSize: 12,
                         background: theme.red, color: "#fff",
-                      }}>Ano, smazat</button>
+                      }}>Smazat den</button>
                     </div>
                   ) : (
                     <button onClick={() => setConfirmDelete(true)} style={{
@@ -22289,7 +22337,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <button
               onClick={onQuickAdd}
-              title="Nový zápis"
+              title="Nový zápis" aria-label="Nový zápis"
               style={{
                 ...buttonStyle(), padding: "4px 13px", fontSize: 17, fontWeight: 700,
                 background: theme.accent, color: "#fff", lineHeight: 1.2,
@@ -22327,14 +22375,14 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                 background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
                 borderRadius: 8, padding: "3px 6px",
               }}>
-                <button onClick={() => shiftCursor(-1)} title="Předchozí" style={{
+                <button onClick={() => shiftCursor(-1)} title="Předchozí" aria-label="Předchozí" style={{
                   background: "none", border: "none", cursor: "pointer",
                   color: theme.textSub, fontSize: 19, padding: "2px 12px", lineHeight: 1,
                 }}>‹</button>
                 <div style={{ fontSize: 12, fontWeight: 700, color: theme.text }}>
                   {grouping === "week" ? formatStoryWeek(cursor) : formatStoryMonth(cursor)}
                 </div>
-                <button onClick={() => shiftCursor(1)} title="Další" style={{
+                <button onClick={() => shiftCursor(1)} title="Další" aria-label="Další" style={{
                   background: "none", border: "none", cursor: "pointer",
                   color: theme.textSub, fontSize: 19, padding: "2px 12px", lineHeight: 1,
                 }}>›</button>
@@ -22500,12 +22548,12 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                 <div style={{ flex: 1 }} />
                 {quotes.length > 0 && (
                   <>
-                    <button onClick={doCopyQuotes} title="Kopírovat do schránky" style={{
+                    <button onClick={doCopyQuotes} title="Kopírovat do schránky" aria-label="Kopírovat do schránky" style={{
                       ...buttonStyle(), padding: "6px 11px", fontSize: 12,
                       background: theme.inputBg, color: theme.text,
                       border: `1px solid ${theme.inputBorder}`,
                     }}>⧉ Kopírovat</button>
-                    <button onClick={doShareQuotes} title="Sdílet" style={{
+                    <button onClick={doShareQuotes} title="Sdílet" aria-label="Sdílet" style={{
                       ...buttonStyle(), padding: "6px 11px", fontSize: 12,
                       background: theme.inputBg, color: theme.text,
                       border: `1px solid ${theme.inputBorder}`,
@@ -22668,7 +22716,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                             ...buttonStyle(), padding: "4px 10px", fontSize: 11,
                             background: theme.card, color: theme.text,
                             border: `1px solid ${theme.inputBorder}`,
-                          }}>Ne</button>
+                          }}>Zrušit</button>
                           <button onClick={() => deleteQuote(s.date)} disabled={eqBusy} style={{
                             ...buttonStyle(), padding: "4px 10px", fontSize: 11,
                             background: theme.red, color: "#fff",
@@ -22693,15 +22741,15 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                               ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
                               : <span style={{ fontSize: 11, color: theme.textDim }}>(bez autora)</span>}
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <button onClick={() => startEditQuote(s)} title="Upravit hlášku" style={{
+                              <button onClick={() => startEditQuote(s)} title="Upravit hlášku" aria-label="Upravit hlášku" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 12, color: theme.textSub, padding: "2px 4px",
                               }}>✎</button>
-                              <button onClick={() => setConfirmDeleteQuote(s.date)} title="Smazat hlášku" style={{
+                              <button onClick={() => setConfirmDeleteQuote(s.date)} title="Smazat hlášku" aria-label="Smazat hlášku" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 12, color: theme.textSub, padding: "2px 4px",
                               }}>🗑</button>
-                              <button onClick={() => onOpenDay(s.date)} title="Otevřít den" style={{
+                              <button onClick={() => onOpenDay(s.date)} title="Otevřít den" aria-label="Otevřít den" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 10, color: theme.textSub, padding: "2px 4px",
                               }}>{formatStoryDateShort(s.date)} →</button>
@@ -22885,7 +22933,7 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
                       <button onClick={saveEdit} style={{
                         ...buttonStyle(), padding: "5px 10px", fontSize: 12,
                         background: theme.accent, color: "#fff",
-                      }}>OK</button>
+                      }}>Uložit</button>
                       <button onClick={() => setEditingId(null)} style={{
                         background: "none", border: "none", color: theme.textSub,
                         fontSize: 16, cursor: "pointer", padding: "0 3px",
@@ -22900,7 +22948,7 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
                         ...buttonStyle(), padding: "4px 10px", fontSize: 11,
                         background: theme.card, color: theme.text,
                         border: `1px solid ${theme.inputBorder}`,
-                      }}>Ne</button>
+                      }}>Zrušit</button>
                       <button onClick={() => remove(c.id)} style={{
                         ...buttonStyle(), padding: "4px 10px", fontSize: 11,
                         background: theme.red, color: "#fff",
@@ -22910,12 +22958,12 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
                     <>
                       <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{c.icon}</span>
                       <span style={{ flex: 1, fontSize: 13, color: theme.text }}>{c.label}</span>
-                      <button onClick={() => move(idx, -1)} disabled={idx === 0} title="Nahoru"
+                      <button onClick={() => move(idx, -1)} disabled={idx === 0} title="Nahoru" aria-label="Nahoru"
                         style={{
                           background: "none", border: "none", cursor: idx === 0 ? "default" : "pointer",
                           color: idx === 0 ? theme.textDim : theme.textSub, fontSize: 12, padding: "2px 4px",
                         }}>▲</button>
-                      <button onClick={() => move(idx, 1)} disabled={idx === list.length - 1} title="Dolů"
+                      <button onClick={() => move(idx, 1)} disabled={idx === list.length - 1} title="Dolů" aria-label="Dolů"
                         style={{
                           background: "none", border: "none",
                           cursor: idx === list.length - 1 ? "default" : "pointer",
@@ -22923,12 +22971,12 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
                           fontSize: 12, padding: "2px 4px",
                         }}>▼</button>
                       <button onClick={() => { setEditingId(c.id); setEditIcon(c.icon); setEditLabel(c.label); }}
-                        title="Upravit"
+                        title="Upravit" aria-label="Upravit"
                         style={{
                           background: "none", border: "none", cursor: "pointer",
                           color: theme.textSub, fontSize: 12, padding: "2px 4px",
                         }}>✎</button>
-                      <button onClick={() => setConfirmId(c.id)} title="Smazat"
+                      <button onClick={() => setConfirmId(c.id)} title="Smazat" aria-label="Smazat"
                         style={{
                           background: "none", border: "none", cursor: "pointer",
                           color: theme.textSub, fontSize: 12, padding: "2px 4px",
@@ -23006,7 +23054,7 @@ function StorySettingsSheet({ currentUser, theme, categories, onClose, onCategor
                         }}>{qp.count}</span>
                         <button
                           onClick={() => { setRenamingPerson(qp.name); setRenameValue(qp.name); }}
-                          title="Přejmenovat"
+                          title="Přejmenovat" aria-label="Přejmenovat"
                           style={{
                             background: "none", border: "none", cursor: "pointer",
                             color: theme.textSub, fontSize: 12, padding: "2px 6px",
@@ -26444,7 +26492,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       display: "flex", flexDirection: "column",
       overflow: "hidden",
     }}>
-      <style>{GLOBAL_CSS}</style>
+      <style>{globalCss(theme)}</style>
 
       {/* ── Header — vždy viditelný, kompaktní výška (cca jako Focus tlačítko) ── */}
       <div ref={headerRef} style={{
@@ -26458,7 +26506,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Focus mode trigger - vlevo */}
           <button onClick={() => setShowFocus(true)}
-            title="Spustit Focus mode"
+            title="Spustit Focus mode" aria-label="Spustit Focus mode"
             style={{
               background: theme.accentSoft,
               border: `1px solid ${theme.accentBorder}`,
@@ -26477,7 +26525,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           {/* Search ikona */}
           <button onClick={() => { setSearchDraft(""); setShowSearchSheet(true); }}
-            title="Hledat"
+            title="Hledat" aria-label="Hledat"
             style={{
               background: "none", border: "none", cursor: "pointer",
               fontSize: "16px", padding: "6px 8px",
@@ -26493,7 +26541,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {windowWidth >= 720 && (<>
   {/* 🗺️ Mapa — znalostní báze vztahů */}
             <button onClick={() => setShowMapaSheet(true)}
-              title="Mapa — co mi kdo řekl"
+              title="Mapa — co mi kdo řekl" aria-label="Mapa — co mi kdo řekl"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26517,7 +26565,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               setObchodZalozka("lide");
               setShowObchodSheet(true);
             }}
-              title="Lidé — investoři a zprostředkovatelé"
+              title="Lidé — investoři a zprostředkovatelé" aria-label="Lidé — investoři a zprostředkovatelé"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26538,7 +26586,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               setObchodZalozka(null);
               setShowObchodSheet(true);
             }}
-              title="Obchod — zakázky a investoři"
+              title="Obchod — zakázky a investoři" aria-label="Obchod — zakázky a investoři"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26555,7 +26603,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {windowWidth >= 720 && (<>
   {/* 📔 Denní příběh */}
             <button onClick={() => setShowStorySheet(true)}
-              title="Denní příběh"
+              title="Denní příběh" aria-label="Denní příběh"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26569,7 +26617,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Stats ikona — jen na PC/tablet, na mobilu je v menu */}
           {windowWidth >= 720 && (
             <button onClick={() => setShowStatsSheet(true)}
-              title="Statistiky"
+              title="Statistiky" aria-label="Statistiky"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26591,7 +26639,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               console.warn("Reminders refresh failed:", e);
             }
           }}
-            title="Připomínky"
+            title="Připomínky" aria-label="Připomínky"
             style={{
               background: "none", border: "none", cursor: "pointer",
               fontSize: "16px", padding: "6px 8px",
@@ -26618,7 +26666,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Trash ikona — jen na PC/tablet, na mobilu je v menu */}
           {windowWidth >= 720 && (
             <button onClick={() => setViewStatus("trash")}
-              title="Koš"
+              title="Koš" aria-label="Koš"
               style={{
                 background: viewStatus === "trash" ? theme.inputBg : "none",
                 border: "none", cursor: "pointer",
@@ -26654,7 +26702,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Calendar ikona — jen na PC/tablet */}
           {windowWidth >= 720 && (
             <button onClick={() => setShowCalendarSheet(true)}
-              title="Kalendář"
+              title="Kalendář" aria-label="Kalendář"
               style={{
                 background: "none", border: "none", cursor: "pointer",
                 fontSize: "16px", padding: "6px 8px",
@@ -26668,7 +26716,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Archive ikona — jen na PC/tablet, na mobilu je v menu */}
           {windowWidth >= 720 && (
             <button onClick={() => setViewStatus("archive")}
-              title="Archiv"
+              title="Archiv" aria-label="Archiv"
               style={{
                 background: viewStatus === "archive" ? theme.inputBg : "none",
                 border: "none", cursor: "pointer",
@@ -26712,7 +26760,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               console.warn("Notes refresh failed:", e);
             }
           }}
-            title="Poznámky"
+            title="Poznámky" aria-label="Poznámky"
             style={{
               background: "none", border: "none", cursor: "pointer",
               fontSize: "16px", padding: "6px 8px",
@@ -26750,7 +26798,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               by se poznat, jestli na tebe někdo čeká, nebo si jen
               sám sobě něco naplánoval na příští týden. */}
           <button onClick={() => setUpdatesPanelOpen(true)}
-            title="Zprávy — co udělali ostatní"
+            title="Zprávy — co udělali ostatní" aria-label="Zprávy — co udělali ostatní"
             className={zvoneckekBlika ? "zvonecek-bliká" : undefined}
             style={{
               background: "none", border: "none", cursor: "pointer",
@@ -26777,7 +26825,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           </button>
           {/* User menu trigger */}
           <button onClick={() => setShowUserMenu(s => !s)}
-            title="Uživatel"
+            title="Uživatel" aria-label="Uživatel"
             style={{
               flexShrink: 0,   // nikdy se nesmí vytlačit z lišty — je to jediná cesta k nastavení
               fontSize: "12px", fontWeight: 600, color: theme.text,
@@ -28016,7 +28064,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               {zakazkaFiltr && (
                 <span style={{ display: "inline-flex", flexShrink: 0, gap: 4 }}>
                   <button onClick={() => { setZakazkaFiltr(null); setZakazkaFiltrId(null); }}
-                    title="Zrušit zúžení na jednu zakázku"
+                    title="Zrušit zúžení na jednu zakázku" aria-label="Zrušit zúžení na jednu zakázku"
                     style={{
                       ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
                       fontWeight: 700, background: theme.purple, color: "#fff",
@@ -28032,7 +28080,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       setObchodDraft(""); setObchodOsoba(null);
                       setObchodZakazka(zakazkaFiltrId);
                       setShowObchodSheet(true);
-                    }} title="Otevřít tuhle zakázku" style={{
+                    }} title="Otevřít tuhle zakázku" aria-label="Otevřít tuhle zakázku" style={{
                       ...buttonStyle(), padding: "4px 10px", fontSize: "12px",
                       fontWeight: 700, background: "transparent", color: theme.purple,
                       border: `1px solid ${theme.purple}66`, borderRadius: "16px",
@@ -28256,7 +28304,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         else if (priorityFilter === "important") setPriorityFilter("urgent");
                         else setPriorityFilter("all");
                       }}
-                      title="Priorita"
+                      title="Priorita" aria-label="Priorita"
                       style={{
                         flex: 1, height: "35px",
                         background: priActive ? `${priColor}15` : theme.inputBg,
@@ -28269,7 +28317,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       {priIcon}
                     </button>
                     <button onClick={() => setShowMoreFilters(true)}
-                      title="Více filtrů"
+                      title="Více filtrů" aria-label="Více filtrů"
                       style={{
                         flex: 1, height: "35px",
                         background: hasMore ? `${theme.accent}15` : theme.inputBg,
@@ -28751,7 +28799,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 onClick={() => {
                   const trashed = tasks.filter(t => t.status === "deleted");
                   if (trashed.length === 0) return;
-                  if (!window.confirm(`Vyprázdnit koš? Trvale smazat ${trashed.length} úkolů?`)) return;
+                  if (!window.confirm(`Vyprázdnit koš? Smazat natrvalo ${trashed.length} úkolů?`)) return;
                   // Sekvenčně permanentně smazat všechny
                   (async () => {
                     for (const t of trashed) {
@@ -28873,14 +28921,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                               border: `1px solid ${theme.green}30`, fontWeight: 600,
                             }}>↩ Obnovit</button>
                             <button onClick={async () => {
-                              if (!confirm("Trvale smazat tuto poznámku?")) return;
+                              if (!confirm("Smazat natrvalo tuto poznámku?")) return;
                               await apiHardDeleteNote(n.id);
                               setNotes(prev => prev.filter(x => x.id !== n.id));
                             }} style={{
                               ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                               background: "transparent", color: theme.red,
                               border: `1px solid ${theme.red}40`, fontWeight: 600,
-                            }}>🗑 Trvale smazat</button>
+                            }}>🗑 Smazat natrvalo</button>
                           </div>
                         </div>
                       );
@@ -28923,7 +28971,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                             border: `1px solid ${theme.green}30`, fontWeight: 600,
                           }}>↩ Obnovit</button>
                           <button onClick={() => {
-                            if (!confirm("Trvale smazat tento zápis?")) return;
+                            if (!confirm("Smazat natrvalo tento zápis?")) return;
                             const task = tasks.find(t => t.id === entry.taskId);
                             if (!task) return;
                             const newPad = (task.scratchPad || []).filter(e => e.id !== entry.id);
@@ -28934,7 +28982,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                             ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                             background: "transparent", color: theme.red,
                             border: `1px solid ${theme.red}40`, fontWeight: 600,
-                          }}>🗑 Trvale smazat</button>
+                          }}>🗑 Smazat natrvalo</button>
                         </div>
                       </div>
                     ))}
