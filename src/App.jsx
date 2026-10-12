@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261012_1130";
+const FILE_VERSION = "261012_1200";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -14723,6 +14723,111 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initia
   );
 }
 
+/* Rozseká text na kusy podle hledaného výrazu, ať jde shoda
+   zvýraznit. Vrací se vždy původní text, jen rozdělený — nic se
+   nepřepisuje, takže se nemůže zkomolit diakritika.
+
+   Dva průchody a oba se počítají:
+
+   1. Přesný výskyt, bez ohledu na diakritiku a velikost písmen.
+      "komin" najde "Komínem".
+
+   2. Shoda na kmeni slova. Hledání v Mapě běží na serveru a je
+      volnější než přesný výskyt — na dotaz "financo" vrátí i větu
+      se slovem "financuje". Kdyby se zvýrazňoval jen přesný výskyt,
+      u takového nálezu by nesvítilo nic a vypadalo by to jako
+      chyba hledání.
+
+   Oba průchody běží vždycky a výsledky se slučují. Dřív se druhý
+   pouštěl jen tehdy, když první nic nenašel — a věta "financuje
+   a financovat" pak měla zvýrazněné jen to druhé slovo.
+
+   Do druhého průchodu smí jen dotaz od čtyř písmen a shodovat se musí
+   taky aspoň čtyři — jinak by "prod" označilo i "profese" a "problém".
+   Cenou je, že skloňování na kratších slovech ("byty" vs "bytů") se
+   nezvýrazní. To je lepší než zvýraznit něco, co s hledáním nesouvisí:
+   jakmile tomu přestaneš věřit jednou, je k ničemu celé. */
+function zvyrazniText(text, dotaz) {
+  const t = String(text || "");
+  const q = String(dotaz || "").trim();
+  if (!q) return [{ text: t, shoda: false }];
+
+  const bez = (x) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const tn = bez(t), qn = bez(q);
+  if (!qn) return [{ text: t, shoda: false }];
+
+  const useky = [];
+
+  // ── 1. přesný výskyt ──
+  let i = 0;
+  while (i < tn.length) {
+    const j = tn.indexOf(qn, i);
+    if (j < 0) break;
+    useky.push([j, j + qn.length]);
+    i = j + qn.length;
+  }
+
+  // ── 2. shoda na kmeni ──
+  // Označí se jen ta část slova, která s dotazem opravdu sedí, ne celé
+  // slovo. "financo" tak v "financuje" podbarví "financ" — je vidět,
+  // proč se ten záznam našel, a nepředstírá se shoda, která tam není.
+  //
+  // Čtyři písmena jsou dolní hranice schválně. Při třech by "prod"
+  // označilo i "profese" a "problém", a jakmile zvýraznění jednou
+  // ukáže něco, co s hledáním nesouvisí, přestaneš mu věřit celé.
+  const MIN_DOTAZ = 4, MIN_KMEN = 4;
+  const slovaDotazu = qn.split(/[^a-z0-9]+/).filter(w => w.length >= MIN_DOTAZ);
+  if (slovaDotazu.length) {
+    const re = /[a-z0-9]+/g;
+    let m;
+    while ((m = re.exec(tn)) !== null) {
+      const slovo = m[0];
+      let nejlepsi = 0;
+      for (const qs of slovaDotazu) {
+        let shodnych = 0;
+        while (shodnych < slovo.length && shodnych < qs.length
+               && slovo[shodnych] === qs[shodnych]) shodnych++;
+        if (shodnych > nejlepsi) nejlepsi = shodnych;
+      }
+      if (nejlepsi >= MIN_KMEN) useky.push([m.index, m.index + nejlepsi]);
+    }
+  }
+
+  if (useky.length === 0) return [{ text: t, shoda: false }];
+
+  // Úseky se můžou překrývat (přesná shoda uvnitř slova, které prošlo
+  // i na kmen). Seřadit a slít, jinak by se text rozsekal nadvakrát
+  // a kusy by se v součtu nerovnaly originálu.
+  useky.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const slite = [];
+  for (const u of useky) {
+    const posledni = slite[slite.length - 1];
+    if (posledni && u[0] <= posledni[1]) posledni[1] = Math.max(posledni[1], u[1]);
+    else slite.push([u[0], u[1]]);
+  }
+
+  const kusy = [];
+  let pos = 0;
+  for (const [od, doo] of slite) {
+    if (od > pos) kusy.push({ text: t.slice(pos, od), shoda: false });
+    kusy.push({ text: t.slice(od, doo), shoda: true });
+    pos = doo;
+  }
+  if (pos < t.length) kusy.push({ text: t.slice(pos), shoda: false });
+  return kusy;
+}
+
+function Zvyrazneno({ text, dotaz, theme }) {
+  return zvyrazniText(text, dotaz).map((k, i) =>
+    k.shoda
+      ? <mark key={i} style={{
+          background: `${theme.yellow}55`, color: theme.text,
+          borderRadius: 3, padding: "0 1px",
+        }}>{k.text}</mark>
+      : <span key={i}>{k.text}</span>
+  );
+}
+
 function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuery = "",
   initialPerson = null, initialWho = null, onOpenZakazka }) {
   useEscapeKey(onClose);
@@ -14894,7 +14999,9 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
       border: `1px solid ${r.person_name ? theme.cardBorder : theme.yellow + "55"}`,
       borderRadius: "10px", padding: "10px 12px", marginBottom: "7px",
     }}>
-      <div style={{ fontSize: "13.5px", color: theme.text, lineHeight: 1.5 }}>{r.content}</div>
+      <div style={{ fontSize: "13.5px", color: theme.text, lineHeight: 1.5 }}>
+        <Zvyrazneno text={r.content} dotaz={query} theme={theme} />
+      </div>
       <div style={{
         display: "flex", alignItems: "center", gap: "7px", flexWrap: "wrap",
         marginTop: "6px", fontSize: "11px", color: theme.textMid,
@@ -14907,7 +15014,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
               background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
               color: theme.accent, padding: "1px 7px", borderRadius: "10px",
               fontWeight: 600, cursor: "pointer",
-            }}>{r.person_name}</span>
+            }}><Zvyrazneno text={r.person_name} dotaz={query} theme={theme} /></span>
         ) : (
           <button onClick={() => setAssigning(assigning === r.id ? null : r.id)} style={{
             ...buttonStyle(), background: "transparent",
