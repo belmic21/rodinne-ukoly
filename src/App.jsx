@@ -99,7 +99,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261012_1050";
+const FILE_VERSION = "261012_1130";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1271,6 +1271,30 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px rgba(59,130,246,0.22);
 }
 input:disabled, textarea:disabled, select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Nepřečtený úkol pulzuje, dokud ho neotevřeš — jinak ho
+   v seznamu třiceti úkolů nenajdeš. Tep je pomalý a slabý
+   schválně: několik nepřečtených najednou nesmí udělat
+   z obrazovky vánoční stromek. */
+@keyframes neprecteny {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(34,197,94,0.22); }
+}
+.neprecteny { animation: neprecteny 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .neprecteny { animation: none; box-shadow: 0 0 0 2px rgba(34,197,94,0.35); }
+}
+
+/* Zvoneček při nové zprávě. Pulzuje šest vteřin a přestane —
+   trvale blikající ikona přestane být signálem. */
+@keyframes zvonecek {
+  0%, 100% { transform: scale(1); }
+  10%  { transform: scale(1.25) rotate(-12deg); }
+  20%  { transform: scale(1.25) rotate(12deg); }
+  30%  { transform: scale(1) rotate(0deg); }
+}
+.zvonecek-bliká { animation: zvonecek 1.2s ease-in-out 5; }
+@media (prefers-reduced-motion: reduce) { .zvonecek-bliká { animation: none; } }
 
 /* Propadlý termín. Nestačí ho obarvit — barvu v seznamu přehlédneš.
    Tep je pomalý schválně: rychlé blikání v periferním vidění unavuje
@@ -10241,7 +10265,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   if (taskIsDeleted) leftBorderColor = theme.textDim; // muted gray left border
 
   return (
-    <div ref={cardRef} id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`} style={{
+    <div ref={cardRef}
+      id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`}
+      className={isNew && !taskIsDone && !taskIsDeleted ? "neprecteny" : undefined}
+      style={{
       position: "relative",
       borderRadius: "12px",
       // Elevate this card above siblings when a dropdown or detail is open,
@@ -10302,10 +10329,13 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         : (taskIsDone ? 0.35 : taskIsDeleted ? 0.55 : (recentlyAdded ? 1 - fadeProgress * 0.4 : 1)),
       cursor: "pointer",
       position: "relative",
+      // Nepřečtený úkol si pulzování řeší třídou .neprecteny, aby
+      // běželo pořád. Tady zůstává jen nájezd karty — dřív se
+      // "glow" pustil třikrát a skončil, takže úkol, na který ses
+      // hned nepodíval, přestal být k rozeznání.
       animation: actionAnim ? "actionCardGlow 0.55s ease-out"
         : isHighlighted ? "searchHighlight 2.4s ease-out"
         : recentlyAdded ? "newTaskHighlight 1.5s ease-out"
-        : isNew ? "glow 2s ease 3, slideUp 0.3s ease"
         : taskIsDone ? "completedFade 0.5s ease forwards"
         : "slideUp 0.3s ease",
       transform: `translateX(${swipeX}px) ${actionAnim ? "scale(1.02)" : ""}`,
@@ -19702,12 +19732,29 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
   });
 
   const totalNoteCount = Object.values(unseenItemNotesByTask).reduce((sum, arr) => sum + arr.length, 0);
+
+  /* ═══ Úkoly, které ti někdo zadal ═══
+     Tohle tu chybělo a byla to ta hlavní díra: když ti David zadal
+     úkol, zvoneček se nehnul. Dozvěděl ses to, až jsi na úkol ve
+     výpisu narazil — tedy náhodou.
+
+     Co se sem počítá: úkol není tvůj, jsi v něm uvedený jako ten,
+     kdo ho má udělat, a ještě jsi ho neotevřel. Nic jiného. */
+  const noveUkoly = tasks.filter(t => {
+    if (isDone(t) || isDeleted(t)) return false;
+    if (t.createdBy === currentUser.name) return false;
+    if (!t.assignedTo?.includes(currentUser.name)) return false;
+    return !t.seenBy?.includes(currentUser.name);
+  });
+  const noveUkolyIds = new Set(noveUkoly.map(t => t.id));
+
   const taskIdsWithUpdates = new Set([
+    ...noveUkoly.map(t => t.id),
     ...Object.keys(byTask),
     ...Object.keys(unseenItemNotesByTask),
   ]);
 
-  const totalCount = relevantComments.length + totalNoteCount;
+  const totalCount = relevantComments.length + totalNoteCount + noveUkoly.length;
   const taskCount = taskIdsWithUpdates.size;
   const hasUpdates = totalCount > 0;
 
@@ -19817,6 +19864,27 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                     → {task.title}
                   </button>
                 </div>
+
+                {/* Kdo a kdy ti ho zadal. Bez téhle řádky by se nový
+                    úkol v panelu nedal odlišit od úkolu, u kterého
+                    jen přibyl komentář. */}
+                {noveUkolyIds.has(taskId) && (
+                  <div style={{
+                    padding: "6px 10px", marginBottom: "4px",
+                    background: `${theme.green}12`,
+                    borderLeft: `3px solid ${theme.green}`,
+                    borderRadius: "6px", fontSize: "12px",
+                    display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+                  }}>
+                    <span style={{ fontWeight: 700, color: theme.green }}>
+                      Zadal ti úkol
+                    </span>
+                    <span style={{ color: theme.text }}>{task.createdBy}</span>
+                    <span style={{ fontSize: "10px", color: theme.textMid }}>
+                      {formatRelativeTime(task.createdAt)}
+                    </span>
+                  </div>
+                )}
 
                 {/* Comments list */}
                 {taskComments.map(c => {
@@ -23004,6 +23072,62 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeferred, setShowDeferred] = useState(false); // Show deferred tasks in active view
   const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
+
+  /* ═══ Kolik věcí čeká na MOU reakci ═══
+     Jedno číslo, jedna otázka. Počítá se jen to, co udělal někdo
+     jiný a co jsi ještě neviděl:
+       · úkol, který ti někdo zadal
+       · komentář u úkolu, který je tvůj nebo ho máš udělat
+       · poznámka u položky takového úkolu
+
+     Co se schválně NEPOČÍTÁ: cokoli, co jsi napsal ty sám, a tvoje
+     vlastní termíny a připomínky. Odznak, který svítí pořád, oko
+     za týden přestane vnímat — a pak je k ničemu i tehdy, kdy na
+     něm záleží. */
+  const cekaNaMe = useMemo(() => {
+    if (!currentUser?.name) return 0;
+    const jmeno = currentUser.name;
+    const mujUkol = (t) => t.createdBy === jmeno || t.assignedTo?.includes(jmeno);
+
+    const zadane = tasks.filter(t =>
+      !isDone(t) && !isDeleted(t) &&
+      t.createdBy !== jmeno &&
+      t.assignedTo?.includes(jmeno) &&
+      !t.seenBy?.includes(jmeno)
+    ).length;
+
+    const odpovedi = comments.filter(c =>
+      c.author !== jmeno &&
+      !c.seenBy?.includes(jmeno) &&
+      tasks.some(t => t.id === c.taskId && mujUkol(t))
+    ).length;
+
+    const kPolozkam = tasks.reduce((sum, t) => {
+      if (isDeleted(t) || !mujUkol(t)) return sum;
+      return sum + (t.checklist || []).reduce((x, item) =>
+        x + (item.notes || []).filter(n =>
+          n.author !== jmeno && !n.seenBy?.includes(jmeno)
+        ).length, 0);
+    }, 0);
+
+    return zadane + odpovedi + kPolozkam;
+  }, [tasks, comments, currentUser?.name]);
+
+  /* Bliknutí jen při PŘÍRŮSTKU, a jen na chvíli. Trvale blikající
+     ikona je rušivá a po půl hodině ji člověk odfiltruje stejně
+     jako banner na webu. */
+  const [zvoneckekBlika, setZvoneckekBlika] = useState(false);
+  const minuleCekalo = useRef(null);
+  useEffect(() => {
+    if (minuleCekalo.current === null) { minuleCekalo.current = cekaNaMe; return; }
+    if (cekaNaMe > minuleCekalo.current) {
+      setZvoneckekBlika(true);
+      const id = setTimeout(() => setZvoneckekBlika(false), 6000);
+      minuleCekalo.current = cekaNaMe;
+      return () => clearTimeout(id);
+    }
+    minuleCekalo.current = cekaNaMe;
+  }, [cekaNaMe]);
   const [scrollToTaskId, setScrollToTaskId] = useState(null);
   // highlightedTaskId — úkol který právě navigoval (např. ze search) → flash glow na 2s
   const [highlightedTaskId, setHighlightedTaskId] = useState(null);
@@ -26490,20 +26614,37 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             📝
-            {notes.filter(n => !n.deletedAt).length > 0 && (
-              <span style={{
-                position: "absolute", top: 2, right: 2,
-                background: theme.textSub, color: "#fff",
-                borderRadius: "50%", minWidth: 14, height: 14,
-                fontSize: 9, fontWeight: 700,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                padding: "0 3px",
-              }}>{notes.filter(n => !n.deletedAt).length}</span>
-            )}
+            {/* Dřív tu byl počet VŠECH poznámek. Svítilo to pořád,
+                takže to neneslo žádnou informaci. Teď jen nepřečtené
+                od někoho jiného — a když nic není, odznak zmizí. */}
+            {(() => {
+              const nove = notes.filter(n =>
+                !n.deletedAt &&
+                n.createdBy !== currentUser?.name &&
+                !n.seenBy?.includes(currentUser?.name)
+              ).length;
+              if (nove === 0) return null;
+              return (
+                <span style={{
+                  position: "absolute", top: 2, right: 2,
+                  background: theme.green, color: "#fff",
+                  borderRadius: "50%", minWidth: 14, height: 14,
+                  fontSize: 9, fontWeight: 700,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 3px",
+                }}>{nove}</span>
+              );
+            })()}
           </button>
-          {/* Notifications - jen badge když existují */}
+          {/* Zvoneček je jediné místo, kde se dozvíš, co udělali
+              ostatní: zadaný úkol, odpověď, poznámka. Tvoje vlastní
+              plánování — termíny a připomínky — sem schválně nepatří,
+              to má ⏰. Kdyby se obojí slilo do jednoho čísla, nedalo
+              by se poznat, jestli na tebe někdo čeká, nebo si jen
+              sám sobě něco naplánoval na příští týden. */}
           <button onClick={() => setUpdatesPanelOpen(true)}
-            title="Zprávy"
+            title="Zprávy — co udělali ostatní"
+            className={zvoneckekBlika ? "zvonecek-bliká" : undefined}
             style={{
               background: "none", border: "none", cursor: "pointer",
               fontSize: "16px", padding: "6px 8px",
@@ -26513,21 +26654,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔔
             {(() => {
-              const unseenCount = comments.filter(c =>
-                c.author !== currentUser.name &&
-                !c.seenBy?.includes(currentUser.name) &&
-                tasks.find(t => t.id === c.taskId &&
-                  (t.createdBy === currentUser.name || t.assignedTo?.includes(currentUser.name)))
-              ).length;
-              const noteCount = tasks.reduce((sum, t) => {
-                if (isDeleted(t)) return sum;
-                if (t.createdBy !== currentUser.name && !t.assignedTo?.includes(currentUser.name)) return sum;
-                return sum + (t.checklist || []).reduce((s, item) =>
-                  s + (item.notes || []).filter(n =>
-                    n.author !== currentUser.name && !n.seenBy?.includes(currentUser.name)
-                  ).length, 0);
-              }, 0);
-              const total = unseenCount + noteCount;
+              const total = cekaNaMe;
               if (total === 0) return null;
               return (
                 <span style={{
@@ -27407,6 +27534,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
+              // Kliknutím v panelu je úkol přečtený. Bez tohohle by
+              // zvoneček dál ukazoval číslo u věci, na kterou ses
+              // právě podíval — a číslo, které nejde snížit, si oko
+              // za týden přestane všímat.
+              markSeen(taskId);
             }}
           />
         )}
