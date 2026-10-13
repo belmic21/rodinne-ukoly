@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_1000";
+const FILE_VERSION = "261013_1830";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1390,6 +1390,22 @@ input[type="checkbox"], input[type="radio"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
+}
+
+/* Tlačítka na řádku se ukazují až po najetí. Při třiceti úkolech
+   jich bylo na obrazovce přes sto a každý řádek vypadal jako
+   ovládací panel. Na dotykovém zařízení najetí neexistuje, tam
+   zůstávají vidět pořád. Při psaní klávesnicí se ukážou taky,
+   jinak by se na ně nedalo dostat tabulátorem. */
+@media (hover: hover) and (pointer: fine) {
+  .akce-radku {
+    opacity: 0;
+    transition: opacity 0.12s ease-out;
+  }
+  .karta-ukolu:hover .akce-radku,
+  .karta-ukolu:focus-within .akce-radku {
+    opacity: 1;
+  }
 }
 
 /* Vypnutý prvek vypadá vypnutě, ne rozbitě. */
@@ -11176,7 +11192,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   return (
     <div ref={cardRef}
       id={progressItem ? `progress-${task.id}-${progressItem.id}` : `task-${task.id}`}
-      className={isNew && !taskIsDone && !taskIsDeleted ? "neprecteny" : undefined}
+      className={`karta-ukolu${isNew && !taskIsDone && !taskIsDeleted ? " neprecteny" : ""}`}
       style={{
       position: "relative",
       borderRadius: "12px",
@@ -11347,7 +11363,15 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 } else {
                   onStatusChange(task.id, "in_progress");
                 }
-              }} title={inProgress ? "Pozastavit (vrátit do aktivních)" : "Rozpracovat"} style={{
+              }}
+              title={inProgress ? "Pozastavit (vrátit do aktivních)" : "Rozpracovat"}
+              aria-label={inProgress ? "Pozastavit, vrátit do aktivních" : "Rozpracovat úkol"}
+              /* Rozpracovaný úkol svítí pořád — to je stav, který chceš
+                 vidět. U ostatních je to jen nabídka akce, takže se
+                 ukáže až po najetí. Dřív stálo u každého řádku kolečko
+                 s výsečí, které nic neznamenalo a nikdo nevěděl proč. */
+              className={inProgress ? undefined : "akce-radku"}
+              style={{
                 width: "28px", height: "28px", minWidth: "28px",
                 borderRadius: "50%",
                 border: `2px solid ${inProgress ? theme.yellow : theme.yellow + "70"}`,
@@ -11772,7 +11796,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         </div>
 
         {/* Right side: quick snooze + chevron */}
-        <div style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginTop: "3px", marginLeft: "4px", position: "relative" }}>
+        <div className="akce-radku" style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginTop: "3px", marginLeft: "4px", position: "relative" }}>
           {/* Focus button — jump straight into Focus mode with this task */}
           {!taskIsDone && !taskIsDeleted && !taskIsArchived && !progressItem && canAct && onStartFocus && (
             <button
@@ -27498,8 +27522,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           <SyncPill theme={theme} online={online} onRetry={retrySync} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          {/* Search ikona */}
-          <button onClick={() => { setSearchDraft(""); setShowSearchSheet(true); }}
+          {/* Search ikona. Na telefonu ji nese spodní lišta, tady by
+              byla podruhé — a horní lišta je přesně to místo, odkud
+              ikony vyklízíme. */}
+          {jeRail && <button onClick={() => { setSearchDraft(""); setShowSearchSheet(true); }}
             title="Hledat" aria-label="Hledat"
             style={{
               background: "none", border: "none", cursor: "pointer",
@@ -27509,7 +27535,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onMouseEnter={e => e.currentTarget.style.background = theme.inputBg}
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             🔍
-          </button>
+          </button>}
           {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
               takže se nedá dostat k nastavení. Tyhle jsou tam
               pod ☰ s popiskem. */}
