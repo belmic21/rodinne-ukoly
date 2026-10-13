@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0710";
+const FILE_VERSION = "261013_0730";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8772,12 +8772,354 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
         <div style={{ borderTop: `1px solid ${theme.cardBorder}`, marginTop: 4, paddingTop: 2 }}>
           {prosle > 0 && radekPaty(
             `${prosle} ${prosle === 1 ? "věc je" : prosle < 5 ? "věci jsou" : "věcí je"} po termínu. Neřeší se tady.`,
-            "Ukázat", "Ukázat úkoly po termínu", () => onUkazProsle?.())}
+            "Protřídit", "Projít úkoly po termínu jeden po druhém", () => onUkazProsle?.())}
           {posledni && radekPaty(
             <>Naposled jsi byl u <strong style={{ color: theme.text, fontWeight: 600 }}>{posledni.title}</strong></>,
             "Pokračovat", "Otevřít, kde jsi skončil", () => onOtevriUkol?.(posledni.id))}
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* ═══ IKONY BOČNÍHO PRUHU ══════════════════════════════════════
+   Tažené SVG v jedné síle čáry, ne emoji. Emoji se na každém
+   zařízení kreslí jinak, nesedí na účaří a vedle sebe vypadají
+   jako sešit samolepek. Viz JAZYK.md, oddíl 7. */
+const IKONY_PRUHU = {
+  dnes:      "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
+  ukoly:     "M4 7h16M4 12h16M4 17h10",
+  zakazky:   "M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2",
+  lide:      "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3.5 20c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5M16 8.2a3 3 0 0 1 0 5.6M18.5 20c0-2.2-.9-3.8-2.3-4.8",
+  vazby:     "M6 9a2.4 2.4 0 1 0 0-4.8A2.4 2.4 0 0 0 6 9zM18 14.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM7 20.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM8.2 8.2l7.6 2.8M15.9 13.6l-7.2 3.2",
+  poznamky:  "M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM14 4v5h5",
+  kalendar:  "M4 7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM8 3v4M16 3v4M4 11h16",
+  statistiky:"M5 20V11M12 20V5M19 20v-6",
+  pribeh:    "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM19 19v2",
+  hledat:    "M11 17.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM16 16l4.5 4.5",
+  nastaveni: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM12 2.5l1.3 2.4 2.7-.5.6 2.7 2.4 1.3-1.2 2.5 1.2 2.5-2.4 1.3-.6 2.7-2.7-.5L12 21.5l-1.3-2.4-2.7.5-.6-2.7-2.4-1.3L6.2 13 5 10.5l2.4-1.3.6-2.7 2.7.5z",
+  kos:       "M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M7 7l1 13h8l1-13",
+  archiv:    "M3 6h18v4H3zM5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9M10 14h4",
+};
+
+/* ═══ BOČNÍ PRUH ═══════════════════════════════════════════════
+   Nahrazuje pás devatenácti ikon bez popisků. Každý cíl má slovo,
+   takže si nemusíš pamatovat, co která ikona dělá.
+
+   Nahoře přepínač Vše / Osobní / Práce. Je schválně vidět pořád,
+   ne schovaný ve filtrech — nejhorší, co se může stát, je že něco
+   nenajdeš a nevíš proč. Když na přepínač koukáš, víš.
+
+   V režimu Osobní zmizí z pruhu Zakázky, Lidé a Vazby. Doma
+   nepotřebuješ koukat na obchod. */
+function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) {
+  const polozka = (c) => {
+    const zap = aktivniKlic === c.k;
+    return (
+      <li key={c.k}>
+        <button
+          onClick={c.akce}
+          title={c.napoveda || c.popis}
+          aria-label={c.napoveda || c.popis}
+          aria-current={zap ? "page" : undefined}
+          style={{
+            ...buttonStyle(), width: "100%", display: "flex", alignItems: "center", gap: 11,
+            padding: "9px 11px", borderRadius: "9px", textAlign: "left",
+            fontSize: "14px", fontWeight: zap ? 700 : 500,
+            background: zap ? theme.accent : "transparent",
+            color: zap ? "#fff" : theme.text,
+          }}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+               stroke={zap ? "#fff" : theme.textSub} strokeWidth="1.9"
+               strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+               style={{ flexShrink: 0 }}>
+            <path d={IKONY_PRUHU[c.ikona] || IKONY_PRUHU.ukoly} />
+          </svg>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {c.popis}
+          </span>
+          {c.pocet > 0 && (
+            <span style={{
+              flexShrink: 0, fontSize: "11px", fontWeight: 700,
+              color: zap ? "#fff" : (c.hori ? theme.red : theme.textSub),
+            }}>{c.pocet}</span>
+          )}
+        </button>
+      </li>
+    );
+  };
+
+  const rezimy = [
+    { k: "",        popis: "Vše",     napoveda: "Práce i soukromí dohromady" },
+    { k: "osobni",  popis: "Osobní",  napoveda: "Jen soukromé — obchod se schová" },
+    { k: "zakazky", popis: "Práce",   napoveda: "Jen to, co visí na zakázkách" },
+  ];
+
+  return (
+    <nav aria-label="Hlavní nabídka" style={{
+      position: "fixed", left: 0, top: 0, zIndex: 40,
+      width: "232px", height: "100vh", boxSizing: "border-box",
+      background: theme.bg, borderRight: `1px solid ${theme.cardBorder}`,
+      padding: "16px 12px 14px 14px", display: "flex", flexDirection: "column", gap: 18,
+      overflowY: "auto",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 9, background: theme.accent, color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontWeight: 700, fontSize: "13px", flexShrink: 0,
+        }}>{(jmeno || "?").slice(0, 1).toUpperCase()}</div>
+        <div style={{
+          fontSize: "14px", fontWeight: 600, color: theme.text,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>{jmeno}</div>
+      </div>
+
+      <div role="group" aria-label="Režim" style={{
+        display: "flex", background: theme.buttonBg, borderRadius: 9, padding: 3, gap: 2,
+      }}>
+        {rezimy.map(r => {
+          const zap = (rezim || "") === r.k;
+          return (
+            <button key={r.k || "vse"}
+              onClick={() => onRezim(r.k)}
+              aria-pressed={zap}
+              title={r.napoveda} aria-label={r.napoveda}
+              style={{
+                ...buttonStyle(), flex: 1, padding: "7px 4px", borderRadius: 7,
+                fontSize: "12px", fontWeight: zap ? 700 : 500,
+                background: zap ? theme.card : "transparent",
+                color: zap ? theme.text : theme.textSub,
+                boxShadow: zap ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
+              }}>{r.popis}</button>
+          );
+        })}
+      </div>
+
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+        {cile.map(polozka)}
+      </ul>
+
+      <ul style={{
+        listStyle: "none", margin: "auto 0 0", padding: "14px 0 0",
+        borderTop: `1px solid ${theme.cardBorder}`,
+        display: "flex", flexDirection: "column", gap: 2,
+      }}>
+        {spodni.map(polozka)}
+      </ul>
+    </nav>
+  );
+}
+
+
+/* ═══ PROTŘÍDIT ════════════════════════════════════════════════
+   Hromada propadlých úkolů se nedá projít v seznamu — člověk ji
+   odroluje a nic nerozhodne. Tady je vždycky jedna věc přes celou
+   obrazovku a čtyři možnosti, takže se rozhodovat musí.
+
+   Seznam se vezme při otevření a dál se nemění. Kdyby se
+   přepočítával po každém kliknutí, položky by pod rukama poskakovaly
+   a nebylo by poznat, kolik ještě zbývá. */
+function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
+  const [fronta] = useState(() =>
+    (tasks || [])
+      .filter(t => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)
+                   && t.dueDate && daysDiff(t.dueDate) < 0)
+      .sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate))
+  );
+  const [index, setIndex] = useState(0);
+  const [datum, setDatum] = useState("");
+  const [zadavamDatum, setZadavamDatum] = useState(false);
+  useEscapeKey(onClose, true);
+
+  const ukol = fronta[index];
+  const dal = useCallback(() => {
+    setZadavamDatum(false);
+    setDatum("");
+    setIndex(i => i + 1);
+  }, []);
+
+  const dnesISO = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const volby = useMemo(() => [
+    {
+      klavesa: "1", popis: "Udělám dnes", hlavni: true,
+      napoveda: "Přesune termín na dnešek",
+      akce: () => { onUprav?.(ukol.id, { dueDate: dnesISO() }); dal(); },
+    },
+    {
+      klavesa: "2", popis: "Dát nový termín",
+      napoveda: "Vybrat jiné datum",
+      akce: () => setZadavamDatum(true),
+    },
+    {
+      klavesa: "3", popis: "Někdy",
+      napoveda: "Zruší termín — úkol zůstane, ale nic nepřipomíná",
+      akce: () => { onUprav?.(ukol.id, { dueDate: null }); dal(); },
+    },
+    {
+      klavesa: "4", popis: "Zrušit", nebezpecne: true,
+      napoveda: "Pošle úkol do koše, odkud se dá vrátit",
+      akce: () => { onSmaz?.(ukol.id); dal(); },
+    },
+  ], [ukol, onUprav, onSmaz, dal]);
+
+  // Klávesy 1–4. Jen dokud je okno otevřené a nepíše se do pole.
+  useEffect(() => {
+    if (!ukol || zadavamDatum) return;
+    const naKlavesu = (e) => {
+      const v = volby.find(x => x.klavesa === e.key);
+      if (v) { e.preventDefault(); v.akce(); }
+    };
+    window.addEventListener("keydown", naKlavesu);
+    return () => window.removeEventListener("keydown", naKlavesu);
+  }, [ukol, zadavamDatum, volby]);
+
+  const hotovo = index >= fronta.length;
+  const zbyva = Math.max(0, fronta.length - index);
+  const minut = Math.max(1, Math.round(zbyva * 15 / 60));
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(0,0,0,0.45)", display: "flex",
+      alignItems: "center", justifyContent: "center", padding: "16px",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "100%", maxWidth: "560px", maxHeight: "92vh", overflow: "auto",
+        background: theme.bg, borderRadius: "16px", padding: "20px",
+        boxShadow: "0 12px 40px rgba(0,0,0,0.3)",
+      }}>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text }}>Protřídit</div>
+            <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
+              Jedna věc po druhé. Žádná z nich nezmizí sama.
+            </div>
+          </div>
+          <button onClick={onClose} title="Zavřít" aria-label="Zavřít" style={{
+            ...buttonStyle(), padding: "7px 13px", fontSize: "13px", fontWeight: 600,
+            background: "transparent", color: theme.textSub,
+            border: `1px solid ${theme.inputBorder}`,
+          }}>Nechat na jindy</button>
+        </div>
+
+        {hotovo ? (
+          <div style={{ textAlign: "center", padding: "28px 8px" }}>
+            <div style={{ fontSize: "17px", fontWeight: 700, color: theme.green, marginBottom: 6 }}>
+              {fronta.length === 0 ? "Nic po termínu nemáš." : "Hotovo, protříděno."}
+            </div>
+            <div style={{ fontSize: "13px", color: theme.textSub, marginBottom: 18 }}>
+              {fronta.length === 0
+                ? "Všechno, co má termín, ho má v budoucnu."
+                : `Prošel jsi ${fronta.length} ${fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.`}
+            </div>
+            <button onClick={onClose} style={{
+              ...buttonStyle(), padding: "11px 22px", fontSize: "14px", fontWeight: 700,
+              background: theme.accent, color: "#fff",
+            }}>Zavřít</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                <span style={{
+                  fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+                  textTransform: "uppercase", color: theme.textSub,
+                }}>Zbývá {zbyva} z {fronta.length}</span>
+                <span style={{ fontSize: "11px", color: theme.textSub }}>≈ {minut} min</span>
+              </div>
+              <div role="img" aria-label={`Hotovo ${index} z ${fronta.length}`} style={{
+                height: 5, borderRadius: 3, background: theme.cardBorder, overflow: "hidden",
+              }}>
+                <div style={{
+                  width: `${Math.round((index / fronta.length) * 100)}%`,
+                  height: "100%", background: theme.accent,
+                }} />
+              </div>
+            </div>
+
+            <div style={{
+              background: theme.card, border: `1px solid ${theme.cardBorder}`,
+              borderRadius: "12px", padding: "18px", marginBottom: 14,
+            }}>
+              <span style={{
+                display: "inline-block", fontSize: "11px", fontWeight: 700,
+                color: theme.red, background: `${theme.red}15`,
+                borderRadius: 6, padding: "3px 8px", marginBottom: 10,
+              }}>
+                {(() => { const d = Math.abs(daysDiff(ukol.dueDate));
+                  return `${d} ${d === 1 ? "den" : d < 5 ? "dny" : "dní"} po termínu`; })()}
+              </span>
+              <div style={{ fontSize: "19px", fontWeight: 700, color: theme.text, lineHeight: 1.25 }}>
+                {ukol.title}
+              </div>
+              {ukol.osoba && (
+                <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 6 }}>
+                  týká se: {ukol.osoba}
+                </div>
+              )}
+            </div>
+
+            {zadavamDatum ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                <label htmlFor="protridit-datum" style={{ fontSize: "12px", color: theme.textSub }}>Nový termín</label>
+                <input id="protridit-datum" type="date" value={datum}
+                  onChange={e => setDatum(e.target.value)}
+                  style={{ ...inputStyle(theme), width: "auto", flex: "1 1 160px" }} />
+                <button
+                  disabled={!datum}
+                  onClick={() => { onUprav?.(ukol.id, { dueDate: datum }); dal(); }}
+                  style={{
+                    ...buttonStyle(), padding: "10px 18px", fontSize: "14px", fontWeight: 700,
+                    background: datum ? theme.accent : theme.inputBg,
+                    color: datum ? "#fff" : theme.textSub,
+                  }}>Uložit</button>
+                <button onClick={() => setZadavamDatum(false)} style={{
+                  ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 600,
+                  background: "transparent", color: theme.textSub,
+                  border: `1px solid ${theme.inputBorder}`,
+                }}>Zrušit</button>
+              </div>
+            ) : (
+              <>
+                <div role="group" aria-label="Co s tím" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {volby.map(v => (
+                    <button key={v.klavesa}
+                      onClick={v.akce}
+                      title={v.napoveda} aria-label={`${v.popis} — ${v.napoveda}`}
+                      style={{
+                        ...buttonStyle(), flex: "1 1 150px", minHeight: 50,
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                        padding: "13px 14px", fontSize: "14px", fontWeight: 700,
+                        background: v.hlavni ? theme.accent : "transparent",
+                        color: v.hlavni ? "#fff" : (v.nebezpecne ? theme.red : theme.text),
+                        border: v.hlavni ? "none"
+                          : `1px solid ${v.nebezpecne ? theme.red : theme.inputBorder}`,
+                      }}>
+                      {v.popis}
+                      <span aria-hidden="true" style={{
+                        fontSize: "10px", fontWeight: 700, opacity: 0.7,
+                        border: `1px solid ${v.hlavni ? "rgba(255,255,255,0.5)" : theme.inputBorder}`,
+                        borderRadius: 4, padding: "1px 5px",
+                      }}>{v.klavesa}</span>
+                    </button>
+                  ))}
+                </div>
+                <p style={{ margin: "12px 0 0", fontSize: "11.5px", color: theme.textSub, lineHeight: 1.5 }}>
+                  „Někdy“ zruší termín — úkol zůstane v seznamu, ale nic ti nepřipomíná.
+                  Vrátí se, až si o něj sám řekneš. Klávesy 1 až 4 fungují taky.
+                </p>
+              </>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -23668,6 +24010,8 @@ function App() {
     minuleCekalo.current = cekaNaMe;
   }, [cekaNaMe]);
   const [scrollToTaskId, setScrollToTaskId] = useState(null);
+  // Protřídit — okno, kde se propadlé úkoly procházejí jeden po druhém.
+  const [protridimOtevreno, setProtridimOtevreno] = useState(false);
   // highlightedTaskId — úkol který právě navigoval (např. ze search) → flash glow na 2s
   const [highlightedTaskId, setHighlightedTaskId] = useState(null);
   // Recently added tasks — mapa { taskId: addedAtTimestamp }
@@ -26866,6 +27210,52 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     );
   }
 
+  /* ── Boční pruh ───────────────────────────────────────────────
+     Od 900 px nahoru. Pod tím zůstává zatím stará lišta ikon —
+     mobil se předělává v dalším kroku, ať se nerozbije obojí
+     najednou. */
+  const jeRail = windowWidth >= 900;
+
+  const otevriObchod = useCallback((zalozka) => {
+    setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
+    setObchodZalozka(zalozka);
+    setShowObchodSheet(true);
+  }, []);
+
+  /* V režimu Osobní zmizí obchodní cíle. Doma nemáš co koukat na
+     zakázky — a přesně tohle ti dosud chybělo, abys večer vypnul. */
+  const pruhCile = useMemo(() => {
+    const prace = praceFilter !== "osobni";
+    const vse = [
+      { k: "dnes", popis: "Dnes", ikona: "dnes", napoveda: "Co máš dnes, co jsi slíbil a na co čekáš",
+        akce: () => setViewStatus("today") },
+      { k: "ukoly", popis: "Úkoly", ikona: "ukoly", napoveda: "Všechny aktivní úkoly",
+        akce: () => setViewStatus("active") },
+      prace && { k: "zakazky", popis: "Zakázky", ikona: "zakazky", napoveda: "Obchodní případy",
+        akce: () => otevriObchod(null) },
+      prace && { k: "lide", popis: "Lidé", ikona: "lide", napoveda: "Investoři, zprostředkovatelé a kontakty",
+        akce: () => otevriObchod("lide") },
+      prace && { k: "vazby", popis: "Vazby", ikona: "vazby", napoveda: "Co o kom víš",
+        akce: () => setShowMapaSheet(true) },
+      { k: "poznamky", popis: "Poznámky", ikona: "poznamky", napoveda: "Volný text, který nikam nepatří",
+        akce: () => setShowNotesSheet(true) },
+    ];
+    return vse.filter(Boolean);
+  }, [praceFilter, otevriObchod]);
+
+  const pruhSpodni = useMemo(() => [
+    { k: "kalendar", popis: "Kalendář", ikona: "kalendar", napoveda: "Úkoly a připomínky v měsíci",
+      akce: () => setShowCalendarSheet(true) },
+    { k: "statistiky", popis: "Statistiky", ikona: "statistiky", napoveda: "Kolik se toho udělalo",
+      akce: () => setShowStatsSheet(true) },
+    { k: "pribeh", popis: "Denní příběh", ikona: "pribeh", napoveda: "Zápisky po dnech",
+      akce: () => setShowStorySheet(true) },
+    { k: "hledat", popis: "Hledat", ikona: "hledat", napoveda: "Hledat napříč vším",
+      akce: () => { setSearchDraft(""); setShowSearchSheet(true); } },
+    { k: "nastaveni", popis: "Nastavení", ikona: "nastaveni", napoveda: "Nastavení aplikace",
+      akce: () => setShowUserMenu(s => !s) },
+  ], []);
+
   return (
     <div style={{
       // Layout: flex column = top část (header+input+filter) FIXED, bottom část scrollable.
@@ -26875,8 +27265,25 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       color: theme.text, WebkitFontSmoothing: "antialiased",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
+      // Boční pruh je ukotvený vlevo přes celou výšku, obsah se o něj
+      // jen odsadí. Díky tomu se nemusel rozebírat celý návrat
+      // komponenty — a čím míň se při takhle velké změně sahá na
+      // nosnou konstrukci, tím líp.
+      paddingLeft: jeRail ? "232px" : 0,
+      boxSizing: "border-box",
     }}>
       <style>{globalCss(theme)}</style>
+
+      {jeRail && (
+        <BocniPruh
+          theme={theme}
+          jmeno={currentUser?.name}
+          rezim={praceFilter}
+          onRezim={setPraceFilter}
+          aktivniKlic={viewStatus === "today" ? "dnes" : "ukoly"}
+          cile={pruhCile}
+          spodni={pruhSpodni} />
+      )}
 
       {/* ── Header — vždy viditelný, kompaktní výška (cca jako Focus tlačítko) ── */}
       <div ref={headerRef} style={{
@@ -26902,7 +27309,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               fontWeight: 700,
               display: "inline-flex", alignItems: "center", gap: "4px",
             }}>
-            🎯{windowWidth >= 720 && <span> Fokus</span>}
+            🎯{!jeRail && windowWidth >= 720 && <span> Fokus</span>}
           </button>
           <SyncPill theme={theme} online={online} onRetry={retrySync} />
         </div>
@@ -26922,7 +27329,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
               takže se nedá dostat k nastavení. Tyhle jsou tam
               pod ☰ s popiskem. */}
-          {windowWidth >= 720 && (<>
+          {!jeRail && windowWidth >= 720 && (<>
   {/* 🗺️ Mapa — znalostní báze vztahů */}
             <button onClick={() => setShowMapaSheet(true)}
               title="Mapa — co mi kdo řekl" aria-label="Mapa — co mi kdo řekl"
@@ -26939,7 +27346,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
               takže se nedá dostat k nastavení. Tyhle jsou tam
               pod ☰ s popiskem. */}
-          {windowWidth >= 720 && (<>
+          {!jeRail && windowWidth >= 720 && (<>
   {/* 👥 Lidé — investoři, zprostředkovatelé, developeři.
                 Vlastní ikona schválně: dosud byli schovaní pod 💼 → Síť →
                 Kontakty, tedy na třetí kliknutí a pod názvem, který
@@ -26963,7 +27370,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
               takže se nedá dostat k nastavení. Tyhle jsou tam
               pod ☰ s popiskem. */}
-          {windowWidth >= 720 && (<>
+          {!jeRail && windowWidth >= 720 && (<>
   {/* 💼 Obchod — zakázky a investoři */}
             <button onClick={() => {
               setObchodDraft(""); setObchodOsoba(null); setObchodZakazka(null);
@@ -26984,7 +27391,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           {/* Na mobilu je v liště moc ikon a vytlačí se tlačítko menu,
               takže se nedá dostat k nastavení. Tyhle jsou tam
               pod ☰ s popiskem. */}
-          {windowWidth >= 720 && (<>
+          {!jeRail && windowWidth >= 720 && (<>
   {/* 📔 Denní příběh */}
             <button onClick={() => setShowStorySheet(true)}
               title="Denní příběh" aria-label="Denní příběh"
@@ -26999,7 +27406,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             </button>
           </>)}
           {/* Stats ikona — jen na PC/tablet, na mobilu je v menu */}
-          {windowWidth >= 720 && (
+          {!jeRail && windowWidth >= 720 && (
             <button onClick={() => setShowStatsSheet(true)}
               title="Statistiky" aria-label="Statistiky"
               style={{
@@ -27048,7 +27455,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             })()}
           </button>
           {/* Trash ikona — jen na PC/tablet, na mobilu je v menu */}
-          {windowWidth >= 720 && (
+          {!jeRail && windowWidth >= 720 && (
             <button onClick={() => setViewStatus("trash")}
               title="Koš" aria-label="Koš"
               style={{
@@ -27084,7 +27491,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             </button>
           )}
           {/* Calendar ikona — jen na PC/tablet */}
-          {windowWidth >= 720 && (
+          {!jeRail && windowWidth >= 720 && (
             <button onClick={() => setShowCalendarSheet(true)}
               title="Kalendář" aria-label="Kalendář"
               style={{
@@ -27098,7 +27505,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             </button>
           )}
           {/* Archive ikona — jen na PC/tablet, na mobilu je v menu */}
-          {windowWidth >= 720 && (
+          {!jeRail && windowWidth >= 720 && (
             <button onClick={() => setViewStatus("archive")}
               title="Archiv" aria-label="Archiv"
               style={{
@@ -27740,6 +28147,15 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         )}
 
         {/* Kalendář — měsíční mřížka + týdenní seznam */}
+        {protridimOtevreno && (
+          <ProtriditSheet
+            tasks={tasks}
+            theme={theme}
+            onClose={() => setProtridimOtevreno(false)}
+            onUprav={(id, patch) => updateTask(id, patch)}
+            onSmaz={(id) => deleteTask(id)} />
+        )}
+
         {showCalendarSheet && (
           <CalendarSheetV2
             tasks={tasks}
@@ -29406,7 +29822,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 theme={theme}
                 cekaNaMe={cekaNaMe}
                 onOtevriZpravy={() => setUpdatesPanelOpen(true)}
-                onUkazProsle={() => { setViewStatus("active"); setDueDateFilter("all"); }}
+                onUkazProsle={() => setProtridimOtevreno(true)}
                 onOtevriUkol={(id) => {
                   // Závazek nemusí mít termín na dnešek, takže v pohledu
                   // Dnes vůbec nemusí být v seznamu. Přepneme na „vše"
