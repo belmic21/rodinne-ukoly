@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0830";
+const FILE_VERSION = "261013_1000";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8612,8 +8612,8 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle }) {
-  const { sliby, cekam, prosle } = useMemo(() => {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, naStav }) {
+  const { sliby, cekam, prosle, ted } = useMemo(() => {
     const ziva = (tasks || []).filter(t =>
       !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
     const sOsobou = ziva.filter(t => t.osobaId);
@@ -8625,6 +8625,13 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       // Po termínu = mělo být hotové včera a dřív. Dnešek sem nepatří,
       // ten ještě běží.
       prosle: ziva.filter(t => t.dueDate && daysDiff(t.dueDate) < 0).length,
+      /* „Teď" je to, co má dnes termín, plus to, co se vleče přes
+         týden. Nejvýš pět položek — šestá by z toho zase udělala
+         seznam, ve kterém se nerozhoduje. Zbytek je v Úkolech. */
+      ted: ziva
+        .filter(t => t.dueDate && (daysDiff(t.dueDate) === 0 || daysDiff(t.dueDate) < -7))
+        .sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate))
+        .slice(0, 5),
     };
   }, [tasks]);
 
@@ -8647,8 +8654,10 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
     } catch { return ""; }
   }, []);
 
-  const maCo = sliby.length || cekam.length || cekaNaMe || prosle || posledni;
-  if (!maCo) return null;
+  const maCo = ted.length || sliby.length || cekam.length || cekaNaMe || prosle || posledni;
+  // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
+  // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
+  if (!maCo && !naStav) return null;
 
   const radekPaty = (text, akce, popisAkce, onKlik) => (
     <div style={{
@@ -8760,6 +8769,62 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           </span>
           <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Otevřít</span>
         </button>
+      )}
+
+      {/* Teď — jediný blok, který odpovídá na „co mám dělat". Proto
+          je první a proto je krátký. */}
+      {ted.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{
+            fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+            textTransform: "uppercase", color: theme.accent, marginBottom: 7,
+          }}>Teď</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {ted.map(t => {
+              const zpozdeni = daysDiff(t.dueDate);
+              const dni = Math.abs(zpozdeni);
+              return (
+                <button key={t.id}
+                  onClick={() => onOtevriUkol?.(t.id)}
+                  title={`Otevřít úkol ${t.title}`}
+                  aria-label={`Otevřít úkol ${t.title}`}
+                  style={{
+                    ...buttonStyle(), display: "flex", alignItems: "center", gap: 11,
+                    textAlign: "left", width: "100%", padding: "13px 15px",
+                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                    borderLeft: `4px solid ${zpozdeni < 0 ? theme.red : theme.accent}`,
+                    borderRadius: "11px",
+                  }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      display: "block", fontSize: "15px", fontWeight: 600, color: theme.text,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>{t.title}</span>
+                    <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                      {zpozdeni === 0 ? "dnes" : `${dni} ${dni < 5 ? "dny" : "dní"} po termínu`}
+                      {t.osoba ? ` · ${t.osoba}` : ""}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {naStav && !maCo && (
+        <div style={{
+          background: theme.card, border: `1px solid ${theme.cardBorder}`,
+          borderRadius: "11px", padding: "26px 20px", textAlign: "center",
+        }}>
+          <div style={{ fontSize: "15px", fontWeight: 700, color: theme.green, marginBottom: 5 }}>
+            Na dnešek nic nemáš.
+          </div>
+          <div style={{ fontSize: "13px", color: theme.textSub, lineHeight: 1.5 }}>
+            Nic po termínu, nikdo na tebe nečeká a nikomu nic nedlužíš.<br />
+            Všechno ostatní najdeš pod <strong style={{ color: theme.text }}>Úkoly</strong>.
+          </div>
+        </div>
       )}
 
       {sliby.length > 0 && blok("Slíbil jsem", "co visí na konkrétním člověku", sliby, 7)}
@@ -8908,6 +8973,62 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
       }}>
         {spodni.map(polozka)}
       </ul>
+    </nav>
+  );
+}
+
+
+/* ═══ SPODNÍ LIŠTA (telefon) ═══════════════════════════════════
+   Na úzkém okně se boční pruh nevejde, ale důvod pro něj platí
+   stejně: cíle mají mít slovo a mají být na jedno sáhnutí palcem.
+   Pět záložek dole je tam, kam palec dosáhne — horní lišta ikon
+   byla na opačném konci telefonu.
+
+   Pět je strop. Šestá záložka by z toho udělala řádek ikon, přesně
+   to, čeho se zbavujeme. Zbytek zůstává v nabídce pod jménem. */
+function SpodniLista({ theme, cile, aktivniKlic }) {
+  return (
+    <nav aria-label="Hlavní nabídka" style={{
+      position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 40,
+      background: theme.card, borderTop: `1px solid ${theme.cardBorder}`,
+      display: "flex", boxSizing: "border-box",
+      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+    }}>
+      {cile.slice(0, 5).map(c => {
+        const zap = aktivniKlic === c.k;
+        return (
+          <button key={c.k}
+            onClick={c.akce}
+            title={c.napoveda || c.popis}
+            aria-label={c.napoveda || c.popis}
+            aria-current={zap ? "page" : undefined}
+            style={{
+              ...buttonStyle(), flex: 1, minWidth: 0, minHeight: "54px",
+              display: "flex", flexDirection: "column", alignItems: "center",
+              justifyContent: "center", gap: 3, padding: "6px 2px",
+              background: "transparent",
+              color: zap ? theme.accent : theme.textSub,
+            }}>
+            <span style={{ position: "relative", lineHeight: 0 }}>
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"
+                   strokeLinejoin="round" aria-hidden="true">
+                <path d={IKONY_PRUHU[c.ikona] || IKONY_PRUHU.ukoly} />
+              </svg>
+              {c.pocet > 0 && (
+                <span style={{
+                  position: "absolute", top: "-5px", right: "-9px",
+                  background: c.hori ? theme.red : theme.accent, color: "#fff",
+                  fontSize: "9px", fontWeight: 800, lineHeight: 1,
+                  padding: "2px 4px", borderRadius: "7px", minWidth: "8px",
+                  textAlign: "center",
+                }}>{c.pocet > 99 ? "99+" : c.pocet}</span>
+              )}
+            </span>
+            <span style={{ fontSize: "10px", fontWeight: zap ? 700 : 500 }}>{c.popis}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -23955,11 +24076,16 @@ function App() {
   const [filter, setFilter] = useState("my");
   // Default view — uživatel si může v menu nastavit, který view se zobrazí jako homepage
   // Stored in localStorage as "ft_default_view" (default = "active")
+  /* Výchozí obrazovka je Dnes, ne Aktivní. Seznam čtyřiatřiceti
+     úkolů bez pořadí neodpovídá na otázku „co teď" — jen ji
+     převede na tebe. Dnes odpovídá: co máš dnes, co udělali
+     druzí, co jsi komu slíbil a na co čekáš.
+     Kdo si to v nastavení přepnul jinak, tomu to zůstane. */
   const [defaultView, setDefaultView] = useState(() => {
-    try { return localStorage.getItem("ft_default_view") || "active"; } catch (e) { return "active"; }
+    try { return localStorage.getItem("ft_default_view") || "today"; } catch (e) { return "today"; }
   });
   const [viewStatus, setViewStatus] = useState(() => {
-    try { return localStorage.getItem("ft_default_view") || "active"; } catch (e) { return "active"; }
+    try { return localStorage.getItem("ft_default_view") || "today"; } catch (e) { return "today"; }
   });
   const [sortMode, setSortMode] = useState("created");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -27209,11 +27335,24 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
      zakázky — a přesně tohle ti dosud chybělo, abys večer vypnul. */
   const pruhCile = useMemo(() => {
     const prace = praceFilter !== "osobni";
+    /* Propadlé věci měly dosud jediné místo — šedý řádek v patičce
+       Dneška. Tím pádem nebylo „na první dobrou" vidět, jestli něco
+       hoří. Teď mají vlastní cíl s počtem, který svítí červeně, a
+       klik rovnou otevře třídění. */
+    const prosle = tasks.filter(t =>
+      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)
+      && t.dueDate && daysDiff(t.dueDate) < 0
+      && (praceFilter === "osobni" ? !t.projectId
+        : praceFilter === "zakazky" ? !!t.projectId : true)
+    ).length;
+
     const vse = [
       { k: "dnes", popis: "Dnes", ikona: "dnes", napoveda: "Co máš dnes, co jsi slíbil a na co čekáš",
         akce: () => setViewStatus("today") },
       { k: "ukoly", popis: "Úkoly", ikona: "ukoly", napoveda: "Všechny aktivní úkoly",
         akce: () => setViewStatus("active") },
+      prosle > 0 && { k: "prosle", popis: "Po termínu", ikona: "kos", pocet: prosle, hori: true,
+        napoveda: "Projít propadlé jeden po druhém", akce: () => setProtridimOtevreno(true) },
       prace && { k: "zakazky", popis: "Zakázky", ikona: "zakazky", napoveda: "Obchodní případy",
         akce: () => otevriObchod(null) },
       prace && { k: "lide", popis: "Lidé", ikona: "lide", napoveda: "Investoři, zprostředkovatelé a kontakty",
@@ -27224,7 +27363,23 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         akce: () => setShowNotesSheet(true) },
     ];
     return vse.filter(Boolean);
-  }, [praceFilter, otevriObchod]);
+  }, [praceFilter, otevriObchod, tasks]);
+
+  /* Na telefonu se vejde pět záložek. Beru ty, kvůli kterým člověk
+     telefon vytahuje: co je dnes, co hoří, co je za úkoly, zakázky
+     a hledání. V režimu Osobní vypadnou zakázky a doplní se
+     poznámky — doma se hledá spíš poznámka než zakázka. */
+  const mobilCile = useMemo(() => {
+    const prace = praceFilter !== "osobni";
+    return [
+      ...pruhCile.filter(c => ["dnes", "ukoly", "prosle"].includes(c.k)),
+      prace
+        ? pruhCile.find(c => c.k === "zakazky")
+        : pruhCile.find(c => c.k === "poznamky"),
+      { k: "hledat", popis: "Hledat", ikona: "hledat", napoveda: "Hledat napříč vším",
+        akce: () => { setSearchDraft(""); setShowSearchSheet(true); } },
+    ].filter(Boolean);
+  }, [pruhCile, praceFilter]);
 
   const pruhSpodni = useMemo(() => [
     { k: "kalendar", popis: "Kalendář", ikona: "kalendar", napoveda: "Úkoly a připomínky v měsíci",
@@ -27289,9 +27444,19 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       // komponenty — a čím míň se při takhle velké změně sahá na
       // nosnou konstrukci, tím líp.
       paddingLeft: jeRail ? "232px" : 0,
+      // Na telefonu je navigace dole, takže obsah nad ní musí mít
+      // místo — jinak by poslední úkol zůstal schovaný za lištou.
+      paddingBottom: jeRail ? 0 : "56px",
       boxSizing: "border-box",
     }}>
       <style>{globalCss(theme)}</style>
+
+      {!jeRail && (
+        <SpodniLista
+          theme={theme}
+          aktivniKlic={viewStatus === "today" ? "dnes" : "ukoly"}
+          cile={mobilCile} />
+      )}
 
       {jeRail && (
         <BocniPruh
@@ -28829,7 +28994,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           paddingBottom: "4px",
         }}>
           {/* View chip přepínače — Dnes / Aktivní / Rozpracované / Plánované / Vše */}
-          {!isTypingMode && !["trash", "archive"].includes(viewStatus) && (
+          {!isTypingMode && viewStatus !== "today" && !["trash", "archive"].includes(viewStatus) && (
             <div style={{
               display: "flex", gap: "4px", padding: "4px 6px 6px",
               overflowX: "auto", whiteSpace: "nowrap",
@@ -28837,7 +29002,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               marginBottom: "4px",
             }}>
               {[
-                { key: "today", icon: "📅", label: "Dnes", count: stats.today },
+                // Dnes je v bočním pruhu; v pásu by byl podruhé a dvě
+                // ovládání téhož se vylučují (JAZYK.md, oddíl 7).
+                ...(jeRail ? [] : [{ key: "today", icon: "📅", label: "Dnes", count: stats.today }]),
                 { key: "active", icon: "📋", label: "Aktivní", count: stats.active },
                 { key: "in_progress", icon: "⚙", label: "Rozpracované", count: stats.in_progress },
                 { key: "planned", icon: "⏰", label: "Plánované", count: stats.planned },
@@ -28908,11 +29075,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                   )}
                 </span>
               )}
-              {[
+              {(jeRail ? [] : [
                 { key: "vse",     icon: "",   label: "Vše" },
                 { key: "osobni",  icon: "🏠", label: "Osobní" },
                 { key: "zakazky", icon: "💼", label: "Zakázky" },
-              ].map(v => {
+              ]).map(v => {
                 const zap = praceFilter === v.key;
                 return (
                   <button key={v.key} onClick={() => setPraceFilter(v.key)}
@@ -28994,7 +29161,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           />
 
           {/* App-level filter bar — pouze v filter mode (v typing mode má QuickAddBar svůj TypingFilterRow) */}
-          {!isTypingMode && (() => {
+          {/* Na Dnešku se neukazuje. Dnes je obrazovka s odpovědí, ne
+              filtrovaný seznam — filtry k němu nepatří a jen přidávaly
+              sedm ikon bez popisku. */}
+          {!isTypingMode && viewStatus !== "today" && (() => {
             // Sdílená proměnná pro ikony i popover (musí být v jednom scope kvůli TDZ)
             const visibleListsForFilter = visibleCustomLists;
             return (
@@ -29840,6 +30010,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 tasks={tasks}
                 theme={theme}
                 cekaNaMe={cekaNaMe}
+                naStav
                 onOtevriZpravy={() => setUpdatesPanelOpen(true)}
                 onUkazProsle={() => setProtridimOtevreno(true)}
                 onOtevriUkol={(id) => {
@@ -29852,6 +30023,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 }} />
             )}
             {(() => {
+              // Na Dnešku se seznam nevykresluje. Dnes má vlastní blok
+              // „Teď" — kdyby pod ním byl ještě celý seznam, byla by
+              // tam každá dnešní věc dvakrát.
+              if (viewStatus === "today") return null;
               let shownUnreadSep = false;
               let shownDoneSep = false;
               let shownDelSep = false;
