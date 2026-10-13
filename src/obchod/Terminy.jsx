@@ -266,7 +266,7 @@ function TerminRadek({ t, theme, owner, onUprav, onZmena, onOtevriOsobu, moje = 
 
       {moje && (
         <>
-          <button onClick={onUprav} style={{
+          <button title="Upravit termín" aria-label="Upravit termín" onClick={onUprav} style={{
             ...btn(), background: "transparent", color: theme.textSub,
             fontSize: "12px", padding: "2px 4px",
           }}>✎</button>
@@ -440,7 +440,7 @@ function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus })
               {f.osoba ? f.osoba.name : "+ vybrat člověka"}
             </button>
             {f.osoba && (
-              <button onClick={() => setF(p => ({ ...p, person_id: null, osoba: null }))}
+              <button title="Odebrat osobu" aria-label="Odebrat osobu" onClick={() => setF(p => ({ ...p, person_id: null, osoba: null }))}
                 style={{
                   ...btn(), background: "transparent", color: theme.textDim,
                   fontSize: "13px", padding: "2px 5px",

@@ -571,7 +571,7 @@ function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
   return (
     <div style={{ padding: "12px 16px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button onClick={onZpet} style={{
+        <button title="Zpět" aria-label="Zpět" onClick={onZpet} style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "15px", padding: "2px 6px",
         }}>←</button>

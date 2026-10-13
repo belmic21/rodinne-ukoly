@@ -252,7 +252,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                   );
                 })}
               </div>
-              <button onClick={onClose} style={{
+              <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
                 background: "none", border: "none", fontSize: "20px",
                 cursor: "pointer", color: theme.textSub, padding: "0 4px",
               }}>×</button>
@@ -321,7 +321,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                     + zakázka
                   </button>
                 )}
-                <button onClick={onClose} style={{
+                <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
                   background: "none", border: "none", fontSize: "20px",
                   cursor: "pointer", color: theme.textSub, padding: "0 4px",
                 }}>×</button>
@@ -958,7 +958,7 @@ function Detail({ theme, owner, ciselniky, zakazka = null, predvyplneno = null,
             </div>
           )}
         </div>
-        <button onClick={onClose} style={{
+        <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
           background: "none", border: "none", fontSize: "20px",
           cursor: "pointer", color: theme.textSub, padding: "0 4px",
         }}>×</button>

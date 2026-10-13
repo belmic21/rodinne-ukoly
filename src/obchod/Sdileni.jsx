@@ -137,7 +137,7 @@ export function SdileniZakazky({ theme, owner, projectId }) {
               </div>
             )}
           </div>
-          <button onClick={() => setEdituji(s)} style={{
+          <button title="Upravit sdílení" aria-label="Upravit sdílení" onClick={() => setEdituji(s)} style={{
             ...btn(), background: "transparent", color: theme.textSub,
             fontSize: "12px", padding: "2px 5px",
           }}>✎</button>
@@ -375,7 +375,7 @@ function SdilenaZakazka({ theme, ciselniky, z, onZpet }) {
   return (
     <div style={{ padding: "12px 16px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button onClick={onZpet} style={{
+        <button title="Zpět" aria-label="Zpět" onClick={onZpet} style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "15px", padding: "2px 6px",
         }}>←</button>

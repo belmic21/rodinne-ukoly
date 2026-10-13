@@ -239,7 +239,7 @@ function Prejmenovani({ theme, owner, p, skupiny, onHotovo, onZrus, onChyba }) {
       <button onClick={uloz} disabled={uklada} style={{
         ...btnMain(theme), padding: "5px 10px", fontSize: "11px",
       }}>Přidat</button>
-      <button onClick={onZrus} style={{
+      <button title="Zrušit" aria-label="Zrušit" onClick={onZrus} style={{
         ...btnGhost(theme), padding: "5px 8px", fontSize: "11px",
       }}>×</button>
     </div>

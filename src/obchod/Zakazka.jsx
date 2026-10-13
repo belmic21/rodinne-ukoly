@@ -125,7 +125,7 @@ export function Retezec({ theme, owner, ciselniky, projectId, onOtevriOsobu, spr
           }}>{u.podil != null ? `${u.podil} %` : "—"}</div>
           {smimMenit(u, owner, spravce) && (
             <>
-              <button onClick={() => setEdituji(u)} style={{
+              <button title="Upravit" aria-label="Upravit" onClick={() => setEdituji(u)} style={{
                 ...btn(), background: "transparent", color: theme.textSub,
                 fontSize: "12px", padding: "2px 5px",
               }}>✎</button>
