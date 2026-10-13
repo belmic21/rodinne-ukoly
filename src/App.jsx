@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0640";
+const FILE_VERSION = "261013_0710";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8612,19 +8612,60 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol }) {
-  const { sliby, cekam } = useMemo(() => {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle }) {
+  const { sliby, cekam, prosle } = useMemo(() => {
     const ziva = (tasks || []).filter(t =>
-      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t) && t.osobaId);
+      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
+    const sOsobou = ziva.filter(t => t.osobaId);
     const poDobe = (t) => -daysDiff(t.slibenoAt || t.createdAt || t.created_at);
     const seradit = (a, b) => poDobe(b) - poDobe(a);
     return {
-      sliby: ziva.filter(t => t.smer === "slibil").sort(seradit),
-      cekam: ziva.filter(t => t.smer === "cekam").sort(seradit),
+      sliby: sOsobou.filter(t => t.smer === "slibil").sort(seradit),
+      cekam: sOsobou.filter(t => t.smer === "cekam").sort(seradit),
+      // Po termínu = mělo být hotové včera a dřív. Dnešek sem nepatří,
+      // ten ještě běží.
+      prosle: ziva.filter(t => t.dueDate && daysDiff(t.dueDate) < 0).length,
     };
   }, [tasks]);
 
-  if (!sliby.length && !cekam.length) return null;
+  // Kde jsi skončil. Drží se v prohlížeči, ne v databázi — je to údaj
+  // o tomhle zařízení, ne o tobě. Na telefonu tě má zajímat, co jsi
+  // dělal na telefonu.
+  const posledni = useMemo(() => {
+    try {
+      const s = localStorage.getItem("posledni_ukol");
+      if (!s) return null;
+      const o = JSON.parse(s);
+      return o && o.id && o.title ? o : null;
+    } catch { return null; }
+  }, [tasks]);
+
+  const datum = useMemo(() => {
+    try {
+      return new Date().toLocaleDateString("cs-CZ",
+        { weekday: "long", day: "numeric", month: "long" });
+    } catch { return ""; }
+  }, []);
+
+  const maCo = sliby.length || cekam.length || cekaNaMe || prosle || posledni;
+  if (!maCo) return null;
+
+  const radekPaty = (text, akce, popisAkce, onKlik) => (
+    <div style={{
+      display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center",
+      padding: "7px 2px",
+    }}>
+      <span style={{ flex: 1, minWidth: 160, fontSize: "12px", color: theme.textSub }}>{text}</span>
+      {akce && (
+        <button onClick={onKlik} title={popisAkce} aria-label={popisAkce}
+          style={{
+            ...buttonStyle(), padding: "5px 11px", fontSize: "12px", fontWeight: 600,
+            background: "transparent", color: theme.text,
+            border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
+          }}>{akce}</button>
+      )}
+    </div>
+  );
 
   const dniPopis = (t) => {
     const d = Math.max(0, -daysDiff(t.slibenoAt || t.createdAt || t.created_at));
@@ -8684,8 +8725,59 @@ function PanelDnes({ tasks, theme, onOtevriUkol }) {
 
   return (
     <div style={{ marginBottom: 8 }}>
+
+      {/* Hlavička — datum a jedna věta, ne další seznam. */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{
+          fontSize: "15px", fontWeight: 700, color: theme.text,
+          textTransform: "capitalize", letterSpacing: "-0.01em",
+        }}>{datum}</div>
+        {(sliby.length > 0 || cekam.length > 0) && (
+          <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
+            {sliby.length > 0 && <>Slíbil jsi <strong style={{ color: theme.text }}>{sliby.length}</strong> {sliby.length === 1 ? "věc" : sliby.length < 5 ? "věci" : "věcí"}</>}
+            {sliby.length > 0 && cekam.length > 0 && ", "}
+            {cekam.length > 0 && <>čekáš na <strong style={{ color: theme.text }}>{cekam.length}</strong> {cekam.length === 1 ? "odpověď" : cekam.length < 5 ? "odpovědi" : "odpovědí"}</>}
+          </div>
+        )}
+      </div>
+
+      {/* Co udělali druzí. Podrobnosti jsou ve Zprávách, tady jen
+          upozornění — dvakrát totéž by byl šum. */}
+      {cekaNaMe > 0 && (
+        <button
+          onClick={() => onOtevriZpravy?.()}
+          title="Otevřít zprávy" aria-label="Otevřít zprávy"
+          style={{
+            ...buttonStyle(), display: "flex", alignItems: "center", gap: 9,
+            width: "100%", textAlign: "left", marginBottom: 10,
+            padding: "9px 12px", borderRadius: "10px",
+            background: theme.accentSoft, color: theme.text,
+            border: `1px solid ${theme.accentBorder}`,
+          }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
+            <strong style={{ fontWeight: 700 }}>Čeká na tebe {cekaNaMe}</strong>
+            <span style={{ color: theme.textSub }}> — nepřečtené úkoly a odpovědi</span>
+          </span>
+          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Otevřít</span>
+        </button>
+      )}
+
       {sliby.length > 0 && blok("Slíbil jsem", "co visí na konkrétním člověku", sliby, 7)}
       {cekam.length > 0 && blok("Čekám na druhé", "míč je na jejich straně", cekam, 7)}
+
+      {/* Patička — věci, které na Dnešek nepatří, ale musí být po ruce.
+          Schválně šedě a bez barvy: Dnes je o dnešku, ne o tom,
+          co uteklo. */}
+      {(prosle > 0 || posledni) && (
+        <div style={{ borderTop: `1px solid ${theme.cardBorder}`, marginTop: 4, paddingTop: 2 }}>
+          {prosle > 0 && radekPaty(
+            `${prosle} ${prosle === 1 ? "věc je" : prosle < 5 ? "věci jsou" : "věcí je"} po termínu. Neřeší se tady.`,
+            "Ukázat", "Ukázat úkoly po termínu", () => onUkazProsle?.())}
+          {posledni && radekPaty(
+            <>Naposled jsi byl u <strong style={{ color: theme.text, fontWeight: 600 }}>{posledni.title}</strong></>,
+            "Pokračovat", "Otevřít, kde jsi skončil", () => onOtevriUkol?.(posledni.id))}
+        </div>
+      )}
     </div>
   );
 }
@@ -8766,6 +8858,20 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
   // For fields that MUST commit immediately (checklist items, images) we still use onUpdate.
   // For deferred fields, use local setters above.
   const commitImmediate = (key, value) => onUpdate(task.id, { [key]: value });
+
+  /* „Kde jsi skončil" na obrazovce Dnes. Zapisuje se při otevření
+     detailu, protože to je ta chvíle, kdy se u něčeho opravdu
+     zastavíš. Drží se v prohlížeči, ne v databázi — je to údaj
+     o tomhle zařízení. Když zápis selže (soukromé okno, zakázané
+     úložiště), nic se neděje, jen ten řádek nebude. */
+  useEffect(() => {
+    if (!task?.id || !task?.title) return;
+    try {
+      localStorage.setItem("posledni_ukol", JSON.stringify({
+        id: task.id, title: task.title, kdy: Date.now(),
+      }));
+    } catch { /* úložiště není k dispozici */ }
+  }, [task?.id, task?.title]);
 
   const quickDates = [
     { label: "Ihned",  value: addDays(0) },
@@ -29298,6 +29404,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               <PanelDnes
                 tasks={tasks}
                 theme={theme}
+                cekaNaMe={cekaNaMe}
+                onOtevriZpravy={() => setUpdatesPanelOpen(true)}
+                onUkazProsle={() => { setViewStatus("active"); setDueDateFilter("all"); }}
                 onOtevriUkol={(id) => {
                   // Závazek nemusí mít termín na dnešek, takže v pohledu
                   // Dnes vůbec nemusí být v seznamu. Přepneme na „vše"
