@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0810";
+const FILE_VERSION = "261013_0830";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -10883,6 +10883,17 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   const isNew = createdByLc !== userNameLc && !seenByLc.includes(userNameLc);
   const overdue = daysDiff(task.dueDate) < 0 && !isDone(task);
   const soon = !overdue && daysDiff(task.dueDate) >= 0 && daysDiff(task.dueDate) <= 3 && !isDone(task);
+
+  /* Zpoždění se odstupňuje. Patnáct stejně červených řádků znamená
+     totéž jako žádný — oko si na ně zvykne a přestane je vidět.
+     Do tří dnů šedě, do týdne oranžově, pak teprve červeně. Díky
+     tomu na obrazovce zůstanou červené jen dvě tři věci a ty zase
+     něco znamenají. Viz JAZYK.md, oddíl 7. */
+  const dnuPoTerminu = overdue ? Math.abs(Math.floor(daysDiff(task.dueDate))) : 0;
+  const barvaZpozdeni = !overdue ? theme.textMid
+    : dnuPoTerminu > 7 ? theme.red
+    : dnuPoTerminu > 3 ? theme.yellow
+    : theme.textSub;
   const forgotten = isForgotten(task);
   const inProgress = task.status === "in_progress" ||
     (task.assignTo === "both" && (task.doneBy?.length || 0) > 0 && task.status !== "done");
@@ -11022,7 +11033,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   // Special states override background
   if (forgotten && !taskIsDone) { cardBackground = `${theme.purple}0a`; cardBorderColor = `${theme.purple}40`; }
   if (isNew) { cardBackground = theme.unreadBg; cardBorderColor = theme.unreadBorder; }
-  if (overdue && !taskIsDone) { cardBackground = `${theme.red}0c`; cardBorderColor = theme.red; }
+  /* Propadlý termín už kartu nebarví ani neobtahuje. Zůstal po něm
+     jen levý proužek a počet dní — a oboje odstupňovaně. Do 13. 10.
+     2026 dostal každý propadlý úkol červenou výplň i červený rámeček
+     dokola a seznam pak vypadal jako jedna výstraha. */
   if (taskIsDone) { cardBackground = theme.card; cardBorderColor = theme.cardBorder; }
   // Progress card — lighter accent tint
   if (progressItem) { cardBackground = theme.accentSoft; cardBorderColor = theme.accentBorder; }
@@ -11033,7 +11047,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
   let leftBorderColor = priorityTheme.text;
   if (forgotten) leftBorderColor = theme.purple;
   if (soon) leftBorderColor = theme.yellow;
-  if (overdue) leftBorderColor = theme.red;
+  if (overdue) leftBorderColor = barvaZpozdeni;
   if (isNew) leftBorderColor = theme.green;
   if (progressItem) leftBorderColor = theme.accent;
   if (taskIsDeleted) leftBorderColor = theme.textDim; // muted gray left border
@@ -11550,11 +11564,15 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               );
             })()}
             {task.dueDate && !taskIsDone && !isDeleted(task) && (() => {
-              const daysOverdue = overdue ? Math.abs(Math.floor(daysDiff(task.dueDate))) : 0;
+              const daysOverdue = dnuPoTerminu;
+              // Vyplněná cedulka s bílým písmem jen u věcí starších
+              // než týden. U čerstvě propadlých stačí barevné písmo —
+              // jinak by jich na obrazovce svítilo patnáct.
+              const kricet = daysOverdue > 7;
               return (
                 <span style={{
                   fontSize: "10px", fontWeight: 600,
-                  color: overdue ? theme.red : soon ? theme.yellow : theme.textMid,
+                  color: overdue ? barvaZpozdeni : soon ? theme.yellow : theme.textMid,
                   display: "inline-flex", alignItems: "center", gap: 6,
                 }}>
                   {formatDate(task.dueDate)}
@@ -11562,13 +11580,14 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                     <span style={{
                       fontSize: "10px",
                       fontWeight: 700,
-                      color: "white",
-                      background: theme.red,
-                      padding: "1px 6px",
+                      color: kricet ? "white" : barvaZpozdeni,
+                      background: kricet ? theme.red : "transparent",
+                      padding: kricet ? "1px 6px" : 0,
                       borderRadius: 8,
                       letterSpacing: "0.2px",
                     }}>
-                      ⚠ {daysOverdue === 1 ? "1 den" : daysOverdue < 5 ? `${daysOverdue} dny` : `${daysOverdue} dní`} po termínu
+                      {kricet ? "⚠ " : ""}
+                      {daysOverdue === 1 ? "1 den" : daysOverdue < 5 ? `${daysOverdue} dny` : `${daysOverdue} dní`} po termínu
                     </span>
                   )}
                 </span>
