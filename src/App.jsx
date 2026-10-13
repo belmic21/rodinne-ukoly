@@ -52,7 +52,7 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
-import { nactiZakazky as obchodHledejZakazky } from "./obchod/api.js";
+import { nactiZakazky as obchodHledejZakazky, nactiLidi } from "./obchod/api.js";
 import { TerminyPanel } from "./obchod/Terminy.jsx";
 import { input as polePlne } from "./obchod/ui.js";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0530";
+const FILE_VERSION = "261013_0640";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3045,7 +3045,22 @@ async function apiLoadUsers() {
 async function apiLoadTasks() {
   // Server je vždy zdroj pravdy. Cache se používá JEN když jsme offline (catch).
   try {
-    const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+    // Jméno člověka se přitahuje z Lidí rovnou při načtení, ať se kvůli
+    // každému úkolu nechodí do databáze zvlášť.
+    //
+    // Když sloupec osoba_id ještě neexistuje — tedy skript fáze 3a
+    // neproběhl — databáze tenhle dotaz odmítne. Proto ten druhý pokus
+    // bez něj: aplikace pak jede jako dřív, jen bez vazby na osobu.
+    // Bez téhle pojistky by nasazení kódu před SQL shodilo celý seznam.
+    let data, error;
+    ({ data, error } = await supabase
+      .from("tasks")
+      .select("*, osoba:map_people(id, name)")
+      .order("created_at", { ascending: false }));
+    if (error) {
+      console.warn("Vazba na osobu zatím není v databázi, načítám bez ní.");
+      ({ data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false }));
+    }
     if (error) throw error;
     const serverTasks = (data || []).map(row => {
       const t = dbToTask(row);
@@ -3053,6 +3068,12 @@ async function apiLoadTasks() {
       if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
       // Vazba na zakázku — podle ní se dá oddělit práce od osobních věcí.
       t.projectId = row.project_id || null;
+      // Koho se úkol týká a čí je to teď míč. Viz JAZYK.md — osoba je
+      // kontakt z Lidí, ne uživatel aplikace.
+      t.osobaId = row.osoba_id || null;
+      t.osoba = row.osoba?.name || null;
+      t.smer = row.smer || null;          // slibil | cekam | null
+      t.slibenoAt = row.slibeno_at || null;
       // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
       if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
       else t.rejectedBy = [];
@@ -8420,6 +8441,256 @@ function TaskAttachmentsSection({ task, currentUser, theme }) {
    TASK DETAIL (inline edit panel)
    ═══════════════════════════════════════════════════════ */
 
+/* ═══ VAZBA ÚKOLU NA ČLOVĚKA ═══════════════════════════════════
+   Odpovídá na dvě otázky, na které úkolník sám neuměl odpovědět:
+   co jsem komu slíbil a na co od koho čekám.
+
+   Osoba je kontakt z Lidí, ne uživatel aplikace — proto se na to
+   nedá použít „Pro koho" o kus výš. Tam vybíráš mezi sebou,
+   Davidem a Petrou; tady mezi Martinem, Ondřejem a dalšími sto
+   padesáti, kteří do aplikace nikdy nevstoupí.
+
+   Zapisuje se přímo do databáze, ne přes apiUpdateTask. Ten posílá
+   úkol přes převodník v supabase.js, který o těchhle třech
+   sloupcích neví a cestou by je zahodil. */
+function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
+  const [lide, setLide] = useState([]);
+  const [vybiram, setVybiram] = useState(false);
+  const [hledani, setHledani] = useState("");
+  const [uklada, setUklada] = useState(false);
+  const [chyba, setChyba] = useState("");
+
+  // Lidi načítáme až ve chvíli, kdy se někdo opravdu vybírá. Kontaktů
+  // budou stovky a tahat je při každém otevření úkolu nemá smysl.
+  useEffect(() => {
+    if (!vybiram || lide.length) return;
+    let zruseno = false;
+    (async () => {
+      const r = await nactiLidi(currentUser?.name, {}, 300);
+      if (!zruseno) setLide(r || []);
+    })();
+    return () => { zruseno = true; };
+  }, [vybiram, lide.length, currentUser?.name]);
+
+  async function uloz(osobaId, osobaJmeno, smer) {
+    setUklada(true);
+    setChyba("");
+    const patch = { osoba_id: osobaId || null, smer: osobaId ? (smer || null) : null };
+    if (patch.smer === "slibil" && !task.slibenoAt) patch.slibeno_at = new Date().toISOString();
+    if (!osobaId) patch.slibeno_at = null;
+
+    const { error } = await supabase.from("tasks").update(patch).eq("id", task.id);
+    setUklada(false);
+    if (error) {
+      // Nejčastější důvod: neproběhl skript fáze 3a a sloupce chybí.
+      setChyba("Nepodařilo se uložit. " + (error.message || ""));
+      return;
+    }
+    onZmena?.({
+      osobaId: osobaId || null,
+      osoba: osobaJmeno || null,
+      smer: patch.smer,
+      slibenoAt: "slibeno_at" in patch ? patch.slibeno_at : task.slibenoAt,
+    });
+    setVybiram(false);
+    setHledani("");
+  }
+
+  const nalezeni = useMemo(() => {
+    const q = hledani.trim().toLowerCase();
+    const vse = lide || [];
+    if (!q) return vse.slice(0, 8);
+    return vse.filter(o => (o.name || "").toLowerCase().includes(q)).slice(0, 8);
+  }, [lide, hledani]);
+
+  const smery = [
+    { k: "slibil", popis: "Slíbil jsem", napoveda: "Dlužím to jemu" },
+    { k: "cekam",  popis: "Čekám na něj", napoveda: "Míč je na jeho straně" },
+    { k: null,     popis: "Jen se týká",  napoveda: "Nikdo nikomu nic nedluží" },
+  ];
+
+  return (
+    <div style={{ marginBottom: "8px" }}>
+      <div style={{
+        fontSize: "10px", fontWeight: 700, letterSpacing: "0.04em",
+        textTransform: "uppercase", color: theme.textSub, marginBottom: 3,
+      }}>Koho se to týká</div>
+
+      {task.osobaId ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", alignItems: "center" }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "6px 10px", borderRadius: "14px", fontSize: "12px", fontWeight: 600,
+            background: theme.accentSoft, color: theme.accent,
+            border: `1px solid ${theme.accentBorder}`,
+          }}>
+            {task.osoba || "člověk z Lidí"}
+          </span>
+          <button
+            title="Odebrat osobu" aria-label="Odebrat osobu"
+            onClick={() => uloz(null, null, null)}
+            disabled={uklada}
+            style={{
+              ...buttonStyle(), padding: "5px 9px", fontSize: "12px",
+              background: "transparent", color: theme.textSub,
+              border: `1px solid ${theme.inputBorder}`, borderRadius: "14px",
+            }}>×</button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setVybiram(v => !v)}
+          style={{
+            ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+            background: "transparent", color: theme.textSub,
+            border: `1px dashed ${theme.inputBorder}`, borderRadius: "14px",
+          }}>
+          {vybiram ? "Zrušit" : "Přiřadit člověka"}
+        </button>
+      )}
+
+      {vybiram && !task.osobaId && (
+        <div style={{ marginTop: 6 }}>
+          <input
+            autoFocus
+            value={hledani}
+            onChange={e => setHledani(e.target.value)}
+            placeholder="Jméno…"
+            style={{ ...inputStyle(theme), padding: "7px 10px", fontSize: "13px" }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 1, marginTop: 4 }}>
+            {nalezeni.length === 0 && (
+              <div style={{ fontSize: "12px", color: theme.textSub, padding: "6px 2px" }}>
+                {lide.length === 0 ? "Načítám lidi…" : "Nikdo takový v Lidech není."}
+              </div>
+            )}
+            {nalezeni.map(o => (
+              <button key={o.id}
+                onClick={() => uloz(o.id, o.name, null)}
+                disabled={uklada}
+                style={{
+                  ...buttonStyle(), textAlign: "left", padding: "7px 10px", fontSize: "13px",
+                  background: theme.inputBg, color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`, borderRadius: "8px",
+                }}>{o.name}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {task.osobaId && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: 6 }}>
+          {smery.map(s => {
+            const zap = (task.smer || null) === s.k;
+            return (
+              <button key={s.popis}
+                title={s.napoveda} aria-label={s.napoveda}
+                onClick={() => uloz(task.osobaId, task.osoba, s.k)}
+                disabled={uklada}
+                style={{
+                  ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                  background: zap ? theme.accent : "transparent",
+                  color: zap ? "#fff" : theme.textSub,
+                  border: `1px solid ${zap ? theme.accent : theme.inputBorder}`,
+                  borderRadius: "14px",
+                }}>{s.popis}</button>
+            );
+          })}
+        </div>
+      )}
+
+      {chyba && (
+        <div style={{ fontSize: "11px", color: theme.red, marginTop: 5 }}>{chyba}</div>
+      )}
+    </div>
+  );
+}
+
+
+/* ═══ PANEL DNES ═══════════════════════════════════════════════
+   Dva bloky, které v úkolníku nikdy nebyly: co jsem komu slíbil
+   a na co od koho čekám. První je dluh, druhé urgence — proto
+   nejsou v jednom seznamu.
+
+   Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
+   Když nic takového není, nezabírá ani řádek. */
+function PanelDnes({ tasks, theme, onOtevriUkol }) {
+  const { sliby, cekam } = useMemo(() => {
+    const ziva = (tasks || []).filter(t =>
+      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t) && t.osobaId);
+    const poDobe = (t) => -daysDiff(t.slibenoAt || t.createdAt || t.created_at);
+    const seradit = (a, b) => poDobe(b) - poDobe(a);
+    return {
+      sliby: ziva.filter(t => t.smer === "slibil").sort(seradit),
+      cekam: ziva.filter(t => t.smer === "cekam").sort(seradit),
+    };
+  }, [tasks]);
+
+  if (!sliby.length && !cekam.length) return null;
+
+  const dniPopis = (t) => {
+    const d = Math.max(0, -daysDiff(t.slibenoAt || t.createdAt || t.created_at));
+    if (d === 0) return "dnes";
+    if (d === 1) return "1 den";
+    return d < 5 ? `${d} dny` : `${d} dní`;
+  };
+
+  const blok = (nadpis, podnadpis, polozky, barvaOd) => (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{
+        display: "flex", alignItems: "baseline", justifyContent: "space-between",
+        gap: 8, marginBottom: 6,
+      }}>
+        <span style={{
+          fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+          textTransform: "uppercase", color: theme.textSub,
+        }}>{nadpis} <span style={{ color: theme.text }}>{polozky.length}</span></span>
+        <span style={{ fontSize: "11px", color: theme.textSub }}>{podnadpis}</span>
+      </div>
+      <div style={{
+        display: "flex", flexDirection: "column", gap: 1,
+        background: theme.cardBorder, border: `1px solid ${theme.cardBorder}`,
+        borderRadius: "10px", overflow: "hidden",
+      }}>
+        {polozky.map(t => {
+          const dni = Math.max(0, -daysDiff(t.slibenoAt || t.createdAt || t.created_at));
+          return (
+            <button key={t.id}
+              onClick={() => onOtevriUkol?.(t.id)}
+              title={`Otevřít úkol ${t.title}`}
+              aria-label={`Otevřít úkol ${t.title}`}
+              style={{
+                ...buttonStyle(), display: "flex", alignItems: "center", gap: 10,
+                textAlign: "left", background: theme.card, border: "none",
+                padding: "9px 12px", width: "100%",
+              }}>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{
+                  display: "block", fontSize: "13px", fontWeight: 500, color: theme.text,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>{t.title}</span>
+                <span style={{ display: "block", fontSize: "11px", color: theme.textSub }}>
+                  {t.osoba || "—"}
+                </span>
+              </span>
+              <span style={{
+                flex: "0 0 auto", fontSize: "11px", fontWeight: 700,
+                color: dni >= barvaOd ? theme.red : theme.textSub,
+              }}>{dniPopis(t)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      {sliby.length > 0 && blok("Slíbil jsem", "co visí na konkrétním člověku", sliby, 7)}
+      {cekam.length > 0 && blok("Čekám na druhé", "míč je na jejich straně", cekam, 7)}
+    </div>
+  );
+}
+
+
 function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDelete, onRestore, onPermanentDelete, onReject, onResubmit, onArchive, onUnarchive, isFromOther, theme, showCompleteBanner, onClose, comments = [], onAddComment, onToggleReaction, onMarkCommentsSeen, onTriggerCompleteAnim, onConvertTaskToNote }) {
 
 
@@ -9200,6 +9471,13 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               )}
             </div>
           </div>
+
+          {/* ── Koho se to týká (člověk z Lidí, ne uživatel) ── */}
+          <VazbaNaOsobu
+            task={task}
+            currentUser={currentUser}
+            theme={theme}
+            onZmena={(patch) => onUpdate(task.id, patch)} />
 
           {/* ── Checklist (PŘESUNUTO NAHORU - blíž ke jménu a poznámce) ── */}
           {(editType === "complex" || (task.checklist && task.checklist.length > 0)) && (
@@ -29014,6 +29292,21 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+            {/* Dnes = dnešek. Závazky vůči lidem patří nahoru, protože
+                právě ty držíš v hlavě. Když žádné nejsou, blok zmizí. */}
+            {viewStatus === "today" && (
+              <PanelDnes
+                tasks={tasks}
+                theme={theme}
+                onOtevriUkol={(id) => {
+                  // Závazek nemusí mít termín na dnešek, takže v pohledu
+                  // Dnes vůbec nemusí být v seznamu. Přepneme na „vše"
+                  // a úkol se podbarví a odroluje — stejně jako při
+                  // otevření úkolu z odkazu.
+                  setViewStatus("all");
+                  setHighlightedTaskId(String(id));
+                }} />
+            )}
             {(() => {
               let shownUnreadSep = false;
               let shownDoneSep = false;
