@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261013_0730";
+const FILE_VERSION = "261013_0810";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -27174,42 +27174,6 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
   // Dokud se neví, jestli je někdo přihlášený, nic nezobrazuj — jinak by
   // na okamžik probliklo přihlašovací okno i přihlášenému uživateli.
-  if (authState === "zjistuji") {
-    return (
-      <div style={{
-        minHeight: "100vh", background: THEMES[themeName].bg,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#506880", fontFamily: FONT,
-      }}>Načítám…</div>
-    );
-  }
-
-  if (authState !== "dovnitr" || !currentUser) {
-    return (
-      <>
-        {profileError && (
-          <div style={{
-            position: "fixed", top: 0, left: 0, right: 0, zIndex: 10,
-            background: THEMES[themeName].red, color: "#fff",
-            fontFamily: FONT, fontSize: 12, padding: "9px 14px", lineHeight: 1.5,
-          }}>{profileError}</div>
-        )}
-        <AuthLoginScreen themeName={themeName} onSignedIn={() => { /* stav řeší onAuthStateChange */ }} />
-      </>
-    );
-  }
-
-  // Přihlášený, ale data se ještě stahují.
-  if (loading) {
-    return (
-      <div style={{
-        minHeight: "100vh", background: THEMES[themeName].bg,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#506880", fontFamily: FONT,
-      }}>Načítám data…</div>
-    );
-  }
-
   /* ── Boční pruh ───────────────────────────────────────────────
      Od 900 px nahoru. Pod tím zůstává zatím stará lišta ikon —
      mobil se předělává v dalším kroku, ať se nerozbije obojí
@@ -27255,6 +27219,42 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     { k: "nastaveni", popis: "Nastavení", ikona: "nastaveni", napoveda: "Nastavení aplikace",
       akce: () => setShowUserMenu(s => !s) },
   ], []);
+
+  if (authState === "zjistuji") {
+    return (
+      <div style={{
+        minHeight: "100vh", background: THEMES[themeName].bg,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#506880", fontFamily: FONT,
+      }}>Načítám…</div>
+    );
+  }
+
+  if (authState !== "dovnitr" || !currentUser) {
+    return (
+      <>
+        {profileError && (
+          <div style={{
+            position: "fixed", top: 0, left: 0, right: 0, zIndex: 10,
+            background: THEMES[themeName].red, color: "#fff",
+            fontFamily: FONT, fontSize: 12, padding: "9px 14px", lineHeight: 1.5,
+          }}>{profileError}</div>
+        )}
+        <AuthLoginScreen themeName={themeName} onSignedIn={() => { /* stav řeší onAuthStateChange */ }} />
+      </>
+    );
+  }
+
+  // Přihlášený, ale data se ještě stahují.
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: "100vh", background: THEMES[themeName].bg,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#506880", fontFamily: FONT,
+      }}>Načítám data…</div>
+    );
+  }
 
   return (
     <div style={{
