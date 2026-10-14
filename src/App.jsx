@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_1710";
+const FILE_VERSION = "261014_1735";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -25089,6 +25089,18 @@ function App() {
      ostatního. Michal: „otevře se seznam všech úkolů, to je
      matoucí". */
   const [otevritPoSkoku, setOtevritPoSkoku] = useState(false);
+  /* Úkol otevřený přes celou obrazovku, nad tím, kde zrovna jsi.
+
+     Michal se ptal dvakrát: „když kliknu na úkol, zobrazí se mi
+     seznam všech úkolů a ne tento daný." Poprvé jsem to opravil
+     jen napůl — úkol se otevřel, ale pořád jsem ho vysypal do
+     seznamu třiceti devíti dalších. Klikl na jednu věc a dostal
+     seznam; že byla ta jedna věc rozbalená, na tom nic nemění.
+
+     Tohle je ta správná odpověď: žádné přepínání pohledu, žádný
+     seznam. Jen ten úkol. Zavřením se vrátíš přesně tam, odkud
+     jsi přišel — Dnes zůstane Dnes. */
+  const [ukolNaCeleObrazovce, setUkolNaCeleObrazovce] = useState(null);
 
   // Recently added tasks — mapa { taskId: addedAtTimestamp }
   // Tyto úkoly se zobrazí v sekci "✨ Právě přidáno" nahoře po dobu 5 minut.
@@ -25207,6 +25219,9 @@ function App() {
   /* Jedno místo pro „skoč na úkol". Dřív to bylo rozepsané na pěti
      místech jako setViewStatus + setHighlightedTaskId a lišilo se
      — některá otevírala, jiná ne. */
+  /* Otevřít jeden úkol, beze změny toho, co je pod ním. */
+  const otevriUkol = useCallback((id) => setUkolNaCeleObrazovce(String(id)), []);
+
   const skocNaUkol = useCallback((id, otevrit = true) => {
     /* Nejužší pohled, ve kterém ten úkol je. Dřív se vždycky
        skákalo do „vše" — a protože „vše" obsahuje i koš a splněné,
@@ -28288,8 +28303,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         const taskExists = tasks.some(t => String(t.id) === id);
         if (taskExists) {
           // Reset filters aby byl úkol viditelný (možná je v koši, splněný atd.)
-          // Z odkazu se čeká totéž co z Dneška: otevřít tu jednu věc.
-          skocNaUkol(id);
+          /* Z odkazu se čeká totéž co z Dneška: otevřít tu jednu
+             věc, ne seznam, ve kterém někde je. */
+          otevriUkol(id);
         }
       } else if (type === "reminder") {
         // Otevři reminder sheet — uživatel uvidí svou připomínku
@@ -29413,7 +29429,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             tasks={tasks}
             theme={theme}
             onClose={() => setRevizeOtevrena(false)}
-            onOtevriUkol={(id) => skocNaUkol(id)}
+            onOtevriUkol={(id) => otevriUkol(id)}
             onUkazProsle={() => setProtridimOtevreno(true)} />
         )}
 
@@ -29428,12 +29444,97 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onSmaz={(id) => deleteTask(id)} />
         )}
 
+        {/* ══ JEDEN ÚKOL PŘES CELOU OBRAZOVKU ═══════════════════
+            Otevře se nad tím, kde jsi. Pod ním zůstane Dnes
+            nedotčený a zavřením se vrátíš přesně tam. */}
+        {ukolNaCeleObrazovce && (() => {
+          const u = tasks.find(t => String(t.id) === String(ukolNaCeleObrazovce));
+          if (!u) return null;
+          return (
+            <div onClick={() => setUkolNaCeleObrazovce(null)} style={{
+              position: "fixed", inset: 0, zIndex: 1000,
+              background: "rgba(0,0,0,0.45)", display: "flex",
+              alignItems: "flex-start", justifyContent: "center",
+              padding: "16px 12px", overflowY: "auto",
+            }}>
+              <div onClick={e => e.stopPropagation()} role="dialog"
+                aria-label={`Úkol ${u.title}`} style={{
+                  width: "100%", maxWidth: "620px", marginTop: "3vh",
+                }}>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  marginBottom: 9, padding: "0 2px",
+                }}>
+                  <span style={{
+                    flex: 1, minWidth: 0, fontSize: "10px", fontWeight: 700,
+                    letterSpacing: "0.1em", textTransform: "uppercase", color: "#fff",
+                    opacity: 0.85,
+                  }}>Úkol</span>
+                  <button onClick={() => setUkolNaCeleObrazovce(null)}
+                    title="Zavřít — vrátíš se tam, odkud jsi přišel"
+                    aria-label="Zavřít úkol"
+                    style={{
+                      ...buttonStyle(), width: 34, height: 34, padding: 0,
+                      fontSize: 20, background: "rgba(255,255,255,0.18)",
+                      color: "#fff", border: "none",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>×</button>
+                </div>
+                <TaskCard
+                  task={u}
+                  otevriRovnou
+                  isHighlighted
+                  currentUser={currentUser}
+                  users={users}
+                  onStatusChange={(id, action) => {
+                    changeStatus(id, action);
+                    // Po odškrtnutí nebo smazání nemá okno co ukazovat.
+                    if (action === "done" || action === "delete") setUkolNaCeleObrazovce(null);
+                  }}
+                  onMarkSeen={markSeen}
+                  onUpdate={updateTask}
+                  onDelete={(id) => { deleteTask(id); setUkolNaCeleObrazovce(null); }}
+                  onRestore={restoreTask}
+                  onPermanentDelete={permanentlyDeleteTask}
+                  onReject={rejectTask}
+                  onResubmit={resubmitTask}
+                  onArchive={archiveTask}
+                  onUnarchive={unarchiveTask}
+                  onUnreject={unrejectTask}
+                  onBlockUser={blockUser}
+                  theme={theme}
+                  comments={comments.filter(c => c.taskId === u.id)}
+                  onAddComment={addComment}
+                  onConvertTaskToNote={convertTaskToNote}
+                  onToggleReaction={toggleReaction}
+                  onMarkCommentsSeen={markCommentsSeen}
+                  customLists={customLists}
+                  onStartFocus={(taskId) => {
+                    setUkolNaCeleObrazovce(null);
+                    setFocusInitialTask(taskId);
+                    setShowFocus(true);
+                  }} />
+                {/* Cesta do seznamu zůstává — jen už není povinná. */}
+                <button
+                  onClick={() => { setUkolNaCeleObrazovce(null); skocNaUkol(u.id, false); }}
+                  title="Ukázat tenhle úkol v seznamu mezi ostatními"
+                  aria-label="Ukázat v seznamu úkolů"
+                  style={{
+                    ...buttonStyle(), marginTop: 10, padding: "7px 13px",
+                    fontSize: 12, fontWeight: 500,
+                    background: "rgba(255,255,255,0.18)", color: "#fff", border: "none",
+                  }}>Ukázat v seznamu</button>
+              </div>
+            </div>
+          );
+        })()}
+
         {zasobnikOtevreno && (
           <ZasobnikSheet
             tasks={tasks}
             theme={theme}
             onClose={() => setZasobnikOtevreno(false)}
-            onOtevriUkol={(id) => skocNaUkol(id)}
+            onOtevriUkol={(id) => otevriUkol(id)}
             onUprav={(id, patch) => updateTask(id, patch)} />
         )}
 
@@ -31163,7 +31264,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                    Michal: „otevře se seznam všech úkolů, to je
                    matoucí." Měl pravdu: klikls na jednu věc,
                    dostals třicet. */
-                onOtevriUkol={(id) => skocNaUkol(id)} />
+                onOtevriUkol={(id) => otevriUkol(id)} />
             )}
             {(() => {
               // Na Dnešku se seznam nevykresluje. Dnes má vlastní blok
