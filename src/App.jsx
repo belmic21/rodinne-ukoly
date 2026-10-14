@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_0530";
+const FILE_VERSION = "261014_0645";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3079,7 +3079,10 @@ async function apiLoadTasks() {
     let data, error;
     ({ data, error } = await supabase
       .from("tasks")
-      .select("*, osoba:map_people(id, name)")
+      // contact je volný text ("+420 603 …", mail, cokoli). Bere se
+      // proto, aby se dalo z Dneška volat jednou rukou, bez zacházky
+      // přes Lidi. Když se nedá přečíst jako telefon, ukáže se jen text.
+      .select("*, osoba:map_people(id, name, contact)")
       .order("created_at", { ascending: false }));
     if (error) {
       console.warn("Vazba na osobu zatím není v databázi, načítám bez ní.");
@@ -3096,6 +3099,7 @@ async function apiLoadTasks() {
       // kontakt z Lidí, ne uživatel aplikace.
       t.osobaId = row.osoba_id || null;
       t.osoba = row.osoba?.name || null;
+      t.osobaKontakt = row.osoba?.contact || null;
       t.smer = row.smer || null;          // slibil | cekam | null
       t.slibenoAt = row.slibeno_at || null;
       // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
@@ -8629,6 +8633,48 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
 }
 
 
+/* ═══ RODINY AKCÍ ══════════════════════════════════════════════
+   Michal: „Měl bych každý den vidět priority co je potřeba udělat,
+   komu volat, s kým jednat, kde navázat, co zařídit, komu poslat."
+
+   To není dělení podle data, ale podle toho, co se s věcí fyzicky
+   dělá. Důvod je praktický: když už máš telefon u hlavy, chceš
+   odvolat všechno naráz. Když sedíš u mailu, odepsat všechno naráz.
+   Přepínání mezi režimy je to, co stojí energii.
+
+   Rozpoznávání sloves v názvu („zavolat Ferovi") umí aplikace od
+   začátku — TAGS a detectTags. Dosud z toho ale nic neplynulo,
+   sloveso se jen ukázalo jako odznak. Tady se podle něj třídí.
+
+   Pořadí je schválně takové: nejdřív věci, u kterých je na druhém
+   konci člověk a záleží na hodině (volat, jednat), pak písemné,
+   pak peníze, a nakonec věci, které si člověk udělá sám kdykoli.
+
+   Úkol, na který sedne víc sloves, spadne do PRVNÍ rodiny v tomhle
+   pořadí. Jinak by byl v Dnešku dvakrát a počty by nesouhlasily. */
+const RODINY_AKCI = [
+  { k: "volat",    popis: "Zavolat",        znacky: ["zavolat"] },
+  { k: "jednat",   popis: "Jednat",         znacky: ["schuzka"] },
+  { k: "napsat",   popis: "Napsat a poslat", znacky: ["napsat", "zaslat", "informovat"] },
+  { k: "zaplatit", popis: "Zaplatit",       znacky: ["zaplatit"] },
+  { k: "zaridit",  popis: "Zařídit",        znacky: ["zaridit", "objednat", "koupit", "opravit", "pripravit", "vyzvednout", "uklid"] },
+];
+
+/* Vytáhne z volného textu něco, co se dá vytočit. Pole contact
+   u člověka je schválně volný text — bývá v něm „+420 603 123 456",
+   „603123456, mail@firma.cz" i „volat po 18h". Když se telefon
+   nepozná, vrátí null a ukáže se jen text; nikdy se nevytáčí nesmysl. */
+function telefonZTextu(text) {
+  if (!text) return null;
+  const m = String(text).match(/(\+?\d[\d\s/-]{7,15}\d)/);
+  if (!m) return null;
+  const cisla = m[1].replace(/[^\d+]/g, "");
+  // Kratší než osm číslic není telefon, delší než patnáct taky ne.
+  const delka = cisla.replace(/^\+/, "").length;
+  return delka >= 8 && delka <= 15 ? cisla : null;
+}
+
+
 /* ═══ PANEL DNES ═══════════════════════════════════════════════
    Dva bloky, které v úkolníku nikdy nebyly: co jsem komu slíbil
    a na co od koho čekám. První je dluh, druhé urgence — proto
@@ -8636,8 +8682,8 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, naStav }) {
-  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat } = useMemo(() => {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav }) {
+  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny } = useMemo(() => {
     const vse = (tasks || []).filter(t =>
       !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
     /* Odložené se do Dneška nepletou — mají datum návratu a do té
@@ -8646,6 +8692,15 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
     const odlozene = vse.filter(jeOdlozeny);
     const ziva = vse.filter(t => !jeOdlozeny(t));
     const sOsobou = ziva.filter(t => t.osobaId);
+
+    /* „Teď" je to, co má dnes termín, plus to, co se vleče přes
+       týden. Nejvýš pět položek — šestá by z toho zase udělala
+       seznam, ve kterém se nerozhoduje. Zbytek je v Úkolech.
+       Počítá se dřív než skupiny, protože ty z něj odečítají. */
+    const tedPolozky = ziva
+      .filter(t => t.dueDate && (daysDiff(t.dueDate) === 0 || daysDiff(t.dueDate) < -7))
+      .sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate))
+      .slice(0, 5);
     const poDobe = (t) => -daysDiff(t.slibenoAt || t.createdAt || t.created_at);
     const seradit = (a, b) => poDobe(b) - poDobe(a);
     return {
@@ -8668,13 +8723,33 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       nejblizsiNavrat: odlozene.length
         ? odlozene.map(t => t.showFrom).sort()[0]
         : null,
-      /* „Teď" je to, co má dnes termín, plus to, co se vleče přes
-         týden. Nejvýš pět položek — šestá by z toho zase udělala
-         seznam, ve kterém se nerozhoduje. Zbytek je v Úkolech. */
-      ted: ziva
-        .filter(t => t.dueDate && (daysDiff(t.dueDate) === 0 || daysDiff(t.dueDate) < -7))
-        .sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate))
-        .slice(0, 5),
+
+      // Kolik dnešních věcí ještě není vyřízených — to je fronta
+      // večerní uzávěrky.
+      dnesekZbyva: ziva.filter(t => t.dueDate && daysDiff(t.dueDate) === 0).length,
+
+      /* Zbytek dneška rozdělený podle akce. Schválně „zbytek" —
+         co je nahoře v Teď, se tady už neukazuje. Dvakrát totéž
+         byla přesně ta chyba, kvůli které měl Dnes třicet řádků,
+         ve kterých se nedalo nic poznat. */
+      skupiny: (() => {
+        const vTed = new Set(tedPolozky.map(t => t.id));
+        const kandidati = ziva.filter(t =>
+          !vTed.has(t.id) && t.dueDate && daysDiff(t.dueDate) <= 0);
+        return RODINY_AKCI
+          .map(r => ({
+            ...r,
+            polozky: kandidati.filter(t => {
+              const znacky = detectTags(t.title);
+              if (!znacky.some(z => r.znacky.includes(z))) return false;
+              // První rodina v pořadí vyhrává — viz komentář u RODINY_AKCI.
+              const prvni = RODINY_AKCI.find(x => znacky.some(z => x.znacky.includes(z)));
+              return prvni?.k === r.k;
+            }),
+          }))
+          .filter(r => r.polozky.length > 0);
+      })(),
+      ted: tedPolozky,
     };
   }, [tasks]);
 
@@ -8697,7 +8772,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
     } catch { return ""; }
   }, []);
 
-  const maCo = ted.length || sliby.length || cekam.length || cekaNaMe
+  const maCo = ted.length || skupiny.length || sliby.length || cekam.length || cekaNaMe
     || prosle || nepochopeno || odlozeno || posledni;
   // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
   // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
@@ -8857,6 +8932,38 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
         </button>
       )}
 
+      {/* ══ ZAVŘÍT DEN ═══════════════════════════════════════════
+          Ukáže se až po nastavené hodině a jen když na dnešek něco
+          zbývá. Schválně pásek, ne vyskakovací okno — ve dvacet
+          hodin je člověk možná u večeře a modální okno by bylo
+          drzé. Zmizí samo tím, že frontu projdeš.
+
+          Smysl: zítřejší Dnes nemůže říct pravdu, dokud se
+          nerozhodne o dnešku. Bez uzávěrky se dnešní nedodělky
+          ráno objeví jako „po termínu" a hromada roste. */}
+      {onZavriDen && dnesekZbyva > 0 && new Date().getHours() >= hodinaUzavrky && (
+        <button
+          onClick={() => onZavriDen?.()}
+          title={`Projít ${dnesekZbyva} dnešních věcí — u každé hotovo, zítra, odložit nebo smazat`}
+          aria-label={`Zavřít den — zbývá ${dnesekZbyva} ${dnesekZbyva === 1 ? "věc" : dnesekZbyva < 5 ? "věci" : "věcí"}`}
+          style={{
+            ...buttonStyle(), display: "flex", alignItems: "center", gap: 9,
+            width: "100%", textAlign: "left", marginBottom: 10,
+            padding: "11px 13px", borderRadius: "10px",
+            background: theme.card, color: theme.text,
+            border: `1.5px solid ${theme.accent}`,
+          }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
+            <strong style={{ fontWeight: 700 }}>Zavři den</strong>
+            <span style={{ color: theme.textSub }}>
+              {" "}— na dnešek {dnesekZbyva === 1 ? "zbývá" : "zbývají"} {dnesekZbyva}
+              {dnesekZbyva === 1 ? " věc" : dnesekZbyva < 5 ? " věci" : " věcí"}
+            </span>
+          </span>
+          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Projít</span>
+        </button>
+      )}
+
       {/* Co udělali druzí. Podrobnosti jsou ve Zprávách, tady jen
           upozornění — dvakrát totéž by byl šum. */}
       {cekaNaMe > 0 && (
@@ -8935,13 +9042,80 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
         </div>
       )}
 
+      {/* ══ ZBYTEK DNEŠKA PODLE AKCE ═════════════════════════════
+          Odpověď na „komu volat, s kým jednat, komu poslat, co
+          zařídit". U volání a jednání je vedle jména rovnou telefon,
+          takže se dá vytočit z Dneška — bez zacházky přes Lidi.
+          Datum se tady neukazuje schválně: všechno v těchhle
+          skupinách je na dnešek nebo dřív, tak by to byl šum. */}
+      {skupiny.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {skupiny.map(s => (
+            <div key={s.k} style={{ marginBottom: 11 }}>
+              <div style={{
+                fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+                textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
+              }}>{s.popis} · {s.polozky.length}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {s.polozky.slice(0, 6).map(t => {
+                  const tel = (s.k === "volat" || s.k === "jednat") ? telefonZTextu(t.osobaKontakt) : null;
+                  return (
+                    <div key={t.id} style={{
+                      display: "flex", alignItems: "center", gap: 7,
+                      background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                      borderRadius: "9px", padding: "8px 10px",
+                    }}>
+                      <button onClick={() => onOtevriUkol?.(t.id)}
+                        title="Otevřít úkol" aria-label={`Otevřít úkol ${t.title}`}
+                        style={{
+                          ...buttonStyle(), flex: 1, minWidth: 0, textAlign: "left",
+                          background: "transparent", padding: 0,
+                        }}>
+                        <span style={{ display: "block", fontSize: "13.5px", fontWeight: 600, color: theme.text }}>
+                          {t.title}
+                        </span>
+                        {(t.osoba || t.osobaKontakt) && (
+                          <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                            {t.osoba}{t.osobaKontakt && !tel ? ` · ${t.osobaKontakt}` : ""}
+                          </span>
+                        )}
+                      </button>
+                      {/* Telefon jako odkaz tel: — na mobilu vytočí,
+                          na počítači otevře, co má člověk nastavené.
+                          Když se číslo z kontaktu nepozná, tlačítko
+                          tu není vůbec; nevytáčí se nic na slepo. */}
+                      {tel && (
+                        <a href={`tel:${tel}`}
+                          title={`Zavolat ${t.osoba || ""} na ${tel}`.trim()}
+                          aria-label={`Zavolat ${t.osoba || tel}`}
+                          style={{
+                            flex: "0 0 auto", textDecoration: "none",
+                            fontSize: "12px", fontWeight: 700, color: "#fff",
+                            background: theme.accent, borderRadius: "8px",
+                            padding: "6px 11px", fontFamily: FONT,
+                          }}>Zavolat</a>
+                      )}
+                    </div>
+                  );
+                })}
+                {s.polozky.length > 6 && (
+                  <div style={{ fontSize: "11.5px", color: theme.textSub, padding: "2px 2px" }}>
+                    a další {s.polozky.length - 6} — v Úkolech
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {sliby.length > 0 && blok("Slíbil jsem", "co visí na konkrétním člověku", sliby, 7)}
       {cekam.length > 0 && blok("Čekám na druhé", "míč je na jejich straně", cekam, 7)}
 
       {/* Patička — věci, které na Dnešek nepatří, ale musí být po ruce.
           Schválně šedě a bez barvy: Dnes je o dnešku, ne o tom,
           co uteklo. */}
-      {(odlozeno > 0 || posledni) && (
+      {(odlozeno > 0 || posledni || (onRevize && new Date().getDay() === 5)) && (
         <div style={{ borderTop: `1px solid ${theme.cardBorder}`, marginTop: 4, paddingTop: 2 }}>
           {/* Řádek o propadlých tady býval taky — šedý, dole, lehce
               přehlédnutelný. Přestěhoval se nahoru na modrou kartu.
@@ -8949,6 +9123,11 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
               rozhodl, že teď nejsou. Patří sem právě proto, že
               nechtějí pozornost — ale musí být vidět, že existují
               a kdy se vrátí. Jinak je to skrytá hromada. */}
+          {/* V pátek se revize nabídne sama. Jindy je v pruhu —
+              připomínat ji každý den by z ní udělala kulisu. */}
+          {onRevize && new Date().getDay() === 5 && radekPaty(
+            "Je pátek. Mrkni, co se za týden zaseklo.",
+            "Revize týdne", "Otevřít revizi týdne", () => onRevize?.())}
           {odlozeno > 0 && radekPaty(
             <>V zásobníku {odlozeno === 1 ? "čeká" : "čekají"} <strong style={{ color: theme.text, fontWeight: 600 }}>{odlozeno}</strong>
               {odlozeno === 1 ? " věc" : odlozeno < 5 ? " věci" : " věcí"}
@@ -9166,7 +9345,23 @@ function SpodniLista({ theme, cile, aktivniKlic }) {
    Seznam se vezme při otevření a dál se nemění. Kdyby se
    přepočítával po každém kliknutí, položky by pod rukama poskakovaly
    a nebylo by poznat, kolik ještě zbývá. */
-function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
+function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
+  rezim = "protridit" }) {
+  /* Dva režimy, jedno okno. Mechanika je stejná — jedna věc přes
+     celou obrazovku, čtyři možnosti, klávesy 1–4 — mění se jen to,
+     co je ve frontě a jak se jmenuje první volba:
+
+       protridit — všechno, o čem není rozhodnuto (po termínu,
+                   akutní bez termínu, zapomenuté). Pouští se, když
+                   je nepořádek. Volba 1 = Udělám dnes.
+       uzavrka   — co mělo být dnes a ještě není. Pouští se večer,
+                   aby šel člověk spát s čistou hlavou a zítřejší
+                   Dnes nelhal. Volba 1 = Hotovo.
+
+     Druhá kopie tohohle okna by byla třetí místo v souboru, kde se
+     ta samá logika žije vlastním životem. Tenhle soubor už jeden
+     výpadek kvůli zdvojenému kódu měl, proto jeden komponent. */
+  const jeUzavrka = rezim === "uzavrka";
   /* Do fronty patří TŘI druhy nepořádku, ne jen propadlé termíny.
      Do 13. 10. tu byly jenom propadlé — a zbylé dva druhy se tím
      pádem nikde neřešily a jen se kupily:
@@ -9185,6 +9380,18 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
   const [fronta] = useState(() => {
     const ziva = (tasks || []).filter(t =>
       !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t) && !jeOdlozeny(t));
+
+    /* Uzávěrka řeší jen dnešek. Co je po termínu, do večerní
+       uzávěrky nepatří — na to je Protřídit, a míchat obojí by
+       znamenalo, že se večer znovu prochází celá hromada
+       a nikdo to nedokončí. */
+    if (jeUzavrka) {
+      return ziva
+        .filter(t => t.dueDate && daysDiff(t.dueDate) === 0)
+        .sort((a, b) => (a.priority === "urgent" ? -1 : 0) - (b.priority === "urgent" ? -1 : 0))
+        .map(t => ({ t, duvod: "dnesek" }));
+    }
+
     const prosle = ziva
       .filter(t => t.dueDate && daysDiff(t.dueDate) < 0)
       .sort((a, b) => daysDiff(a.dueDate) - daysDiff(b.dueDate))
@@ -9220,12 +9427,24 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
   };
 
   const volby = useMemo(() => [
-    {
+    /* Volba 1 — v Protřídit „udělám to dnes", ve večerní uzávěrce
+       „už je to hotové". Večer se neplánuje, večer se uklízí. */
+    jeUzavrka ? {
+      klavesa: "1", popis: "Hotovo", hlavni: true,
+      napoveda: "Odškrtne úkol jako vyřízený",
+      akce: () => { onHotovo?.(ukol.id); dal(); },
+    } : {
       klavesa: "1", popis: "Udělám dnes", hlavni: true,
       napoveda: "Přesune termín na dnešek",
       akce: () => { onUprav?.(ukol.id, { dueDate: dnesISO() }); dal(); },
     },
-    {
+    /* Volba 2 — večer je odpověď skoro vždycky „zítra", takže je to
+       jedno kliknutí bez kalendáře. Kalendář zůstává pod volbou 3. */
+    jeUzavrka ? {
+      klavesa: "2", popis: "Zítra",
+      napoveda: "Přesune termín na zítřejší den",
+      akce: () => { onUprav?.(ukol.id, { dueDate: zaDni(1) }); dal(); },
+    } : {
       klavesa: "2", popis: "Dát nový termín",
       napoveda: "Vybrat jiné datum",
       akce: () => setZadavamDatum(true),
@@ -9256,7 +9475,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
       napoveda: "Pošle úkol do koše. Vrátit se dá pod jménem → Koš.",
       akce: () => { onSmaz?.(ukol.id); dal(); },
     },
-  ], [ukol, onUprav, onSmaz, dal]);
+  ], [ukol, onUprav, onSmaz, onHotovo, jeUzavrka, dal]);
 
   /* Rychlé volby termínu. Dívat se do kalendáře kvůli „zítra" je
      zbytečné zdržení — devět z deseti odkladů je jedna z těchhle
@@ -9321,9 +9540,13 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text }}>Protřídit</div>
+            <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text }}>
+              {jeUzavrka ? "Zavřít den" : "Protřídit"}
+            </div>
             <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
-              Jedna věc po druhé. Žádná z nich nezmizí sama.
+              {jeUzavrka
+                ? "Co mělo být dnes. U každé věci jedno rozhodnutí."
+                : "Jedna věc po druhé. Žádná z nich nezmizí sama."}
             </div>
           </div>
           {/* Tady bývalo tlačítko „Nechat na jindy". Znělo jako další
@@ -9341,15 +9564,24 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
         {hotovo ? (
           <div style={{ textAlign: "center", padding: "28px 8px" }}>
             <div style={{ fontSize: "17px", fontWeight: 700, color: theme.green, marginBottom: 6 }}>
-              {fronta.length === 0 ? "Protřídit není co." : "Hotovo, protříděno."}
+              {jeUzavrka
+                ? (fronta.length === 0 ? "Den už je zavřený." : "Den je zavřený.")
+                : (fronta.length === 0 ? "Protřídit není co." : "Hotovo, protříděno.")}
             </div>
             {/* Tahle věta je důvod, proč to celé existuje: po
-                protřídění Dnes mluví pravdu. Předtím mluvit nemohl. */}
+                protřídění Dnes mluví pravdu. Předtím mluvit nemohl.
+                A u uzávěrky je to ta věta, kvůli které se dá jít
+                spát — nic nezůstalo nerozhodnuté. */}
             <div style={{ fontSize: "13px", color: theme.textSub, marginBottom: 18, lineHeight: 1.5 }}>
-              {fronta.length === 0
-                ? "Nic po termínu, nic akutního bez termínu, nic zapomenutého."
-                : <>Prošel jsi {fronta.length} {fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.<br />
-                   Teď už ti <strong style={{ color: theme.text }}>Dnes</strong> říká pravdu.</>}
+              {jeUzavrka
+                ? (fronta.length === 0
+                    ? "Na dnešek nezbylo nic nerozhodnutého."
+                    : <>Prošel jsi {fronta.length} {fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.<br />
+                       Nic nezůstalo nerozhodnuté. Můžeš to zavřít.</>)
+                : (fronta.length === 0
+                    ? "Nic po termínu, nic akutního bez termínu, nic zapomenutého."
+                    : <>Prošel jsi {fronta.length} {fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.<br />
+                       Teď už ti <strong style={{ color: theme.text }}>Dnes</strong> říká pravdu.</>)}
             </div>
             <button onClick={onClose} style={{
               ...buttonStyle(), padding: "11px 22px", fontSize: "14px", fontWeight: 700,
@@ -9384,7 +9616,10 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz }) {
                   u úkolu bez termínu nedalo poznat, co se po mně chce —
                   vypadal stejně jako propadlý. */}
               {(() => {
-                const z = duvod === "prosle"
+                const z = duvod === "dnesek"
+                  ? { text: ukol.priority === "urgent" ? "Dnešek — akutní" : "Mělo být dnes",
+                      barva: ukol.priority === "urgent" ? theme.red : theme.accent }
+                  : duvod === "prosle"
                   ? (() => { const d = Math.abs(daysDiff(ukol.dueDate));
                       return { text: `${d} ${d === 1 ? "den" : d < 5 ? "dny" : "dní"} po termínu`, barva: theme.red }; })()
                   : duvod === "akutni"
@@ -9635,6 +9870,157 @@ function ZasobnikSheet({ tasks, theme, onClose, onOtevriUkol, onUprav }) {
             })}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══ REVIZE TÝDNE ═════════════════════════════════════════════
+   Uzávěrka dne řeší dnešek, Protřídit řeší nepořádek. Ani jedno
+   neodpoví na otázku, která se ptá jen v pátek: co se za ten
+   týden někde zaseklo a nikdo si toho nevšiml?
+
+   Čtyři věci, na které se nikdy nepřijde při denním provozu:
+
+     1. co se příští týden samo vrátí — ať to není překvapení
+     2. co jsem komu slíbil a visí to dlouho — tohle je dluh
+     3. na co čekám a druhá strana se neozývá — tady se urguje
+     4. co leží bez termínu dost dlouho, aby to bylo zapomenuté
+
+   Není to fronta jako Protřídit. Je to přehled — v pátek se
+   nerozhoduje o každé věci, ale koukne se, kde je zadrhnutí. */
+function RevizeSheet({ tasks, theme, onClose, onOtevriUkol, onUkazProsle }) {
+  useEscapeKey(onClose, true);
+
+  const sekce = useMemo(() => {
+    const ziva = (tasks || []).filter(t =>
+      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
+    const stari = (t) => Math.max(0, -daysDiff(t.slibenoAt || t.createdAt || t.created_at));
+    const dlouho = (t) => stari(t) >= 14;
+
+    return [
+      {
+        k: "vrati",
+        nadpis: "Vrátí se příští týden",
+        proc: "Ať to v pondělí není překvapení.",
+        polozky: ziva
+          .filter(t => jeOdlozeny(t) && daysDiff(t.showFrom) <= 7)
+          .sort((a, b) => String(a.showFrom).localeCompare(String(b.showFrom)))
+          .map(t => ({ t, popis: `vrátí se ${formatDate(t.showFrom)}` })),
+      },
+      {
+        k: "sliby",
+        nadpis: "Slíbil jsem a visí to",
+        proc: "Čtrnáct dní a víc. Tohle je dluh, ne úkol.",
+        polozky: ziva
+          .filter(t => t.smer === "slibil" && dlouho(t))
+          .sort((a, b) => stari(b) - stari(a))
+          .map(t => ({ t, popis: `${t.osoba || "bez osoby"} · ${stari(t)} dní` })),
+      },
+      {
+        k: "cekam",
+        nadpis: "Čekám a nikdo se neozval",
+        proc: "Čtrnáct dní a víc. Tady se urguje.",
+        polozky: ziva
+          .filter(t => t.smer === "cekam" && dlouho(t))
+          .sort((a, b) => stari(b) - stari(a))
+          .map(t => ({ t, popis: `${t.osoba || "bez osoby"} · ${stari(t)} dní` })),
+      },
+      {
+        k: "lezi",
+        nadpis: "Leží bez termínu",
+        proc: "Třicet dní a víc bez data. Patří to do Protřídit.",
+        polozky: ziva
+          .filter(t => !jeOdlozeny(t) && isForgotten(t))
+          .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+          .map(t => ({ t, popis: `${Math.floor((Date.now() - new Date(t.createdAt).getTime()) / 86400000)} dní` })),
+      },
+    ];
+  }, [tasks]);
+
+  const celkem = sekce.reduce((s, x) => s + x.polozky.length, 0);
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(0,0,0,0.45)", display: "flex",
+      alignItems: "flex-start", justifyContent: "center", padding: "20px 14px",
+      overflowY: "auto",
+    }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Revize týdne" style={{
+        background: theme.bg, borderRadius: "16px", padding: "20px",
+        width: "100%", maxWidth: "580px", marginTop: "4vh",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text }}>Revize týdne</div>
+            <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
+              Kde se co za ten týden zaseklo.
+            </div>
+          </div>
+          <button onClick={onClose} title="Zavřít — nic se nezmění" aria-label="Zavřít okno" style={{
+            ...buttonStyle(), width: "34px", height: "34px", padding: 0, fontSize: "20px",
+            background: "transparent", color: theme.textSub, border: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>×</button>
+        </div>
+
+        {celkem === 0 ? (
+          <div style={{ padding: "22px 2px", textAlign: "center" }}>
+            <div style={{ fontSize: "14px", fontWeight: 700, color: theme.green, marginBottom: 6 }}>
+              Nic se nezaseklo.
+            </div>
+            <div style={{ fontSize: "13px", color: theme.textSub, lineHeight: 1.5 }}>
+              Žádný starý slib, nikdo ti nedluží odpověď a nic neleží bez termínu.
+            </div>
+          </div>
+        ) : sekce.filter(s => s.polozky.length > 0).map(s => (
+          <div key={s.k} style={{ marginBottom: 16 }}>
+            <div style={{
+              fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+              textTransform: "uppercase", color: theme.textSub, marginBottom: 2,
+            }}>{s.nadpis} · {s.polozky.length}</div>
+            {/* Každá sekce říká, PROČ se na ni v pátek koukáš.
+                Bez toho je to jen další seznam. */}
+            <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 7 }}>{s.proc}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {s.polozky.slice(0, 8).map(({ t, popis }) => (
+                <button key={t.id}
+                  onClick={() => { onOtevriUkol?.(t.id); onClose?.(); }}
+                  title="Otevřít úkol" aria-label={`Otevřít úkol ${t.title}`}
+                  style={{
+                    ...buttonStyle(), textAlign: "left", width: "100%",
+                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: "9px", padding: "9px 11px",
+                  }}>
+                  <span style={{ display: "block", fontSize: "13.5px", fontWeight: 600, color: theme.text }}>
+                    {t.title}
+                  </span>
+                  <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                    {popis}
+                  </span>
+                </button>
+              ))}
+              {s.polozky.length > 8 && (
+                <div style={{ fontSize: "11.5px", color: theme.textSub, padding: "3px 2px" }}>
+                  a další {s.polozky.length - 8}
+                  {s.k === "lezi" && " — projdeš je v Protřídit"}
+                </div>
+              )}
+            </div>
+            {s.k === "lezi" && (
+              <button onClick={() => { onClose?.(); onUkazProsle?.(); }}
+                title="Otevřít Protřídit a rozhodnout o nich jednu po druhé"
+                aria-label="Otevřít Protřídit"
+                style={{
+                  ...buttonStyle(), marginTop: 8, padding: "8px 14px",
+                  fontSize: "12.5px", fontWeight: 700,
+                  background: theme.accent, color: "#fff",
+                }}>Protřídit</button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -24562,6 +24948,20 @@ function App() {
   const [protridimOtevreno, setProtridimOtevreno] = useState(false);
   // Zásobník — odložené věci a datum, kdy se samy vrátí.
   const [zasobnikOtevreno, setZasobnikOtevreno] = useState(false);
+  // Zavřít den — večerní uzávěrka. Stejné okno jako Protřídit,
+  // jen v režimu „uzavrka".
+  const [uzavrkaOtevrena, setUzavrkaOtevrena] = useState(false);
+  // Revize týdne — přehled toho, co se za týden zaseklo.
+  const [revizeOtevrena, setRevizeOtevrena] = useState(false);
+  /* Od kolika hodin Dnes nabídne uzávěrku. V localStorage, ne
+     v databázi — je to zvyk jednoho člověka na jednom zařízení,
+     ne společné nastavení. */
+  const [hodinaUzavrky, setHodinaUzavrky] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("ft_hodina_uzavrky"), 10);
+      return Number.isFinite(v) && v >= 0 && v <= 23 ? v : 20;
+    } catch (e) { return 20; }
+  });
   // highlightedTaskId — úkol který právě navigoval (např. ze search) → flash glow na 2s
   const [highlightedTaskId, setHighlightedTaskId] = useState(null);
   // Recently added tasks — mapa { taskId: addedAtTimestamp }
@@ -27773,7 +28173,10 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         akce: () => otevriObchod(null) },
       prace && { k: "lide", popis: "Lidé", ikona: "lide", napoveda: "Investoři, zprostředkovatelé a kontakty",
         akce: () => otevriObchod("lide") },
-      prace && { k: "vazby", popis: "Vazby", ikona: "vazby", napoveda: "Co o kom víš",
+      /* Jmenovalo se to „Vazby" a Michal měl pravdu, že to nesedí:
+         vazby slibují síť vztahů mezi lidmi, tohle jsou zápisky
+         o lidech. Název říká, co tam je. */
+      prace && { k: "vazby", popis: "Co vím", ikona: "vazby", napoveda: "Zápisky o lidech — co o kom víš",
         akce: () => setShowMapaSheet(true) },
       { k: "poznamky", popis: "Poznámky", ikona: "poznamky", napoveda: "Volný text, který nikam nepatří",
         akce: () => setShowNotesSheet(true) },
@@ -27784,6 +28187,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       vZasobniku > 0 && { k: "zasobnik", popis: "Zásobník", ikona: "zasobnik", pocet: vZasobniku,
         napoveda: "Odložené věci a datum, kdy se samy vrátí",
         akce: () => setZasobnikOtevreno(true) },
+      /* Revize je v pruhu pořád, ne jen v pátek — když si na ni
+         vzpomeneš ve středu, nemá smysl ji schovávat. V pátek se
+         navíc sama nabídne na Dnešku. */
+      { k: "revize", popis: "Revize týdne", ikona: "statistiky",
+        napoveda: "Co se za týden zaseklo: staré sliby, mlčící lidé, věci bez termínu",
+        akce: () => setRevizeOtevrena(true) },
     ];
     return vse.filter(Boolean);
   }, [praceFilter, otevriObchod, tasks]);
@@ -28532,6 +28941,38 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 </button>
               );
             })}
+            {/* Od kolika hodin Dnes nabídne „Zavři den". Ne, kdy se
+                má jít spát — jen od kdy má smysl uklízet dnešek. */}
+            <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
+            <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700,
+              color: theme.textMid, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+              🌙 Zavřít den od
+            </div>
+            <div style={{ padding: "2px 12px 4px", fontSize: 10, color: theme.textSub, lineHeight: 1.4 }}>
+              Od téhle hodiny ti <strong>Dnes</strong> nabídne projít, co na dnešek zbylo.
+            </div>
+            <div style={{ display: "flex", gap: 4, padding: "2px 12px 6px" }}>
+              {[17, 18, 19, 20, 21, 22].map(h => {
+                const isSel = hodinaUzavrky === h;
+                return (
+                  <button key={h}
+                    onClick={() => {
+                      setHodinaUzavrky(h);
+                      try { localStorage.setItem("ft_hodina_uzavrky", String(h)); } catch (e) { /* ignore */ }
+                    }}
+                    title={`Nabídnout uzávěrku od ${h}:00`}
+                    aria-label={`Zavřít den od ${h} hodin`}
+                    aria-pressed={isSel}
+                    style={{
+                      ...buttonStyle(), flex: 1, padding: "6px 0", fontSize: 11.5,
+                      fontWeight: isSel ? 800 : 500,
+                      background: isSel ? theme.accent : theme.inputBg,
+                      color: isSel ? "#fff" : theme.textSub,
+                      border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
+                    }}>{h}</button>
+                );
+              })}
+            </div>
             {/* Horizont aktivního pohledu — kolik dní dopředu vidíš v Aktivní */}
             <div style={{ height: "1px", background: theme.cardBorder, margin: "4px 0" }} />
             <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700,
@@ -28762,6 +29203,26 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             theme={theme}
             onClose={() => setProtridimOtevreno(false)}
             onUprav={(id, patch) => updateTask(id, patch)}
+            onSmaz={(id) => deleteTask(id)} />
+        )}
+
+        {revizeOtevrena && (
+          <RevizeSheet
+            tasks={tasks}
+            theme={theme}
+            onClose={() => setRevizeOtevrena(false)}
+            onOtevriUkol={(id) => { setViewStatus("all"); setHighlightedTaskId(String(id)); }}
+            onUkazProsle={() => setProtridimOtevreno(true)} />
+        )}
+
+        {uzavrkaOtevrena && (
+          <ProtriditSheet
+            rezim="uzavrka"
+            tasks={tasks}
+            theme={theme}
+            onClose={() => setUzavrkaOtevrena(false)}
+            onUprav={(id, patch) => updateTask(id, patch)}
+            onHotovo={(id) => changeStatus(id, "done")}
             onSmaz={(id) => deleteTask(id)} />
         )}
 
@@ -30453,6 +30914,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 onOtevriZpravy={() => setUpdatesPanelOpen(true)}
                 onUkazProsle={() => setProtridimOtevreno(true)}
                 onUkazZasobnik={() => setZasobnikOtevreno(true)}
+                onZavriDen={() => setUzavrkaOtevrena(true)}
+                onRevize={() => setRevizeOtevrena(true)}
+                hodinaUzavrky={hodinaUzavrky}
                 onOtevriUkol={(id) => {
                   // Závazek nemusí mít termín na dnešek, takže v pohledu
                   // Dnes vůbec nemusí být v seznamu. Přepneme na „vše"
