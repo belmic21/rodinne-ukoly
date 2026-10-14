@@ -1767,6 +1767,42 @@ export async function sdilenyRetezec(projectId) {
   }
 }
 
+/* Velká a malá česká písmena VÝČTEM, ne rozsahem.
+   [A-ZÁ-Ž] vypadá jako velká písmena, ale rozsah od Á (U+00C1)
+   po Ž (U+017D) zahrnuje i malá á, č, š, ů. Kvůli tomu se ze
+   „slyšel jsem od Fera" stalo město „šel". */
+const VELKA = "A-Z\u00c1\u010c\u010e\u00c9\u011a\u00cd\u0147\u00d3\u0158\u0160\u0164\u00da\u016e\u00dd\u017d";
+const MALA  = "a-z0-9\u00e1\u010d\u010f\u00e9\u011b\u00ed\u0148\u00f3\u0159\u0161\u0165\u00fa\u016f\u00fd\u017e";
+
+/* Jak se o typech mluví nahlas. Klíč je klíč z číselníku typ,
+   hodnoty jsou slova, kterými to člověk doopravdy řekne.
+
+   Popisek z číselníku se hledá jako celý řetězec, takže
+   „alzheimer centrum Jičín" by nenašlo nic — popisek zní
+   „Senior / Alzheimer centrum". A nikdo neřekne „rodinný dům
+   Beroun", když může říct „RD Beroun".
+
+   Když typ v číselníku není, jeho synonyma se neuplatní. Tabulka
+   se tím pádem nemusí držet v souladu s databází. */
+const SYNONYMA_TYPU = {
+  nemocnice:        ["nemocnice", "nemocnici", "nemocnicni"],
+  poliklinika:      ["poliklinika", "polikliniku"],
+  ldn:              ["ldn", "lecebna", "nasledna pece", "dlouhodobe nemocnych"],
+  ordinace:         ["ordinace", "klinika", "kliniku", "zdravotnicke stredisko"],
+  senior:           ["alzheimer", "senior", "senioru", "domov pro seniory", "dps", "pecovatelsky"],
+  prumyslovy_park:  ["prumyslovy park", "prumyslova zona", "prumyslova zona", "zona"],
+  logistika:        ["logisticke centrum", "logistika", "logisticky", "sklad", "skladovy"],
+  hala:             ["hala", "halu", "haly", "vyrobni"],
+  retail_park:      ["retail park", "retail"],
+  obchodni_centrum: ["obchodni centrum", "nakupni centrum", "galerie"],
+  kancelare:        ["kancelare", "kancelar", "administrativni", "offices"],
+  hotel:            ["hotel", "penzion", "apartmany"],
+  rodinny_dum:      ["rodinny dum", "rodinne domy", "rd "],
+  bytovy_dum:       ["bytovy dum", "bytovka", "bytove domy"],
+  rezidencni:       ["rezidencni", "rezidence", "bytovy projekt"],
+  pozemek:          ["pozemek", "pozemky", "parcela", "parcely"],
+};
+
 /* ── Rychlé zadání ───────────────────────────────────────
    Z věty "rodinný dům Beroun 3,5 mil" vytáhne, co umí, a zbytek
    nechá na tobě. Schválně nic nehádá do databáze — jen předvyplní
@@ -1790,25 +1826,73 @@ export function rozeberVetu(text, ciselniky) {
     zbytek = zbytek.replace(posledni[0], " ");
   }
 
-  // Typ nemovitosti podle popisku v číselníku
+  // Typ nemovitosti podle popisku v číselníku nebo podle synonyma.
+  //
+  // Samotný popisek nestačí: „alzheimer centrum Jičín" by se nenašlo,
+  // protože popisek zní „Senior / Alzheimer centrum" a hledá se celý
+  // řetězec. Mluvená řeč používá zkratky — RD, OC, zóna, bytovka.
   const typy = (ciselniky?.typ || []).filter(t => t.active);
   const bezDiakritiky = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const zbytekN = bezDiakritiky(zbytek);
-  let nejdelsi = null;
+  let nejdelsi = null, nalezenyText = null;
+
+  // Nejdřív celé popisky z číselníku — ty jsou nejpřesnější. Delší
+  // výhra: „obchodni centrum" má přednost před „centrum".
   for (const t of typy) {
     const ln = bezDiakritiky(t.label);
-    if (ln.length >= 4 && zbytekN.includes(ln)) {
-      if (!nejdelsi || ln.length > bezDiakritiky(nejdelsi.label).length) nejdelsi = t;
+    if (ln.length < 4) continue;
+    /* Hranice slova z OBOU stran. Dřív se hledalo prostým
+       includes() a popisek „Jiné" se našel uvnitř slova „jiného" —
+       z věty „něco úplně jiného" zbyl název „něco úplně ho".
+       Stejně tak „Hala" sedělo v „Michala".
+
+       Skloňování řeší synonyma níž, ne tohle; popisek je psaná
+       podoba a ta se v textu objeví celá, nebo vůbec. */
+    const re = new RegExp(
+      `(^|[^${MALA}${VELKA}])${ln.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^${MALA}${VELKA}])`, "i");
+    const mm = zbytekN.match(re);
+    if (mm && (!nejdelsi || ln.length > (nalezenyText || "").length)) {
+      nejdelsi = t; nalezenyText = ln;
+      out._zacatekTypu = mm.index + mm[1].length;
     }
   }
+
+  // Když popisek nesedl, zkusí se synonyma. Jsou vázaná na klíč
+  // v číselníku, takže když typ v databázi není, synonymum se
+  // neuplatní a nic se nerozbije.
+  if (!nejdelsi) {
+    for (const [klic, slova] of Object.entries(SYNONYMA_TYPU)) {
+      const t = typy.find(x => x.key === klic);
+      if (!t) continue;
+      for (const w of slova) {
+        const wn = bezDiakritiky(w);
+        // Hranice slova zleva, aby „hala" nenašlo v „Michala".
+        const re = new RegExp(`(^|[^a-z0-9])${wn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
+        const mm = zbytekN.match(re);
+        if (mm) {
+          const zacatek = mm.index + mm[1].length;
+          if (!nejdelsi || wn.length > (nalezenyText || "").length) {
+            nejdelsi = t; nalezenyText = wn;
+            out._zacatekTypu = zacatek;
+          }
+        }
+      }
+    }
+  }
+
   if (nejdelsi) {
     out.typ = nejdelsi.key;
-    const i = zbytekN.indexOf(bezDiakritiky(nejdelsi.label));
-    zbytek = zbytek.slice(0, i) + " " + zbytek.slice(i + nejdelsi.label.length);
+    const i = out._zacatekTypu !== undefined
+      ? out._zacatekTypu
+      : zbytekN.indexOf(nalezenyText);
+    zbytek = zbytek.slice(0, i) + " " + zbytek.slice(i + nalezenyText.length);
+    delete out._zacatekTypu;
   }
 
   // Velikost: "85 bytů", "8000 m2"
-  const velRe = /(\d+(?:[.,]\d+)?)\s*(byt\w*|m2|m²|ha|lůžk\w*|luzk\w*)/i;
+  // \w v JS nezahrnuje české znaky, takže „85 bytů" se odebralo
+  // jen jako „85 byt" a v názvu zůstalo osiřelé „ů".
+  const velRe = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(byt[${MALA}]*|m2|m\u00b2|ha|l\u016f\u017ek[${MALA}]*|luzk[${MALA}]*)`, "i");
   const mv = zbytek.match(velRe);
   if (mv) {
     out.velikost = parseFloat(mv[1].replace(",", "."));
@@ -1819,6 +1903,49 @@ export function rozeberVetu(text, ciselniky) {
     zbytek = zbytek.replace(mv[0], " ");
   }
 
-  out.nazev = zbytek.replace(/\s+/g, " ").trim() || puvodni;
+  /* ── Od koho to vím ──
+     „slyšel jsem od Fera", „od pana Nováka", „od Ondřeje Fera".
+     U tipu je tohle nejcennější údaj — bez něj je tip jen zvěst.
+     Vrací se jméno tak, jak bylo napsané, včetně skloňování;
+     dohledání člověka je věc hledání, které umí kmeny. */
+  const mOd = zbytek.match(new RegExp(
+    `\\bod\\s+(?:pana\\s+|pan\u00ed\\s+)?([${VELKA}][${MALA}]+)(?:\\s+([${VELKA}][${MALA}]+))?`, "u"));
+  if (mOd) {
+    out.odKoho = [mOd[1], mOd[2]].filter(Boolean).join(" ");
+    zbytek = zbytek.replace(mOd[0], " ");
+  }
+
+  /* ── Město ──
+     Schválně se tu NEHÁDÁ. Vrací se jen seznam slov, která by
+     městem být mohla — velká písmena uprostřed věty. Obrazovka
+     je pak jedno po druhém zkusí v číselníku obcí a vezme první
+     shodu; co se nenajde, zůstane v názvu.
+
+     Kdyby se město dohadovalo tady, dopadlo by to jako „Bělá"
+     v názvu zakázky „Bělá pod Bezdězem" — dvě různá místa. */
+  // Dvouslovné názvy musí držet pohromadě — s předložkou
+  // („Bělá pod Bezdězem") i bez ní („Mladá Boleslav"). Jinak se
+  // z jednoho města stanou dva nesmyslné kandidáti.
+  out.mestoKandidati = (zbytek.match(new RegExp(
+    `[${VELKA}][${MALA}]{2,}(?:\\s+(?:pod|nad|na|u|za|v|ve)\\s+[${VELKA}][${MALA}]+|\\s+[${VELKA}][${MALA}]{2,})?`,
+    "gu")) || []).slice(0, 4);
+
+  /* Jak se o tipu mluví: „slyšel jsem", „říkal mi", „vím o".
+     Do názvu zakázky to nepatří — tam má být věc, ne způsob,
+     jakým jsem se o ní dozvěděl. Zůstane to v poznámce. */
+  const VYCPAVKY = /\b(sly\u0161el jsem|sly\u0161el|\u0159\u00edkal mi|\u0159\u00edkal|v\u00edm o|v\u00edm \u017ee|mluvil jsem s|volal mi|psal mi|dozv\u011bd\u011bl jsem se|prej|\u00fadajn\u011b)\b/giu;
+  /* Osiřelé obecné slovo na začátku. Když synonymum sebralo
+     „alzheimer" z „alzheimer centrum Jičín", zůstalo „centrum
+     Jičín" — a to „centrum" už nese typ, takže v názvu přebývá. */
+  const OSIRELE = /^\s*(centrum|centra|park|z\u00f3na|zona|d\u016fm|domy|projekt|objekt)\s+/iu;
+  out.nazev = zbytek
+    .replace(VYCPAVKY, " ")
+    .replace(/\s+/g, " ").trim()
+    .replace(OSIRELE, "")
+    .replace(/\s+[,;]/g, ",")
+    .replace(/[,;]\s*$/, "")
+    .replace(/^[,;\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim() || puvodni;
   return out;
 }

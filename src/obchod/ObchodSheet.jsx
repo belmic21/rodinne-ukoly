@@ -389,6 +389,12 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       a padlé zakázky nemají tříštit pozornost. */}
                   <PasFazi theme={theme} faze={faze} filtr={filtr} zmen={zmenFiltr} />
 
+                  {/* Rychlý tip. Je přímo tady, ne za tlačítkem
+                      „+ ZAKÁZKA" — tipů bude desítky a každý klik
+                      navíc je důvod ho nezapsat. */}
+                  <RychlyTip theme={theme} owner={owner} ciselniky={ciselniky}
+                    onZalozeno={() => setObnov(k => k + 1)} />
+
                   {statistika && <Statistika theme={theme} owner={owner} />}
 
                   {vicFiltru && (
@@ -783,6 +789,156 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false,
             ))
           : polozky.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
       </select>
+    </div>
+  );
+}
+
+/* ── Rychlý tip ─────────────────────────────────────────
+   Michal má v systému jednu živou zakázku a desítky věcí, o kterých
+   ví a nemá na ně kontakt. Dokud se tip zadával plným formulářem,
+   nezadal se — devět polí za zvěst je moc.
+
+   Tady je jedno pole. Napíšeš, jak to řekneš nahlas:
+
+     „nemocnice Jičín, slyšel jsem od Fera"
+
+   a pod polem je VIDĚT, co z toho aplikace pochopila, ještě než
+   cokoli uložíš. To je ten rozdíl proti hádání: nic se nestane
+   potichu. Co nerozpozná, zůstane v názvu a opravíš to v detailu.
+
+   Zakládá se vždycky ve stavu tip. Tip není živá zakázka — na tipu
+   nepracuješ, zatím o něm jen víš. */
+function RychlyTip({ theme, owner, ciselniky, onZalozeno }) {
+  const [text, setText] = useState("");
+  const [uklada, setUklada] = useState(false);
+  const [chyba, setChyba] = useState(null);
+  const [hotovo, setHotovo] = useState(null);
+  const [obec, setObec] = useState(null);
+
+  const rozbor = useMemo(
+    () => (text.trim() ? rozeberVetu(text, ciselniky) : null),
+    [text, ciselniky]);
+
+  /* Město se dohledává v číselníku obcí, ne hádá. Zkouší se
+     kandidáti v pořadí, jak stáli ve větě, a bere se první shoda —
+     kdo se nenajde, zůstane v názvu. Bez tohohle by z „Bělá"
+     vznikla „Bělá pod Bezdězem" nebo „Bělá nad Radbuzou", což
+     jsou dvě různá místa stě kilometrů od sebe. */
+  useEffect(() => {
+    let zrus = false;
+    const kand = rozbor?.mestoKandidati || [];
+    if (!kand.length) { setObec(null); return; }
+    (async () => {
+      for (const k of kand) {
+        const n = await hledejObce(k, 3);
+        if (zrus) return;
+        const presne = n.find(o =>
+          o.nazev.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+          === k.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase());
+        if (presne || n.length === 1) { setObec(presne || n[0]); return; }
+      }
+      setObec(null);
+    })();
+    return () => { zrus = true; };
+  }, [rozbor]);
+
+  const uloz = async () => {
+    if (!rozbor?.nazev) return;
+    setUklada(true); setChyba(null);
+    const data = {
+      nazev: rozbor.nazev,
+      stav: "tip",
+      typ: rozbor.typ || null,
+      cena: rozbor.cena ?? null,
+      velikost: rozbor.velikost ?? null,
+      jednotka: rozbor.jednotka || null,
+      // Co se nepodařilo dohledat v číselníku obcí, jde do volného
+      // textu. Zahodit to by znamenalo ztratit jedinou informaci
+      // o tom, kde ta věc vlastně je.
+      mesto: obec?.nazev || null,
+      mesto_kod: obec?.kod || null,
+      okres: obec?.okres || null,
+      kraj: obec?.kraj || null,
+      lokalita_text: obec ? null : (rozbor.mestoKandidati?.[0] || null),
+      // Odkud to vím. U tipu je to nejcennější údaj — bez něj je
+      // tip jen zvěst, se kterou se nedá nic dělat.
+      souhrn: rozbor.odKoho ? `Tip od: ${rozbor.odKoho}` : null,
+    };
+    const res = await zalozZakazku(owner, data);
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba || "Nepovedlo se uložit."); return; }
+    setHotovo(rozbor.nazev);
+    setText("");
+    onZalozeno?.();
+    setTimeout(() => setHotovo(null), 4000);
+  };
+
+  const znacka = (co, hodnota, barva) => (
+    <span style={{
+      fontSize: 11.5, fontWeight: 400, color: theme.textSub,
+      background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+      borderRadius: 7, padding: "3px 8px", whiteSpace: "nowrap",
+    }}>
+      {co}{" "}
+      <strong style={{ fontWeight: 600, color: barva || theme.text }}>{hodnota}</strong>
+    </span>
+  );
+
+  return (
+    <div style={{ marginTop: 9 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <input
+          value={text}
+          onChange={e => { setText(e.target.value); setChyba(null); }}
+          onKeyDown={e => { if (e.key === "Enter" && rozbor?.nazev && !uklada) uloz(); }}
+          placeholder="nemocnice Jičín, slyšel jsem od Fera"
+          title="Napiš tip jednou větou. Co z toho aplikace pochopí, uvidíš pod polem."
+          aria-label="Rychlé zadání tipu jednou větou"
+          style={{ ...input(theme), flex: 1 }} />
+        <button
+          onClick={uloz}
+          disabled={!rozbor?.nazev || uklada}
+          title={rozbor?.nazev
+            ? `Založit tip „${rozbor.nazev}" — ve stavu Tip, nikam se neodesílá`
+            : "Nejdřív napiš, o čem tip je"}
+          aria-label="Založit tip"
+          style={{
+            ...btnMain(theme), minHeight: 40, padding: "0 16px",
+            whiteSpace: "nowrap",
+            background: rozbor?.nazev ? theme.accent : theme.inputBg,
+            color: rozbor?.nazev ? "#fff" : theme.textSub,
+            cursor: rozbor?.nazev && !uklada ? "pointer" : "default",
+          }}>{uklada ? "Ukládám…" : "+ TIP"}</button>
+      </div>
+
+      {/* Co aplikace pochopila. Schválně PŘED uložením — kdyby se
+          to ukazovalo až potom, bylo by to hlášení, ne kontrola. */}
+      {rozbor && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 7, alignItems: "center" }}>
+          {znacka("název", rozbor.nazev)}
+          {rozbor.typ && znacka("typ", popis(ciselniky, "typ", rozbor.typ))}
+          {obec && znacka("místo", `${obec.nazev} · ${popis(ciselniky, "okres", obec.okres) || obec.okres}`)}
+          {!obec && rozbor.mestoKandidati?.length > 0 && znacka("místo", rozbor.mestoKandidati[0], theme.yellow)}
+          {rozbor.odKoho && znacka("od", rozbor.odKoho)}
+          {rozbor.cena != null && znacka("cena", penizeKratce(rozbor.cena))}
+          {rozbor.velikost != null && znacka("velikost", `${rozbor.velikost} ${popis(ciselniky, "jednotka", rozbor.jednotka) || rozbor.jednotka || ""}`)}
+          {!rozbor.typ && (
+            <span style={{ fontSize: 11.5, color: theme.textSub }}>
+              typ nerozpoznán — doplníš v detailu
+            </span>
+          )}
+        </div>
+      )}
+
+      {chyba && (
+        <div style={{ marginTop: 6, fontSize: 12, color: theme.red }}>{chyba}</div>
+      )}
+      {hotovo && (
+        <div style={{ marginTop: 6, fontSize: 12, color: theme.green }}>
+          Založeno jako tip: <strong style={{ fontWeight: 600 }}>{hotovo}</strong>.
+          {" "}Najdeš ho pod dlaždicí <strong style={{ fontWeight: 600 }}>Tip</strong> nad seznamem.
+        </div>
+      )}
     </div>
   );
 }
