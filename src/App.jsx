@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_1700";
+const FILE_VERSION = "261014_1710";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1405,15 +1405,28 @@ input[type="checkbox"], input[type="radio"] {
    ovládací panel. Na dotykovém zařízení najetí neexistuje, tam
    zůstávají vidět pořád. Při psaní klávesnicí se ukážou taky,
    jinak by se na ně nedalo dostat tabulátorem. */
+/* Akce u řádku byly do 14. 10. schované úplně a ukázaly se až po
+   najetí myší. Michal: „ikony jako focus se zobrazí jen po najetí
+   myši, to není v pořádku." Měl pravdu — co není vidět, to
+   neexistuje, a na dotykovém displeji není najetí vůbec.
+
+   Úplně je rozsvítit taky nejde: tři svítící tlačítka na každém
+   řádku jsou přesně ta hromada ikon, na kterou si stěžoval dřív.
+   Proto jsou vidět pořád, ale tlumeně — a po najetí nebo při
+   procházení klávesnicí naplno. */
+.akce-radku {
+  opacity: 0.45;
+  transition: opacity 0.12s ease-out;
+}
 @media (hover: hover) and (pointer: fine) {
-  .akce-radku {
-    opacity: 0;
-    transition: opacity 0.12s ease-out;
-  }
   .karta-ukolu:hover .akce-radku,
   .karta-ukolu:focus-within .akce-radku {
     opacity: 1;
   }
+}
+/* Na dotyku není co rozsvěcet — tam platí plná viditelnost rovnou. */
+@media (hover: none) {
+  .akce-radku { opacity: 0.75; }
 }
 
 /* Vypnutý prvek vypadá vypnutě, ne rozbitě. */
@@ -27856,7 +27869,53 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         }
         tasks.forEach(task => items.push({ type: "task", task, key: task.id }));
       });
-      ungroupedFiltered.forEach(task => items.push({ type: "task", task, key: task.id }));
+      /* ══ ROZDĚLENÍ PODLE ČASU ═══════════════════════════════
+         Michal: „nyní mám nekonečný seznam úkolů a jak mám poznat
+         co je důležité?"
+
+         Do 14. 10. tu po sekci Dnes běžel jeden nepřerušený proud
+         — „Za 7d", „Za 6d", „Za 5d" pod sebou bez jediného
+         předělu. Oko nemá čeho se chytit a všechno váží stejně.
+
+         Pět přihrádek podle toho, kdy to má být. Pořadí je podle
+         naléhavosti, ne podle data: po termínu je nahoře, protože
+         to je jediná skupina, kde už se stalo něco špatně.
+
+         Uvnitř přihrádky rozhoduje priorita a pak datum —
+         akutní věc z příštího týdne patří nad nedůležitou
+         ze zítřka. */
+      {
+        const dnesek = new Date(); dnesek.setHours(0, 0, 0, 0);
+        const den = (t) => {
+          if (!t.dueDate) return null;
+          const d = new Date(t.dueDate); d.setHours(0, 0, 0, 0);
+          return Math.round((d - dnesek) / 86400000);
+        };
+        const vaha = { urgent: 0, important: 1, low: 3 };
+        const serad = (a, b) =>
+          (vaha[a.priority] ?? 2) - (vaha[b.priority] ?? 2) ||
+          (den(a) ?? 9999) - (den(b) ?? 9999);
+
+        const PRIHRADKY = [
+          { k: "po_terminu", nadpis: "Po termínu", popis: "mělo být hotové",
+            hori: true, kam: (d) => d !== null && d < 0 },
+          { k: "zitra",      nadpis: "Zítra",        popis: "", kam: (d) => d === 1 },
+          { k: "tyden",      nadpis: "Tento týden",  popis: "do sedmi dnů", kam: (d) => d >= 2 && d <= 7 },
+          { k: "pozdeji",    nadpis: "Později",      popis: "za týden a dál", kam: (d) => d > 7 },
+          { k: "bez",        nadpis: "Bez termínu",  popis: "nerozhodnuto", kam: (d) => d === null },
+        ];
+
+        const zbylo = [...ungroupedFiltered];
+        for (const pr of PRIHRADKY) {
+          const moje = zbylo.filter(t => pr.kam(den(t))).sort(serad);
+          if (!moje.length) continue;
+          items.push({
+            type: "section_header_cas", key: `sec-cas-${pr.k}`,
+            nadpis: pr.nadpis, popis: pr.popis, hori: pr.hori, count: moje.length,
+          });
+          moje.forEach(task => items.push({ type: "task", task, key: task.id }));
+        }
+      }
 
       // Sekce starší — 7-30 dní, bez termínu
       if (staleSectionTasks.length > 0) {
@@ -30219,18 +30278,34 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             paddingBottom: "4px",
           }} data-filter-icon-row>
             <div style={{
-              display: "flex", alignItems: "stretch", gap: "4px",
+              /* Zalomení: s popisky se šest filtrů na úzkou obrazovku
+                 nevejde na jeden řádek. Dřív byly jen ikony a vešly
+                 se vždycky — za cenu toho, že nikdo nevěděl, co dělají. */
+              display: "flex", alignItems: "stretch", gap: "4px", flexWrap: "wrap",
             }}>
               {(() => {
                 // Helper IconBtn s aktivním stavem a klikem
-                const IconBtn = ({ icon, color, isActive, isOpen, onClick, title, popoverKey }) => {
+                /* Pás filtrů byl do 14. 10. šest ikon bez jediného slova —
+                   🌐 👤 ⇅ 📅 📁 ! — a nedalo se poznat, co která dělá
+                   ani co je zrovna nastavené. Michal si na hromady
+                   nepopsaných ikon stěžoval opakovaně a JAZYK.md to
+                   zakazuje v pravidle 2: bez popisku smí zůstat jen
+                   šest univerzálních znaků, filtr mezi ně nepatří.
+
+                   Teď má každý slovo, a když filtruje, je za ním
+                   vidět i hodnota: „Termín: dnes" místo 🎯. */
+                const IconBtn = ({ icon, color, isActive, isOpen, onClick, title, popoverKey, popis, hodnota }) => {
                   // Otevřený popover = výrazný outline (silnější než isActive)
                   // isActive = filtr má aktivní hodnotu (filtruje něco)
                   const showOpen = isOpen && !isActive;
                   return (
                     <button type="button" onClick={onClick} title={title}
+                      aria-label={`${popis || title}${hodnota ? `: ${hodnota}` : ""}`}
+                      aria-pressed={!!isActive}
                       style={{
-                        flex: 1, height: "35px",
+                        flex: "1 1 auto", minWidth: 0, height: "35px",
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                        padding: "0 9px", whiteSpace: "nowrap",
                         background: isActive ? `${color}15` : showOpen ? `${color}08` : theme.inputBg,
                         color: isActive ? color : showOpen ? color : theme.textMid,
                         border: `1.5px solid ${isActive ? color : showOpen ? color : theme.inputBorder}`,
@@ -30240,7 +30315,15 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         boxShadow: isActive ? `0 1px 4px ${color}25` : showOpen ? `0 0 0 2px ${color}30` : "none",
                         transition: "all 0.15s",
                       }}>
-                      {icon}
+                      <span style={{ fontSize: "14px", lineHeight: 1 }}>{icon}</span>
+                      {popis && (
+                        <span style={{
+                          fontSize: "11.5px", fontWeight: isActive ? 700 : 500,
+                          overflow: "hidden", textOverflow: "ellipsis",
+                        }}>
+                          {popis}{hodnota ? `: ${hodnota}` : ""}
+                        </span>
+                      )}
                     </button>
                   );
                 };
@@ -30293,12 +30376,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
                 return (
                   <>
-                    <IconBtn icon={statusIcon} color={theme.accent}
+                    <IconBtn icon={statusIcon} color={theme.accent} popis="Stav"
                       isActive={statusActive}
                       isOpen={filterPopover === "status"}
                       title="Status úkolu"
                       onClick={() => setFilterPopover(filterPopover === "status" ? null : "status")} />
-                    <IconBtn icon={scopeIcon} color={theme.accent}
+                    <IconBtn icon={scopeIcon} color={theme.accent} popis="Komu"
                       isActive={scopeActive}
                       isOpen={filterPopover === "scope"}
                       title="Pro koho je úkol"
@@ -30318,14 +30401,15 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       color={theme.accent}
                       isActive={sortMode !== "created"}
                       isOpen={filterPopover === "sort"}
+                      popis="Řadit"
                       title={`Řazení (aktuálně: ${sortMode})`}
                       onClick={() => setFilterPopover(filterPopover === "sort" ? null : "sort")} />
-                    <IconBtn icon={dateIcon} color={theme.accent}
+                    <IconBtn icon={dateIcon} color={theme.accent} popis="Termín"
                       isActive={dateActive}
                       isOpen={filterPopover === "date"}
                       title="Termín splnění"
                       onClick={() => setFilterPopover(filterPopover === "date" ? null : "date")} />
-                    <IconBtn icon={listIcon} color={theme.accent}
+                    <IconBtn icon={listIcon} color={theme.accent} popis="Seznam"
                       isActive={listActive}
                       isOpen={filterPopover === "list"}
                       title="Seznam"
@@ -30335,20 +30419,35 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         else if (priorityFilter === "important") setPriorityFilter("urgent");
                         else setPriorityFilter("all");
                       }}
-                      title="Priorita" aria-label="Priorita"
+                      title={`Priorita — kliknutím přepínáš: vše → důležité → akutní`}
+                      aria-label={`Priorita: ${priorityFilter === "all" ? "vše"
+                        : priorityFilter === "urgent" ? "akutní"
+                        : priorityFilter === "important" ? "důležité" : "nedůležité"}`}
+                      aria-pressed={!!priActive}
                       style={{
-                        flex: 1, height: "35px",
+                        flex: "1 1 auto", minWidth: 0, height: "35px",
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                        padding: "0 9px", whiteSpace: "nowrap",
                         background: priActive ? `${priColor}15` : theme.inputBg,
-                        color: priColor, fontSize: "18px", fontWeight: 700,
+                        color: priActive ? priColor : theme.textMid,
                         border: `1.5px solid ${priActive ? priColor : theme.inputBorder}`,
                         borderRadius: "10px",
                         cursor: "pointer", fontFamily: FONT,
                         boxShadow: priActive ? `0 1px 4px ${priColor}25` : "none",
                       }}>
-                      {priIcon}
+                      <span style={{ fontSize: "14px", lineHeight: 1, color: priColor }}>{priIcon}</span>
+                      <span style={{
+                        fontSize: "11.5px", fontWeight: priActive ? 700 : 500,
+                        overflow: "hidden", textOverflow: "ellipsis",
+                      }}>
+                        Priorita{priorityFilter === "urgent" ? ": akutní"
+                          : priorityFilter === "important" ? ": důležité"
+                          : priorityFilter === "low" ? ": nedůležité" : ""}
+                      </span>
                     </button>
                     <button onClick={() => setShowMoreFilters(true)}
-                      title="Více filtrů" aria-label="Více filtrů"
+                      title="Další filtry — kdo úkol zadal, kdy vznikl, značky"
+                      aria-label="Další filtry"
                       style={{
                         flex: 1, height: "35px",
                         background: hasMore ? `${theme.accent}15` : theme.inputBg,
@@ -31217,7 +31316,31 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                     </div>
                   );
                 }
-                if (item.type === "section_header_list") {
+                /* Hlavička časové přihrádky. Tiše — je to orientace
+                   v seznamu, ne upozornění. Jediná, která smí být
+                   červená, je „Po termínu": tam se už něco stalo. */
+                if (item.type === "section_header_cas") {
+                  const barva = item.hori ? theme.red : theme.textSub;
+                  return (
+                    <div key={item.key} style={{
+                      margin: "14px 0 6px",
+                      display: "flex", alignItems: "baseline", gap: 8,
+                      borderTop: `1px solid ${theme.cardBorder}`,
+                      paddingTop: 9,
+                    }}>
+                      <span style={{
+                        fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+                        textTransform: "uppercase", color: barva,
+                      }}>{item.nadpis} · {item.count}</span>
+                      {item.popis && (
+                        <span style={{ fontSize: "11px", fontWeight: 400, color: theme.textSub }}>
+                          {item.popis}
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                                if (item.type === "section_header_list") {
                   const list = item.list;
                   return (
                     <div key={item.key} style={{
