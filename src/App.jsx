@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_1045";
+const FILE_VERSION = "261014_1150";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -11646,7 +11646,7 @@ function BulkSelectableCard({ taskId, bulkMode, isSelected, onToggle, onLongPres
    TASK CARD
    ═══════════════════════════════════════════════════════ */
 
-function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote, onRemindTask, onFiltrujZakazku }) {
+function TaskCard({ task, otevriRovnou = false, currentUser, users, onStatusChange, onMarkSeen, onUpdate, onDelete, onRestore, onPermanentDelete, onResubmit, onReject, onUnreject, onArchive, onUnarchive, onBlockUser, blocks, theme, comments, onAddComment, onToggleReaction, onMarkCommentsSeen, autoOpen, isHighlighted, progressItem, onStartFocus, recentlyAdded, fadeProgress = 0, customLists = [], isToday = false, isNewSection = false, onConvertTaskToNote, onRemindTask, onFiltrujZakazku }) {
 
 
   const [isOpen, setIsOpen] = useState(false);
@@ -11778,15 +11778,22 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
     }
   }, [autoOpen, task.id]);
 
-  // Scroll to task when highlighted (z search) — i bez auto-open
+  /* Odroluj k úkolu, na který někdo odkázal. Z hledání stačí
+     podbarvení; z Dneška a ze Zásobníku se ale čeká, že se úkol
+     OTEVŘE — klikl jsem na konkrétní věc, chci ji vidět, ne
+     seznam všeho ostatního.
+
+     Proto dvě úrovně: isHighlighted jen ukáže kde to je,
+     otevriRovnou k tomu detail rozbalí. */
   useEffect(() => {
-    if (isHighlighted) {
-      setTimeout(() => {
-        const el = document.getElementById(`task-${task.id}`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 100);
-    }
-  }, [isHighlighted, task.id]);
+    if (!isHighlighted) return;
+    if (otevriRovnou) setIsOpen(true);
+    const t = setTimeout(() => {
+      const el = document.getElementById(`task-${task.id}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, otevriRovnou ? 160 : 100);
+    return () => clearTimeout(t);
+  }, [isHighlighted, otevriRovnou, task.id]);
 
   // isNew: úkol je nový pokud:
   //   - autor není currentUser (porovnáno case-insensitive + trimmed kvůli přípaným chybám v datech)
@@ -24984,6 +24991,13 @@ function App() {
   });
   // highlightedTaskId — úkol který právě navigoval (např. ze search) → flash glow na 2s
   const [highlightedTaskId, setHighlightedTaskId] = useState(null);
+  /* Má se ten úkol taky rovnou otevřít? Z hledání ne — tam listuješ
+     výsledky a podbarvení stačí. Z Dneška, Zásobníku a revize ano:
+     klikls na konkrétní věc, chceš ji vidět, ne seznam všeho
+     ostatního. Michal: „otevře se seznam všech úkolů, to je
+     matoucí". */
+  const [otevritPoSkoku, setOtevritPoSkoku] = useState(false);
+
   // Recently added tasks — mapa { taskId: addedAtTimestamp }
   // Tyto úkoly se zobrazí v sekci "✨ Právě přidáno" nahoře po dobu 5 minut.
   // Vizuálně postupně blednou (fade-out 5 minut).
@@ -25023,7 +25037,10 @@ function App() {
   // Clear highlight po 2.5s
   useEffect(() => {
     if (highlightedTaskId) {
-      const t = setTimeout(() => setHighlightedTaskId(null), 2500);
+      const t = setTimeout(() => {
+        setHighlightedTaskId(null);
+        setOtevritPoSkoku(false);
+      }, 2500);
       return () => clearTimeout(t);
     }
   }, [highlightedTaskId]);
@@ -25094,6 +25111,34 @@ function App() {
   // Horizont aktivního pohledu — kolik dní dopředu vidíš v Aktivní view.
   // Default 7 dní (týden), uloženo per user.
   const [activeHorizonDays, setActiveHorizonDays] = useState(7);
+
+  /* Jedno místo pro „skoč na úkol". Dřív to bylo rozepsané na pěti
+     místech jako setViewStatus + setHighlightedTaskId a lišilo se
+     — některá otevírala, jiná ne. */
+  const skocNaUkol = useCallback((id, otevrit = true) => {
+    /* Nejužší pohled, ve kterém ten úkol je. Dřív se vždycky
+       skákalo do „vše" — a protože „vše" obsahuje i koš a splněné,
+       klik na jednu věc vysypal stovky řádků. Aktivní úkol patří
+       do Aktivních, smazaný do Koše; do „vše" se chodí jen tehdy,
+       když se netrefíme. */
+    const u = (tasks || []).find(t => String(t.id) === String(id));
+    /* „Aktivní" má horizont — úkoly s termínem dál než N dní jsou
+       v Plánovaných a odložené se schovávají úplně. Kdybych do
+       Aktivních skočil s takovým úkolem, nenašel by se tam a skok
+       by skončil v prázdnu. Proto tyhle dva případy míří jinam. */
+    const zaHorizontem = u && u.dueDate &&
+      new Date(u.dueDate).getTime() > Date.now() + (activeHorizonDays || 7) * 86400000;
+    setViewStatus(
+      !u ? "all"
+      : isDeleted(u) ? "trash"
+      : isDone(u) ? "done"
+      : isArchived(u) ? "archive"
+      : jeOdlozeny(u) ? "all"
+      : zaHorizontem ? "planned"
+      : "active");
+    setOtevritPoSkoku(otevrit);
+    setHighlightedTaskId(String(id));
+  }, [tasks, activeHorizonDays]);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatsSheet, setShowStatsSheet] = useState(false);
   /* Osobní věci vs. práce na zakázkách. Není to stav úkolu (ten je
@@ -28105,9 +28150,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         const taskExists = tasks.some(t => String(t.id) === id);
         if (taskExists) {
           // Reset filters aby byl úkol viditelný (možná je v koši, splněný atd.)
-          setViewStatus("all");
-          setHighlightedTaskId(id);
-          // setHighlightedTaskId spustí scrollIntoView v TaskCard useEffect
+          // Z odkazu se čeká totéž co z Dneška: otevřít tu jednu věc.
+          skocNaUkol(id);
         }
       } else if (type === "reminder") {
         // Otevři reminder sheet — uživatel uvidí svou připomínku
@@ -29231,7 +29275,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             tasks={tasks}
             theme={theme}
             onClose={() => setRevizeOtevrena(false)}
-            onOtevriUkol={(id) => { setViewStatus("all"); setHighlightedTaskId(String(id)); }}
+            onOtevriUkol={(id) => skocNaUkol(id)}
             onUkazProsle={() => setProtridimOtevreno(true)} />
         )}
 
@@ -29251,12 +29295,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             tasks={tasks}
             theme={theme}
             onClose={() => setZasobnikOtevreno(false)}
-            onOtevriUkol={(id) => {
-              // Odložený úkol v seznamu Dneška není. Stejný postup jako
-              // u závazků: přepnout na „vše" a nechat ho podbarvit.
-              setViewStatus("all");
-              setHighlightedTaskId(String(id));
-            }}
+            onOtevriUkol={(id) => skocNaUkol(id)}
             onUprav={(id, patch) => updateTask(id, patch)} />
         )}
 
@@ -29271,6 +29310,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               setShowCalendarSheet(false);
               setScrollToTaskId(task.id);
               setHighlightedTaskId(task.id);
+              setOtevritPoSkoku(true);
               if (isDone(task)) setViewStatus("done");
               else if (isDeleted(task)) setViewStatus("trash");
               else if (isArchived(task)) setViewStatus("archive");
@@ -29593,6 +29633,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
+              setOtevritPoSkoku(true);
               // Kliknutím v panelu je úkol přečtený. Bez tohohle by
               // zvoneček dál ukazoval číslo u věci, na kterou ses
               // právě podíval — a číslo, které nejde snížit, si oko
@@ -29769,6 +29810,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               }
               setScrollToTaskId(taskId);
               setHighlightedTaskId(taskId);
+              setOtevritPoSkoku(true);
             }}
           />
         )}
@@ -29899,6 +29941,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             }
             setScrollToTaskId(taskId);
             setHighlightedTaskId(taskId);
+            setOtevritPoSkoku(true);
             setUpdatesPanelOpen(false);
           }}
           onMarkSeen={markCommentsSeen}
@@ -30937,14 +30980,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 onZavriDen={() => setUzavrkaOtevrena(true)}
                 onRevize={() => setRevizeOtevrena(true)}
                 hodinaUzavrky={hodinaUzavrky}
-                onOtevriUkol={(id) => {
-                  // Závazek nemusí mít termín na dnešek, takže v pohledu
-                  // Dnes vůbec nemusí být v seznamu. Přepneme na „vše"
-                  // a úkol se podbarví a odroluje — stejně jako při
-                  // otevření úkolu z odkazu.
-                  setViewStatus("all");
-                  setHighlightedTaskId(String(id));
-                }} />
+                /* Klik na úkol ho OTEVŘE, nejen ukáže. Dřív se jen
+                   přepnulo na seznam všeho a úkol se podbarvil —
+                   Michal: „otevře se seznam všech úkolů, to je
+                   matoucí." Měl pravdu: klikls na jednu věc,
+                   dostals třicet. */
+                onOtevriUkol={(id) => skocNaUkol(id)} />
             )}
             {(() => {
               // Na Dnešku se seznam nevykresluje. Dnes má vlastní blok
@@ -31393,6 +31434,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         onMarkCommentsSeen={markCommentsSeen}
                         autoOpen={scrollToTaskId === task.id}
                         isHighlighted={highlightedTaskId === task.id}
+                        otevriRovnou={highlightedTaskId === task.id && otevritPoSkoku}
                         progressItem={item.type === "progress" ? item.checklistItem : null}
                         recentlyAdded={item.recentlyAdded === true}
                         fadeProgress={item.fadeProgress || 0}
