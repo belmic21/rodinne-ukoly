@@ -12,7 +12,7 @@ import { useEffect } from "react";
    obchod se dá aktualizovat samostatně, aniž by se sahalo
    do hlavního souboru, a podle tohohle čísla poznáš,
    která verze modulu je nasazená. Ukazuje se v hlavičce okna. */
-export const OBCHOD_VERZE = "261014_0645";
+export const OBCHOD_VERZE = "261014_0700";
 
 export const FONT = "'DM Sans', system-ui, sans-serif";
 
@@ -67,11 +67,16 @@ export const hodnota = (th) => ({
   fontFamily: FONT,
 });
 
+/* Váha 500, ne 600 — ze stejného důvodu jako buttonStyle()
+   v App.jsx. btn() se používá 54× a 37 tlačítek si váhu samo
+   nepřepisuje; text uvnitř ji dědí, takže druhotné řádky
+   v klikatelných řádcích byly stejně těžké jako nadpisy.
+   Co má být hlasité, si váhu nastaví samo (btnMain má 700). */
 export const btn = () => ({
   border: "none",
   borderRadius: "8px",
   fontFamily: FONT,
-  fontWeight: 600,
+  fontWeight: 500,
   cursor: "pointer",
 });
 
