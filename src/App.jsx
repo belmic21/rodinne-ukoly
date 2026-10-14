@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_1150";
+const FILE_VERSION = "261014_1700";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8694,7 +8694,7 @@ function telefonZTextu(text) {
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
 function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav }) {
-  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny } = useMemo(() => {
+  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny, bezTerminu } = useMemo(() => {
     const vse = (tasks || []).filter(t =>
       !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
     /* Odložené se do Dneška nepletou — mají datum návratu a do té
@@ -8734,6 +8734,31 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       nejblizsiNavrat: odlozene.length
         ? odlozene.map(t => t.showFrom).sort()[0]
         : null,
+
+      /* Úkoly bez termínu, které ještě nejsou zapomenuté.
+
+         Tohle byla díra v celé úvaze: každý blok na Dnešku
+         vyžadoval termín, takže holý úkol — „zavolat Ferovi",
+         Enter — propadl vším a vrátil se až po třiceti dnech
+         jako zapomenutý. A přitom je to nejčastější způsob,
+         jak si člověk něco zapíše.
+
+         Zůstávají tu, dokud o nich nerozhodneš. To je totéž
+         pravidlo jako u odkladu: nic nezmizí samo. Strop pět
+         položek, aby se z toho nestala druhá hromada; zbytek
+         je v Úkolech.
+
+         Akutní bez termínu a zapomenuté sem nepatří — ty si
+         bere Protřídit a ukazovat je dvakrát by znamenalo, že
+         ani jedno místo není to pravé. */
+      bezTerminu: ziva
+        .filter(t => !t.dueDate && t.priority !== "urgent" && !isForgotten(t)
+                  // Co visí na konkrétním člověku, je už v blocích
+                  // „Slíbil jsem" a „Čekám na druhé". Ukázat to tady
+                  // podruhé by znamenalo, že ani jedno místo není
+                  // to pravé — a přesně tomu se tenhle blok vyhýbá.
+                  && !t.smer)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)),
 
       // Kolik dnešních věcí ještě není vyřízených — to je fronta
       // večerní uzávěrky.
@@ -8783,7 +8808,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
     } catch { return ""; }
   }, []);
 
-  const maCo = ted.length || skupiny.length || sliby.length || cekam.length || cekaNaMe
+  const maCo = ted.length || skupiny.length || bezTerminu.length || sliby.length || cekam.length || cekaNaMe
     || prosle || nepochopeno || odlozeno || posledni;
   // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
   // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
@@ -8805,6 +8830,16 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       )}
     </div>
   );
+
+  /* Kdy jsem si to zapsal. U věci bez termínu je to jediný údaj,
+     který něco říká — čerstvá poznámka je něco jiného než ta,
+     co leží dva týdny. */
+  const kdyZapsano = (t) => {
+    const d = Math.max(0, -daysDiff(t.createdAt || t.created_at));
+    if (d === 0) return "zapsáno dnes";
+    if (d === 1) return "zapsáno včera";
+    return `zapsáno před ${d} ${d < 5 ? "dny" : "dny"}`;
+  };
 
   const dniPopis = (t) => {
     const d = Math.max(0, -daysDiff(t.slibenoAt || t.createdAt || t.created_at));
@@ -9119,6 +9154,50 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ══ BEZ TERMÍNU ═══════════════════════════════════════
+          Michal: „Když zadám nový úkol bez podrobností, proč se
+          nezobrazí na seznamu dnes?"
+
+          Protože každý blok na Dnešku vyžadoval termín. Holý úkol
+          propadl vším a vrátil se až po třiceti dnech jako
+          zapomenutý — a přitom je to nejčastější způsob, jak si
+          člověk něco zapíše.
+
+          Zůstávají tu, dokud o nich nerozhodneš. Strop pět, aby
+          se z toho nestala druhá hromada. */}
+      {bezTerminu.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
+            textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
+          }}>Bez termínu · {bezTerminu.length}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {bezTerminu.slice(0, 5).map(t => (
+              <button key={t.id} onClick={() => onOtevriUkol?.(t.id)}
+                title="Otevřít úkol a rozhodnout, kdy ho uděláš"
+                aria-label={`Otevřít úkol ${t.title}`}
+                style={{
+                  ...buttonStyle(), textAlign: "left", width: "100%",
+                  background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                  borderRadius: "9px", padding: "9px 11px",
+                }}>
+                <span style={{ display: "block", fontSize: "13.5px", fontWeight: 500, color: theme.text }}>
+                  {t.title}
+                </span>
+                <span style={{ display: "block", fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginTop: 2 }}>
+                  {kdyZapsano(t)}{t.osoba ? ` · ${t.osoba}` : ""}
+                </span>
+              </button>
+            ))}
+            {bezTerminu.length > 5 && (
+              <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub, padding: "2px 2px" }}>
+                a dalších {bezTerminu.length - 5} — v Úkolech
+              </div>
+            )}
+          </div>
         </div>
       )}
 
