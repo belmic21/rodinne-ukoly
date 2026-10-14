@@ -394,7 +394,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                           border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
                           color: zap ? theme.accent : theme.textSub,
                           fontSize: "11.5px", padding: "3px 10px", borderRadius: 13,
-                          fontWeight: zap ? 700 : 600,
+                          fontWeight: zap ? 700 : 500,
                         }}>{o.t}</button>
                       );
                     })}
@@ -881,7 +881,7 @@ function MapaZakazek({ theme, owner, ciselniky, filtr, zmen }) {
         alignItems: "baseline", marginBottom: 6,
       }}>
         <span style={{
-          fontSize: 10, fontWeight: 600, letterSpacing: "0.1em",
+          fontSize: 10, fontWeight: 500, letterSpacing: "0.1em",
           textTransform: "uppercase", color: theme.textSub,
         }}>Kde to mám</span>
         <span style={{ fontSize: 11.5, fontWeight: 400, color: theme.textSub }}>
@@ -950,7 +950,7 @@ function MapaZakazek({ theme, owner, ciselniky, filtr, zmen }) {
             borderRadius: 8, padding: "5px 10px", fontSize: 12,
             fontWeight: 400, color: theme.text, pointerEvents: "none",
           }}>
-            <strong style={{ fontWeight: 600 }}>
+            <strong style={{ fontWeight: 500 }}>
               {OKRESY.find(o => o.k === najeto)?.o}
             </strong>
             {" · "}{pocty[najeto] || 0}
@@ -1052,7 +1052,7 @@ function RychlyTip({ theme, owner, ciselniky, onZalozeno }) {
       borderRadius: 7, padding: "3px 8px", whiteSpace: "nowrap",
     }}>
       {co}{" "}
-      <strong style={{ fontWeight: 600, color: barva || theme.text }}>{hodnota}</strong>
+      <strong style={{ fontWeight: 500, color: barva || theme.text }}>{hodnota}</strong>
     </span>
   );
 
@@ -1107,8 +1107,8 @@ function RychlyTip({ theme, owner, ciselniky, onZalozeno }) {
       )}
       {hotovo && (
         <div style={{ marginTop: 6, fontSize: 12, color: theme.green }}>
-          Založeno jako tip: <strong style={{ fontWeight: 600 }}>{hotovo}</strong>.
-          {" "}Najdeš ho pod dlaždicí <strong style={{ fontWeight: 600 }}>Tip</strong> nad seznamem.
+          Založeno jako tip: <strong style={{ fontWeight: 500 }}>{hotovo}</strong>.
+          {" "}Najdeš ho pod dlaždicí <strong style={{ fontWeight: 500 }}>Tip</strong> nad seznamem.
         </div>
       )}
     </div>
@@ -1170,7 +1170,7 @@ function VyberVice({ theme, nadpis, vybrane = [], polozky, nazvyRodin, onZmena }
     width: 15, height: 15, flex: "0 0 auto", borderRadius: 4,
     border: `1.5px solid ${zap ? theme.inputFocus || theme.accent : theme.inputBorder}`,
     background: zap ? (theme.inputFocus || theme.accent) : theme.inputBg,
-    color: "#fff", fontSize: 10, fontWeight: 900, lineHeight: "13px",
+    color: "#fff", fontSize: 10, fontWeight: 700, lineHeight: "13px",
     textAlign: "center",
   });
 
@@ -1798,7 +1798,7 @@ function JenCist({ theme, ciselniky, z }) {
         <a href={z.slozka_odkaz} target="_blank" rel="noreferrer" style={{
           ...card(theme), padding: "10px 14px", marginBottom: 10,
           display: "block", color: theme.accent, fontSize: "12.5px",
-          textDecoration: "none", fontWeight: 600,
+          textDecoration: "none", fontWeight: 500,
         }}>📂 otevřít podklady →</a>
       )}
     </>
@@ -1861,7 +1861,7 @@ function PasFazi({ theme, faze, filtr, zmen }) {
         border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
         color: zap ? theme.accent : (f.pocet ? theme.text : theme.textSub),
         fontSize: "11.5px", padding: "4px 10px", borderRadius: 13,
-        fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+        fontWeight: zap ? 700 : 500, whiteSpace: "nowrap",
         display: "inline-flex", alignItems: "center", gap: 5,
         opacity: f.pocet ? 1 : 0.55,
       }}>
@@ -1895,7 +1895,7 @@ function PasFazi({ theme, faze, filtr, zmen }) {
             <span style={{ color: theme.cardBorder, padding: "0 2px" }}>|</span>
             <button onClick={() => setArchivOtevreny(v => !v)} style={{
               ...btn(), background: "transparent", color: theme.textSub,
-              fontSize: "11.5px", padding: "4px 8px", fontWeight: 600,
+              fontSize: "11.5px", padding: "4px 8px", fontWeight: 500,
             }}>{archivOtevreny ? "▲" : "▼"} archiv {vArchivu}</button>
           </>
         )}
@@ -1947,7 +1947,7 @@ function FazeVolba({ theme, ciselniky, f, uprav }) {
         border: `1px solid ${zap ? (barva || theme.accentBorder) : theme.cardBorder}`,
         color: zap ? (barva || theme.accent) : theme.textSub,
         fontSize: "12px", padding: "5px 11px", borderRadius: 14,
-        fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+        fontWeight: zap ? 700 : 500, whiteSpace: "nowrap",
       }}>{x.label}</button>
     );
   };
@@ -1964,7 +1964,7 @@ function FazeVolba({ theme, ciselniky, f, uprav }) {
         {!ukoncuji && !jeKonec && (
           <button onClick={() => setUkoncuji(true)} style={{
             ...btn(), background: "transparent", color: theme.textSub,
-            fontSize: "12px", padding: "5px 9px", fontWeight: 600,
+            fontSize: "12px", padding: "5px 9px", fontWeight: 500,
           }}>… ukončit</button>
         )}
         {(ukoncuji || jeKonec) && konec.map(x => (
@@ -2130,7 +2130,7 @@ function VyberMesta({ theme, f, uprav, ciselniky }) {
               padding: "6px 9px", cursor: "pointer", borderRadius: 6,
               display: "flex", alignItems: "baseline", gap: 7,
             }}>
-              <span style={{ fontSize: "12.5px", fontWeight: 600, color: theme.text }}>
+              <span style={{ fontSize: "12.5px", fontWeight: 500, color: theme.text }}>
                 {o.nazev}
               </span>
               {/* Okres a kraj musí být vidět hned: při dvou Rudných

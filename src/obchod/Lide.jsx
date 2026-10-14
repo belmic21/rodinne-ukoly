@@ -172,7 +172,7 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
               background: zap ? theme.accentSoft : "transparent",
               color: zap ? theme.accent : theme.textSub,
               borderColor: zap ? theme.accentBorder : theme.cardBorder,
-              fontWeight: zap ? 700 : 600,
+              fontWeight: zap ? 700 : 500,
             }}>{v.t}</button>
           );
         })}

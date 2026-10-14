@@ -144,7 +144,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
                   border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
                   color: zap ? theme.accent : theme.textSub,
                   fontSize: "11.5px", padding: "4px 11px", borderRadius: 13,
-                  fontWeight: zap ? 700 : 600, whiteSpace: "nowrap",
+                  fontWeight: zap ? 700 : 500, whiteSpace: "nowrap",
                 }}>{v.t}</button>
               );
             })}
@@ -233,7 +233,7 @@ export default function Prilepene({ theme, owner, projectId, kod, spravce = fals
               }}>{hotovo ? "☑" : "☐"}</button>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{
-                fontSize: "12.5px", fontWeight: 600, color: theme.text,
+                fontSize: "12.5px", fontWeight: 500, color: theme.text,
                 textDecoration: hotovo ? "line-through" : "none",
               }}>{bezKodu(kod, t.title)}</div>
               <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 2 }}>

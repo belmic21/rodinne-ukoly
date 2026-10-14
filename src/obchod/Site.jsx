@@ -224,7 +224,7 @@ function Prepinac({ theme, hodnota, onZmena, volby }) {
             background: zap ? theme.accentSoft : "transparent",
             color: zap ? theme.accent : theme.textSub,
             borderColor: zap ? theme.accentBorder : theme.cardBorder,
-            fontWeight: zap ? 700 : 600,
+            fontWeight: zap ? 700 : 500,
           }}>{v.t}</button>
         );
       })}
@@ -473,7 +473,7 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
                 border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
                 color: zap ? theme.accent : theme.textSub,
                 fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
-                fontWeight: zap ? 700 : 600,
+                fontWeight: zap ? 700 : 500,
               }}>{r.label}</button>
             );
           })}
@@ -690,7 +690,7 @@ export function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }
                   background: zap ? theme.accentSoft : "transparent",
                   color: zap ? theme.accent : theme.textSub,
                   borderColor: zap ? theme.accentBorder : theme.cardBorder,
-                  fontWeight: zap ? 700 : 600,
+                  fontWeight: zap ? 700 : 500,
                 }}>{v.label}</button>
               );
             })}
@@ -741,7 +741,7 @@ export function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }
                     background: zap ? `${theme.red}18` : "transparent",
                     color: zap ? theme.red : theme.textSub,
                     borderColor: zap ? `${theme.red}44` : theme.cardBorder,
-                    fontWeight: zap ? 700 : 600,
+                    fontWeight: zap ? 700 : 500,
                   }}>{t.label}</button>
                 );
               })}
@@ -849,7 +849,7 @@ function Chipy({ theme, polozky, vybrano = [], onPrepni, skupiny = false }) {
                   border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
                   color: zap ? theme.accent : theme.textSub,
                   fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
-                  fontWeight: zap ? 700 : 600,
+                  fontWeight: zap ? 700 : 500,
                 }}>{p.label}</button>
               );
             })}
@@ -924,7 +924,7 @@ function Kontakty({ theme, owner, ciselniky, onOtevri }) {
               border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
               color: zap ? theme.accent : theme.textSub,
               fontSize: "11.5px", padding: "4px 10px", borderRadius: 14,
-              fontWeight: zap ? 700 : 600,
+              fontWeight: zap ? 700 : 500,
             }}>{v.t}</button>
           );
         })}

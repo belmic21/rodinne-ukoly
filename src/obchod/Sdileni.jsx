@@ -412,7 +412,7 @@ function SdilenaZakazka({ theme, ciselniky, z, onZpet }) {
         <a href={z.slozka_odkaz} target="_blank" rel="noreferrer" style={{
           ...card(theme), padding: "10px 13px", marginBottom: 10,
           display: "block", color: theme.accent, fontSize: "12.5px",
-          textDecoration: "none", fontWeight: 600,
+          textDecoration: "none", fontWeight: 500,
         }}>📂 otevřít podklady →</a>
       )}
 

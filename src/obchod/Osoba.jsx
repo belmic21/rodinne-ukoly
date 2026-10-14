@@ -433,7 +433,7 @@ function CoProNej({ theme, personId, onOtevriZakazku }) {
           {(z.sedi || []).length > 0 && (
             <div style={{
               fontSize: "10.5px", color: theme.green, whiteSpace: "nowrap",
-              fontWeight: 600,
+              fontWeight: 500,
             }}>sedí {z.sedi.join(", ")}</div>
           )}
         </div>

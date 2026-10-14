@@ -413,7 +413,7 @@ function TerminEditor({ theme, owner, ciselniky, projectId, t, onUloz, onZrus })
                 background: zap ? theme.accentSoft : "transparent",
                 color: zap ? theme.accent : theme.textSub,
                 borderColor: zap ? theme.accentBorder : theme.cardBorder,
-                fontWeight: zap ? 700 : 600,
+                fontWeight: zap ? 700 : 500,
               }}>{o.ja ? "já" : o.name}{!o.ja && !o.vidi ? " *" : ""}</button>
             );
           })}
@@ -638,7 +638,7 @@ export function TerminyPrehled({ theme, owner, onOtevriZakazku, onOtevriOsobu, o
             background: zap ? theme.accentSoft : "transparent",
             color: zap ? theme.accent : theme.textSub,
             borderColor: zap ? theme.accentBorder : theme.cardBorder,
-            fontWeight: zap ? 700 : 600,
+            fontWeight: zap ? 700 : 500,
           }}>{v.t}</button>
         );
       })}
@@ -849,7 +849,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
           return (
             <button key={v.k} onClick={() => setJak(v.k)} style={{
               ...btn(), flex: 1, padding: "3px 4px", fontSize: "10px",
-              fontWeight: zap ? 800 : 600,
+              fontWeight: zap ? 700 : 500,
               background: zap ? theme.accentSoft : "transparent",
               color: zap ? theme.accent : theme.textSub,
               border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
@@ -879,7 +879,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
           <Fragment key={t.id}>
           {prvniVeSkupine(i) && (
             <div style={{
-              padding: "7px 12px 2px", fontSize: 9, fontWeight: 800,
+              padding: "7px 12px 2px", fontSize: 9, fontWeight: 700,
               letterSpacing: "0.4px", color: theme.textSub, textTransform: "uppercase",
               borderTop: `1px solid ${theme.cardBorder}`,
             }}>{t.kod} · {t.zakazka}</div>
@@ -903,7 +903,7 @@ export function TerminyPanel({ theme, owner, limit = 8, onOtevriZakazku }) {
               <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                 {t.dulezite && <span style={{ fontSize: 11, color: theme.yellow }}>★</span>}
                 <span style={{
-                  fontSize: 12, fontWeight: 600, color: theme.text, flex: 1,
+                  fontSize: 12, fontWeight: 500, color: theme.text, flex: 1,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 }}>{t.nazev}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: barva, whiteSpace: "nowrap" }}>
