@@ -508,7 +508,7 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
 
 /* ── Editor karty ──────────────────────────────────── */
 
-function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
+export function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }) {
   const [f, setF] = useState(() => {
     const z = {
       smer: "poptavka", nazev: "", typy: [], kraje: [],

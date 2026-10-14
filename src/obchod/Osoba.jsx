@@ -15,9 +15,9 @@ import { useState, useEffect } from "react";
 import {
   osobaPrehled, popis, nactiCiselniky, prehledPrilepenych, zakazkyProOsobu,
 } from "./api.js";
-import { KontaktEditor } from "./Site.jsx";
+import { KontaktEditor, KartaEditor } from "./Site.jsx";
 import {
-  card, btn, label,
+  card, btn, btnMain, label,
   penizeKratce, datumKratce, jakDavno, kdyZadano,
 } from "./ui.js";
 import { Odznaky } from "./Prilepene.jsx";
@@ -63,6 +63,8 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
   const [vlastni, setVlastni] = useState({});
   const [upravuji, setUpravuji] = useState(false);
   const [pocty, setPocty] = useState({});
+  const [pridavamKartu, setPridavamKartu] = useState(false);
+  const [obnov, setObnov] = useState(0);
 
   // Počty úkolů a poznámek u zakázek, na kterých ten člověk je.
   useEffect(() => {
@@ -94,7 +96,10 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
       onNacteno?.(r?.osoba || null);
     });
     return () => { zrus = true; };
-  }, [owner, personId]);  // eslint-disable-line react-hooks/exhaustive-deps
+    /* obnov je počítadlo, které se zvýší po uložení karty. Bez něj
+       by se po uložení ukazovala pořád stará data — a vypadalo by to,
+       že se karta neuložila. */
+  }, [owner, personId, obnov]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (busy) {
     return <div style={{ padding: "8px 2px", fontSize: "12px", color: theme.textSub }}>Načítám…</div>;
@@ -223,6 +228,37 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
           odpovědi nemůžou rozejít. Zakázky, které už mu poslané byly,
           se tu neukazují. */}
       <CoProNej theme={theme} personId={d.osoba?.id} onOtevriZakazku={onOtevriZakazku} />
+
+      {/* Sekce se ukazovala jen tomu, kdo už kartu měl. Jenže nápověda
+          u Lidí posílala doplnit kartu právě sem — a kdo ji neměl,
+          nenašel tu nic. Chyba se tak projevila přesně u lidí, kterých
+          se týkala. Teď je sekce vždycky a prázdná nabídne založení. */}
+      {d.karty.length === 0 && !pridavamKartu && (
+        <Sekce theme={theme} nadpis="Co hledá a co má">
+          <div style={{ fontSize: "12px", color: theme.textSub, lineHeight: 1.6, marginBottom: 9 }}>
+            Zatím nevyplněno. Jméno a telefon na párování nestačí —
+            zakázka musí vědět, jaký typ, v jakém kraji a za kolik
+            tenhle člověk hledá.
+          </div>
+          <button
+            onClick={() => setPridavamKartu(true)}
+            title="Přidat kartu — co člověk hledá nebo nabízí"
+            aria-label="Přidat kartu — co člověk hledá nebo nabízí"
+            style={{ ...btnMain(theme), padding: "9px 16px", fontSize: "13px" }}>
+            PŘIDAT KARTU
+          </button>
+        </Sekce>
+      )}
+
+      {pridavamKartu && (
+        <Sekce theme={theme} nadpis="Nová karta">
+          <KartaEditor
+            theme={theme} owner={owner} ciselniky={ciselniky}
+            karta={{ person_id: d.osoba?.id, osoba: d.osoba }}
+            onHotovo={() => { setPridavamKartu(false); setObnov(k => k + 1); }}
+            onZpet={() => setPridavamKartu(false)} />
+        </Sekce>
+      )}
 
       {d.karty.length > 0 && (
         <Sekce theme={theme} nadpis="Co hledá a co má">
