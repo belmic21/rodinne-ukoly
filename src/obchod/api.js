@@ -279,7 +279,15 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
       .eq("owner", owner)
       .is("deleted_at", null);
 
-    if (filtr.typ)       q = q.eq("typ", filtr.typ);
+    /* Víc typů naráz — „nemocnice NEBO alzheimer centrum NEBO LDN".
+       Jeden typ zůstává kvůli starým uloženým filtrům a odkazům;
+       nové obrazovky posílají typy. Stejný vzor jako u krajů. */
+    if (filtr.typy && filtr.typy.length) q = q.in("typ", filtr.typy);
+    else if (filtr.typ)  q = q.eq("typ", filtr.typ);
+    /* Okresy. Pole okres u zakázky se dopočítává z města, takže
+       filtr na okres je spolehlivější než na město — „průmyslové
+       parky na jihu Čech" se neptá na konkrétní obec. */
+    if (filtr.okresy && filtr.okresy.length) q = q.in("okres", filtr.okresy);
     // Jeden kraj, nebo celá oblast (Čechy, Morava) jako seznam krajů.
     if (filtr.kraje && filtr.kraje.length) q = q.in("kraj", filtr.kraje);
     else if (filtr.kraj) q = q.eq("kraj", filtr.kraj);
@@ -293,7 +301,12 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
     // seznamu tiše ztratila. Přesně to se stalo zakázkám založeným
     // dřív, než fáze vůbec existovaly: v databázi byly, v seznamu ne.
     else if (!filtr.archiv) {
-      q = q.or("stav.is.null,stav.not.in.(vyplaceno,nerealizovano,spi)");
+      /* Tip je od 14. 10. ve výchozím seznamu taky schovaný. Není to
+         archiv, ale není to ani živá zakázka — na tipu nepracuješ,
+         zatím o něm jen víš. Kdyby se pletl mezi živé, kazil by
+         odpověď na otázku „na čem teď dělám". Zobrazí se kliknutím
+         na dlaždici Tip v pásu fází. */
+      q = q.or("stav.is.null,stav.not.in.(vyplaceno,nerealizovano,spi,tip)");
     }
     if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
     if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);

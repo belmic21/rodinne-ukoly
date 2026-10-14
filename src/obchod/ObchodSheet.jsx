@@ -32,6 +32,10 @@ import Lide from "./Lide.jsx";
 import Prilepene, { Odznaky } from "./Prilepene.jsx";
 
 const PRAZDNY_FILTR = {
+  // typy a okresy jsou pole — „nemocnice NEBO alzheimer centrum",
+  // „jižní Čechy A Plzeňsko". Jedno typ/kraj zůstává kvůli starým
+  // uloženým filtrům; api.js bere pole přednostně.
+  typy: [], okresy: [],
   typ: "", kraj: "", faze: "", stav: "",
   cenaOd: null, cenaDo: null, velikostOd: null, hledat: "",
   obdobi: "",   // "" | dnes | 7 | 30 | letos
@@ -638,6 +642,23 @@ function Statistika({ theme, owner }) {
 /* ── Filtry ────────────────────────────────────────── */
 
 function Filtry({ theme, ciselniky, filtr, zmen }) {
+  /* Oba výběry se skládají pod rodiny, ale rodina znamená u každého
+     něco jiného — a klíč v databázi je strojový, ne čitelný:
+
+       typ   → skupina je rodina ('zdravotnictvi'), názvy drží
+               číselník rodina_typu
+       okres → skupina je klíč kraje ('stredocesky'), názvy drží
+               číselník kraj
+
+     Bez těchhle dvou slovníků by v panelu svítily nadpisy
+     „zdravotnictvi" a „stredocesky". */
+  const rodinyTypu = useMemo(() => Object.fromEntries(
+    (ciselniky?.rodina_typu || []).map(r => [r.key, r.label])
+  ), [ciselniky]);
+  const rodinyOkresu = useMemo(() => Object.fromEntries(
+    (ciselniky?.kraj || []).map(r => [r.key, r.label])
+  ), [ciselniky]);
+
   // Prahy velikosti: zaškrtnutí "nad 50" vrátí i 85 a 100.
   const prahy = [
     { v: 50,  t: "50+" },
@@ -649,8 +670,12 @@ function Filtry({ theme, ciselniky, filtr, zmen }) {
       display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))",
       gap: 8, marginTop: 9,
     }}>
-      <Select theme={theme} nadpis="Typ" hodnota={filtr.typ}
-        polozky={aktivni(ciselniky, "typ")} onZmena={v => zmen("typ", v)} />
+      <VyberVice theme={theme} nadpis="Typ" vybrane={filtr.typy}
+        polozky={aktivni(ciselniky, "typ")}
+        nazvyRodin={rodinyTypu} onZmena={v => zmen("typy", v)} />
+      <VyberVice theme={theme} nadpis="Okres" vybrane={filtr.okresy}
+        polozky={aktivni(ciselniky, "okres")}
+        nazvyRodin={rodinyOkresu} onZmena={v => zmen("okresy", v)} />
       <SelectKraj theme={theme} hodnota={filtr.kraj}
         polozky={aktivni(ciselniky, "kraj")} onZmena={v => zmen("kraj", v)} />
       <Select theme={theme} nadpis="Fáze" hodnota={filtr.faze}
@@ -758,6 +783,159 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false,
             ))
           : polozky.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
       </select>
+    </div>
+  );
+}
+
+/* ── Výběr více položek ─────────────────────────────────
+   Michal: „že bych si např. vyfiltroval jen nemocnice nebo
+   alzheimer centra v Praze? Nebo např. průmyslové parky na jihu
+   čech a v plzni?"
+
+   To jsou dvě otázky, na které jeden rozbalovací seznam neumí
+   odpovědět — obě chtějí víc hodnot naráz. Proto zaškrtávací
+   panel, který se rozbalí a zase zabalí.
+
+   Typů je po doplnění oborů sedmnáct. Plochý seznam sedmnácti
+   položek se nedá přečíst, proto se skládají pod rodiny (Bydlení,
+   Zdravotnictví, Průmysl a logistika, Obchod a služby, Pozemky).
+   Rodina má vlastní zaškrtávátko — „celé zdravotnictví" je jedno
+   kliknutí, ne pět.
+
+   Zavřený stav vždycky řekne, co je vybrané. „Typ: vše" nebo
+   „Typ: Nemocnice +2" — nikdy jen „Typ", protože pak člověk
+   nevidí, že filtruje, a divil by se prázdnému seznamu. */
+function VyberVice({ theme, nadpis, vybrane = [], polozky, nazvyRodin, onZmena }) {
+  const [otevreno, setOtevreno] = useState(false);
+
+  const rodiny = useMemo(() => {
+    const m = new Map();
+    for (const p of polozky) {
+      const g = p.skupina || "";
+      if (!m.has(g)) m.set(g, []);
+      m.get(g).push(p);
+    }
+    return [...m.entries()];
+  }, [polozky]);
+
+  const prepni = (k) => {
+    const s = new Set(vybrane);
+    if (s.has(k)) s.delete(k); else s.add(k);
+    onZmena([...s]);
+  };
+
+  const prepniRodinu = (klice) => {
+    const s = new Set(vybrane);
+    const vseZapnuto = klice.every(k => s.has(k));
+    for (const k of klice) { if (vseZapnuto) s.delete(k); else s.add(k); }
+    onZmena([...s]);
+  };
+
+  const souhrn = vybrane.length === 0
+    ? "vše"
+    : (() => {
+        const prvni = polozky.find(p => p.key === vybrane[0])?.label || vybrane[0];
+        return vybrane.length === 1 ? prvni : `${prvni} +${vybrane.length - 1}`;
+      })();
+
+  const ctverec = (zap) => ({
+    width: 15, height: 15, flex: "0 0 auto", borderRadius: 4,
+    border: `1.5px solid ${zap ? theme.inputFocus || theme.accent : theme.inputBorder}`,
+    background: zap ? (theme.inputFocus || theme.accent) : theme.inputBg,
+    color: "#fff", fontSize: 10, fontWeight: 900, lineHeight: "13px",
+    textAlign: "center",
+  });
+
+  return (
+    <div style={{ gridColumn: otevreno ? "1 / -1" : "auto" }}>
+      <span style={label(theme)}>{nadpis}</span>
+      <button
+        onClick={() => setOtevreno(o => !o)}
+        aria-expanded={otevreno}
+        title={vybrane.length
+          ? `Vybráno ${vybrane.length} — kliknutím ${otevreno ? "zabalíš" : "rozbalíš"} výběr`
+          : `Nefiltruje se podle ${nadpis.toLowerCase()} — kliknutím vybereš`}
+        aria-label={`${nadpis}: ${souhrn}`}
+        style={{
+          ...input(theme), cursor: "pointer", textAlign: "left",
+          display: "flex", alignItems: "center", gap: 7,
+          fontWeight: vybrane.length ? 700 : 400,
+        }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {souhrn}
+        </span>
+        <span style={{ flex: "0 0 auto", color: theme.textSub, fontSize: 11 }}>
+          {otevreno ? "▴" : "▾"}
+        </span>
+      </button>
+
+      {otevreno && (
+        <div style={{
+          marginTop: 6, padding: "10px 11px",
+          background: theme.card, border: `1px solid ${theme.cardBorder}`,
+          borderRadius: 10,
+        }}>
+          {rodiny.map(([rodina, items]) => {
+            const klice = items.map(i => i.key);
+            const vseZap = klice.every(k => vybrane.includes(k));
+            return (
+              <div key={rodina || "bez"} style={{ marginBottom: 9 }}>
+                {rodina && (
+                  /* Celá rodina jedním kliknutím. Klikací je celý
+                     řádek i s názvem, ne jen čtvereček — viz
+                     JAZYK.md, oddíl 4. */
+                  <button onClick={() => prepniRodinu(klice)}
+                    title={vseZap ? `Odebrat celou rodinu ${nazvyRodin?.[rodina] || rodina}`
+                                  : `Vybrat celou rodinu ${nazvyRodin?.[rodina] || rodina}`}
+                    aria-label={`${vseZap ? "Odebrat" : "Vybrat"} celou rodinu ${nazvyRodin?.[rodina] || rodina}`}
+                    aria-pressed={vseZap}
+                    style={{
+                      ...btn(), background: "transparent", padding: "2px 0",
+                      display: "flex", alignItems: "center", gap: 7, width: "100%",
+                      textAlign: "left", marginBottom: 4,
+                    }}>
+                    <span style={ctverec(vseZap)}>{vseZap ? "✓" : ""}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+                      textTransform: "uppercase", color: theme.textSub,
+                    }}>{nazvyRodin?.[rodina] || rodina}</span>
+                  </button>
+                )}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, paddingLeft: rodina ? 22 : 0 }}>
+                  {items.map(p => {
+                    const zap = vybrane.includes(p.key);
+                    return (
+                      <button key={p.key} onClick={() => prepni(p.key)}
+                        aria-pressed={zap}
+                        title={zap ? `Odebrat ${p.label} z filtru` : `Přidat ${p.label} do filtru`}
+                        aria-label={p.label}
+                        style={{
+                          ...btn(), display: "flex", alignItems: "center", gap: 6,
+                          padding: "6px 10px", fontSize: 12.5, fontWeight: zap ? 700 : 500,
+                          background: zap ? `${theme.accent}18` : theme.inputBg,
+                          color: zap ? theme.text : theme.textSub,
+                          border: `1px solid ${zap ? theme.accent : theme.inputBorder}`,
+                        }}>
+                        <span style={ctverec(zap)}>{zap ? "✓" : ""}</span>
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          {vybrane.length > 0 && (
+            <button onClick={() => onZmena([])}
+              title={`Přestat filtrovat podle ${nadpis.toLowerCase()}`}
+              aria-label={`Zrušit filtr ${nadpis}`}
+              style={{
+                ...btn(), background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.cardBorder}`, padding: "5px 11px", fontSize: 12,
+              }}>Zrušit výběr</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1334,8 +1512,16 @@ function PasFazi({ theme, faze, filtr, zmen }) {
   const [archivOtevreny, setArchivOtevreny] = useState(false);
   if (!faze || faze.length === 0) return null;
 
+  /* Tři skupiny, ne dvě. Tip není archiv — je to začátek cesty,
+     ne její konec. Dokud byl v pásu jen „živé" a „všechno ostatní",
+     tipy by se schovaly pod archiv vedle padlých zakázek, což je
+     přesně obrácený význam.
+
+     Tipy stojí před živými: nejdřív o zakázce víš, pak na ni
+     seženeš kontakt a teprve pak na ní pracuješ. */
+  const tipy = faze.filter(f => f.skupina === "tip");
   const zive = faze.filter(f => f.skupina === "zive");
-  const jinde = faze.filter(f => f.skupina !== "zive");
+  const jinde = faze.filter(f => f.skupina !== "zive" && f.skupina !== "tip");
   const vArchivu = jinde.reduce((a, f) => a + (f.pocet || 0), 0);
 
   const Dlazdice = ({ f }) => {
@@ -1370,6 +1556,10 @@ function PasFazi({ theme, faze, filtr, zmen }) {
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        {tipy.map(f => <Dlazdice key={f.stav} f={f} />)}
+        {tipy.length > 0 && zive.length > 0 && (
+          <span style={{ color: theme.cardBorder, padding: "0 2px" }}>|</span>
+        )}
         {zive.map(f => <Dlazdice key={f.stav} f={f} />)}
 
         {jinde.length > 0 && (
@@ -1406,8 +1596,17 @@ function PasFazi({ theme, faze, filtr, zmen }) {
    datum, kdy se má vrátit. */
 function FazeVolba({ theme, ciselniky, f, uprav }) {
   const vse = aktivni(ciselniky, "stav_zakazky");
+  /* Tip je vidět hned u zakládání — to je celý jeho smysl. Michal:
+     „mohl bych zadat zakázky, o kterých vím, ale nemám na ně
+     aktuální kontakt, tím pádem nemohou být živé, ale mohou být
+     potenciální." Kdyby byl schovaný pod „… ukončit" vedle padlých
+     zakázek, nikdo by ho nenašel a tipy by se zakládaly jako Nové. */
+  const tipy = vse.filter(x => x.skupina === "tip");
   const zive = vse.filter(x => (x.skupina || "zive") === "zive");
-  const konec = vse.filter(x => (x.skupina || "zive") !== "zive");
+  const konec = vse.filter(x => {
+    const s = x.skupina || "zive";
+    return s !== "zive" && s !== "tip";
+  });
   const jeKonec = konec.some(x => x.key === f.stav);
   const [ukoncuji, setUkoncuji] = useState(jeKonec);
 
@@ -1429,6 +1628,10 @@ function FazeVolba({ theme, ciselniky, f, uprav }) {
     <div style={{ marginBottom: 10 }}>
       <span style={label(theme)}>Fáze zakázky</span>
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        {tipy.map(x => <Dlazdice key={x.key} x={x} barva={theme.yellow} />)}
+        {tipy.length > 0 && (
+          <span style={{ color: theme.cardBorder, padding: "0 2px" }}>|</span>
+        )}
         {zive.map(x => <Dlazdice key={x.key} x={x} />)}
         {!ukoncuji && !jeKonec && (
           <button onClick={() => setUkoncuji(true)} style={{
