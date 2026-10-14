@@ -65,7 +65,10 @@ import Underline from "@tiptap/extension-underline";
    CONFIGURATION
    ═══════════════════════════════════════════════════════ */
 
-const UNDO_MS = 5000;
+/* Pět vteřin stačilo, dokud se vrácení jen mihlo. Od chvíle, kdy
+   lišta odpočítává a je u ní co přečíst, je pět vteřin málo —
+   člověk to stihne jen přečíst, ne se rozhodnout. */
+const UNDO_MS = 8000;
 
 // Verze aplikace — odvozená z build timestampu (Vite define) nebo z env.
 // Pokud není nastaveno v vite.config.js (define: { __BUILD_TIME__: ... }),
@@ -100,7 +103,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_2010";
+const FILE_VERSION = "261014_2115";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -9450,6 +9453,118 @@ function SpodniLista({ theme, cile, aktivniKlic }) {
    Seznam se vezme při otevření a dál se nemění. Kdyby se
    přepočítával po každém kliknutí, položky by pod rukama poskakovaly
    a nebylo by poznat, kolik ještě zbývá. */
+/* ═══════════════════════════════════════════════════════
+   KALENDÁŘ
+   Michal: „když zadávám datum, rád bych viděl kalendář."
+
+   Políčko type="date" ukazuje jen „dd.mm.rrrr" a kalendář
+   schovává za ikonku, na kterou se musí trefit. Když vybíráš,
+   na kdy něco odložit, potřebuješ vidět týdny — jestli to
+   padne na víkend, kolik dní to je doopravdy.
+
+   Proto celý měsíc na očích. Týden začíná pondělkem, jak se
+   u nás píše; dnešek má kroužek, vybraný den plnou barvu.
+   ═══════════════════════════════════════════════════════ */
+
+const MESICE_1 = ["leden", "únor", "březen", "duben", "květen", "červen",
+  "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
+const DNY_ZKR = ["po", "út", "st", "čt", "pá", "so", "ne"];
+
+function isoZData(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function Kalendar({ hodnota, onVyber, theme, minimum }) {
+  const dnes = new Date(); dnes.setHours(0, 0, 0, 0);
+  const dnesIso = isoZData(dnes);
+  const min = minimum === undefined ? dnesIso : minimum;
+
+  // Měsíc, který je vidět. Otevře se na vybraném datu, jinak na dnešku.
+  const [mesic, setMesic] = useState(() => {
+    const z = hodnota ? new Date(hodnota + "T00:00:00") : dnes;
+    return isNaN(z) ? new Date(dnes.getFullYear(), dnes.getMonth(), 1)
+                    : new Date(z.getFullYear(), z.getMonth(), 1);
+  });
+
+  const prvni = new Date(mesic.getFullYear(), mesic.getMonth(), 1);
+  // getDay() dává neděli jako 0. U nás týden začíná pondělkem.
+  const posun = (prvni.getDay() + 6) % 7;
+  const pocetDni = new Date(mesic.getFullYear(), mesic.getMonth() + 1, 0).getDate();
+
+  const bunky = [];
+  for (let i = 0; i < posun; i++) bunky.push(null);
+  for (let d = 1; d <= pocetDni; d++) bunky.push(new Date(mesic.getFullYear(), mesic.getMonth(), d));
+
+  const sip = (smer, popis) => (
+    <button type="button" onClick={() => setMesic(m => new Date(m.getFullYear(), m.getMonth() + smer, 1))}
+      title={popis} aria-label={popis}
+      style={{
+        ...buttonStyle(), width: 32, height: 32, padding: 0, fontSize: 16,
+        background: "transparent", color: theme.textSub,
+        border: `1px solid ${theme.cardBorder}`,
+      }}>{smer < 0 ? "‹" : "›"}</button>
+  );
+
+  return (
+    <div role="group" aria-label="Kalendář" style={{
+      border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
+      padding: "8px 10px 10px", background: theme.inputBg,
+      maxWidth: 320,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 6,
+      }}>
+        {sip(-1, "Předchozí měsíc")}
+        <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+          {MESICE_1[mesic.getMonth()]} {mesic.getFullYear()}
+        </span>
+        {sip(1, "Další měsíc")}
+      </div>
+
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2,
+        marginBottom: 3,
+      }}>
+        {DNY_ZKR.map((d, i) => (
+          <div key={d} style={{
+            textAlign: "center", fontSize: "10px", fontWeight: 500,
+            color: i > 4 ? theme.textMid : theme.textSub, padding: "2px 0",
+          }}>{d}</div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+        {bunky.map((d, i) => {
+          if (!d) return <div key={`p${i}`} />;
+          const iso = isoZData(d);
+          const vybrany = iso === hodnota;
+          const jeDnes = iso === dnesIso;
+          const brzy = min && iso < min;
+          const vikend = d.getDay() === 0 || d.getDay() === 6;
+          return (
+            <button key={iso} type="button" disabled={brzy}
+              onClick={() => onVyber?.(iso)}
+              title={`${d.getDate()}. ${MESICE_1[d.getMonth()]} ${d.getFullYear()}`}
+              aria-label={`${d.getDate()}. ${MESICE_1[d.getMonth()]} ${d.getFullYear()}`}
+              aria-pressed={vybrany}
+              style={{
+                ...buttonStyle(), height: 32, padding: 0,
+                fontSize: "12.5px", fontWeight: vybrany || jeDnes ? 700 : 400,
+                background: vybrany ? theme.accent : "transparent",
+                color: vybrany ? "#fff"
+                     : brzy ? theme.textDim
+                     : vikend ? theme.textMid : theme.text,
+                border: jeDnes && !vybrany ? `1.5px solid ${theme.accent}` : "1px solid transparent",
+                cursor: brzy ? "default" : "pointer",
+              }}>{d.getDate()}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
   rezim = "protridit" }) {
   /* Dva režimy, jedno okno. Mechanika je stejná — jedna věc přes
@@ -9597,9 +9712,19 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
     { popis: "Za 14 dní", dni: 14 },
   ];
 
-  /* Odklady jsou v jiném řádu než termíny — kdo odkládá, odkládá
-     na měsíce, ne na dny. Proto vlastní sada. */
+  /* Tady jsem se spletl a Michal to vrátil: „odložení úkolu by
+     nemělo být nejdříve za kvartál, to není změna pozemku, ale
+     úkol, který mohu udělat zítra."
+
+     Měl pravdu. Nejkratší odklad byl měsíc, takže úkol, na který
+     prostě dnes nebyl čas, se dal odložit jen na dobu, za kterou
+     se stihne zapomenout. Žebřík teď začíná zítřkem a dlouhé
+     konce zůstávají pro to, co je opravdu na měsíce. */
   const odklady = [
+    { popis: "Zítra", dni: 1 },
+    { popis: "Za 3 dny", dni: 3 },
+    { popis: "Za týden", dni: 7 },
+    { popis: "Za 2 týdny", dni: 14 },
     { popis: "Za měsíc", dni: 30 },
     { popis: "Za kvartál", dni: 90 },
     { popis: "Za půl roku", dni: 182 },
@@ -9759,32 +9884,25 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                   Do té doby bude zticha. V ten den se sám ozve — najdeš ho
                   mezitím v <strong style={{ color: theme.text }}>Zásobníku</strong>.
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 11 }}>
+                <div style={{ display: "grid", gap: 7, marginBottom: 11,
+              gridTemplateColumns: "repeat(auto-fill, minmax(104px, 1fr))" }}>
                   {odklady.map(o => (
                     <button key={o.popis} onClick={() => odloz(o.dni)}
                       title={`Vrátí se ${o.popis.toLowerCase()}, do té doby zticha`}
                       aria-label={`Odložit — vrátí se ${o.popis.toLowerCase()}`}
                       style={{
-                        ...buttonStyle(), flex: "1 1 110px", minHeight: 46,
-                        padding: "12px 14px", fontSize: "14px", fontWeight: 700,
+                        ...buttonStyle(), minHeight: 46, width: "100%",
+                        padding: "12px 10px", fontSize: "14px", fontWeight: 700,
                         background: theme.accent, color: "#fff",
                       }}>{o.popis}</button>
                   ))}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <label htmlFor="protridit-odklad" style={{ fontSize: "12px", color: theme.textSub }}>
-                    nebo konkrétní datum
-                  </label>
-                  <input id="protridit-odklad" type="date" value={datum}
-                    onChange={e => setDatum(e.target.value)}
-                    style={{ ...inputStyle(theme), width: "auto", flex: "1 1 150px" }} />
-                  <button disabled={!datum}
-                    onClick={() => { onUprav?.(ukol.id, { showFrom: datum, dueDate: datum }); dal(); }}
-                    style={{
-                      ...buttonStyle(), padding: "10px 18px", fontSize: "14px", fontWeight: 700,
-                      background: datum ? theme.accent : theme.inputBg,
-                      color: datum ? "#fff" : theme.textSub,
-                    }}>Uložit</button>
+                <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 6 }}>
+                  nebo vyber v kalendáři
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+                  <Kalendar theme={theme} hodnota={datum}
+                    onVyber={(d) => { setDatum(d); onUprav?.(ukol.id, { showFrom: d, dueDate: d }); dal(); }} />
                   <button onClick={() => setOdkladam(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
                     ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 500,
@@ -9799,34 +9917,26 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                   fontSize: "10px", fontWeight: 700, letterSpacing: "0.04em",
                   textTransform: "uppercase", color: theme.textSub, marginBottom: 7,
                 }}>Nový termín</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 11 }}>
+                <div style={{ display: "grid", gap: 7, marginBottom: 11,
+              gridTemplateColumns: "repeat(auto-fill, minmax(104px, 1fr))" }}>
                   {rychleTerminy.map(r => (
                     <button key={r.popis}
                       onClick={() => { onUprav?.(ukol.id, { dueDate: zaDni(r.dni) }); dal(); }}
                       title={`Posunout na ${r.popis.toLowerCase()}`}
                       aria-label={`Posunout termín na ${r.popis.toLowerCase()}`}
                       style={{
-                        ...buttonStyle(), flex: "1 1 110px", minHeight: 46,
-                        padding: "12px 14px", fontSize: "14px", fontWeight: 700,
+                        ...buttonStyle(), minHeight: 46, width: "100%",
+                        padding: "12px 10px", fontSize: "14px", fontWeight: 700,
                         background: theme.accent, color: "#fff",
                       }}>{r.popis}</button>
                   ))}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <label htmlFor="protridit-datum" style={{ fontSize: "12px", color: theme.textSub }}>
-                    nebo konkrétní datum
-                  </label>
-                  <input id="protridit-datum" type="date" value={datum}
-                    onChange={e => setDatum(e.target.value)}
-                    style={{ ...inputStyle(theme), width: "auto", flex: "1 1 150px" }} />
-                  <button
-                    disabled={!datum}
-                    onClick={() => { onUprav?.(ukol.id, { dueDate: datum }); dal(); }}
-                    style={{
-                      ...buttonStyle(), padding: "10px 18px", fontSize: "14px", fontWeight: 700,
-                      background: datum ? theme.accent : theme.inputBg,
-                      color: datum ? "#fff" : theme.textSub,
-                    }}>Uložit</button>
+                <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 6 }}>
+                  nebo vyber v kalendáři
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+                  <Kalendar theme={theme} hodnota={datum}
+                    onVyber={(d) => { setDatum(d); onUprav?.(ukol.id, { dueDate: d }); dal(); }} />
                   <button onClick={() => setZadavamDatum(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
                     ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 500,
@@ -10158,9 +10268,8 @@ function UkolOkno({
   onStatusChange, onUpdate, onDelete, onRestore, onPermanentDelete,
   onReject, onResubmit, onArchive, onUnarchive, onMarkSeen,
   onAddComment, onToggleReaction, onMarkCommentsSeen, onConvertTaskToNote,
-  onVratZpet,
+  onPosunTermin,
 }) {
-  const [hotovo, setHotovo] = useState(null);   // co se právě stalo
   const [odkladam, setOdkladam] = useState(false);
   const [datum, setDatum] = useState("");
   useEscapeKey(() => { if (odkladam) setOdkladam(false); else onZavri(); }, true);
@@ -10178,23 +10287,18 @@ function UkolOkno({
   const poTerminu = task.dueDate && daysDiff(task.dueDate) < 0;
   const dni = task.dueDate ? Math.abs(daysDiff(task.dueDate)) : 0;
 
-  /* Čtyři akce, které člověk u úkolu dělá v devíti případech
-     z deseti. Velké, popsané, vedle sebe — žádné přemýšlení,
-     žádné hledání v menu. */
-  const splnit = () => {
-    onStatusChange?.(task.id, "done");
-    setHotovo({ text: "Hotovo.", zpet: true });
-  };
-  const odloz = (dni2) => {
-    const d = zaDni(dni2);
-    onUpdate?.(task.id, { dueDate: d });
-    setOdkladam(false);
-    setHotovo({ text: `Termín posunutý na ${formatDate(d)}.`, zpet: false });
-  };
-  const smazat = () => {
-    onDelete?.(task.id);
-    setHotovo({ text: "Smazáno do koše.", zpet: true });
-  };
+  /* Akce, které člověk u úkolu dělá v devíti případech z deseti.
+     Velké, popsané, vedle sebe — žádné přemýšlení, žádné hledání
+     v menu.
+
+     Žádná z nich se tu nepotvrzuje. Michal: „splněný úkol vyžaduje
+     zbytečné kliknutí, nešlo by dát automatický odpočet s možností
+     vrácení?" Měl pravdu — okno zmizí hned a vrácení drží lišta
+     dole, která odpočítává a nebrání v další práci. */
+  const splnit = () => { onStatusChange?.(task.id, "done"); onZavri?.(); };
+  const naDatum = (d) => { onPosunTermin?.(task.id, d); onZavri?.(); };
+  const odloz = (dni2) => naDatum(zaDni(dni2));
+  const smazat = () => { onDelete?.(task.id); onZavri?.(); };
 
   const velkeTlacitko = (popis, napoveda, akce, barva, hlavni) => (
     <button onClick={akce} title={napoveda} aria-label={`${popis} — ${napoveda}`}
@@ -10284,72 +10388,34 @@ function UkolOkno({
             }}>×</button>
         </div>
 
-        {/* ══ CO SE PRÁVĚ STALO ══
-            Nezavírá se samo. Michal: „při potvrzení úkolu jen
-            problikne okno, u kterého nemám možnost vzít zpět,
-            je průhledné a příliš rychle se ztratí." */}
-        {hotovo ? (
-          <div style={{ padding: "22px 16px", textAlign: "center" }}>
-            <div style={{
-              fontSize: "16px", fontWeight: 700, color: theme.green, marginBottom: 14,
-            }}>{hotovo.text}</div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-              {hotovo.zpet && (
-                <button onClick={() => { onVratZpet?.(); setHotovo(null); }}
-                  title="Vrátit zpět — úkol se obnoví do původního stavu"
-                  aria-label="Vrátit zpět"
-                  style={{
-                    ...buttonStyle(), padding: "11px 20px", fontSize: "14px", fontWeight: 700,
-                    background: "transparent", color: theme.text,
-                    border: `1.5px solid ${theme.inputBorder}`,
-                  }}>Vrátit zpět</button>
-              )}
-              <button onClick={onZavri}
-                title="Zavřít okno" aria-label="Zavřít"
-                style={{
-                  ...buttonStyle(), padding: "11px 22px", fontSize: "14px", fontWeight: 700,
-                  background: theme.accent, color: "#fff",
-                }}>Zavřít</button>
-            </div>
-          </div>
-        ) : odkladam ? (
+        {odkladam ? (
           /* ══ ODKLAD ══ Rychlé volby, kalendář až pod nimi. */
           <div style={{ padding: "14px 16px" }}>
             <div style={{
               fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
               textTransform: "uppercase", color: theme.textSub, marginBottom: 8,
             }}>Na kdy to posunout</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 11 }}>
+            <div style={{ display: "grid", gap: 7, marginBottom: 11,
+              gridTemplateColumns: "repeat(auto-fill, minmax(104px, 1fr))" }}>
               {[{ t: "Zítra", d: 1 }, { t: "Za 3 dny", d: 3 },
-                { t: "Za týden", d: 7 }, { t: "Za 14 dní", d: 14 }].map(v => (
+                { t: "Za týden", d: 7 }, { t: "Za 2 týdny", d: 14 },
+                { t: "Za měsíc", d: 30 }, { t: "Za kvartál", d: 90 }].map(v => (
                 <button key={v.t} onClick={() => odloz(v.d)}
                   title={`Posunout termín na ${v.t.toLowerCase()}`}
                   aria-label={`Posunout na ${v.t.toLowerCase()}`}
                   style={{
-                    ...buttonStyle(), flex: "1 1 110px", minHeight: 46,
-                    padding: "12px 14px", fontSize: "14px", fontWeight: 700,
+                    ...buttonStyle(), minHeight: 46, width: "100%",
+                    padding: "12px 10px", fontSize: "14px", fontWeight: 700,
                     background: theme.accent, color: "#fff",
                   }}>{v.t}</button>
               ))}
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <label htmlFor="okno-datum" style={{ fontSize: "12px", color: theme.textSub }}>
-                nebo konkrétní datum
-              </label>
-              <input id="okno-datum" type="date" value={datum}
-                onChange={e => setDatum(e.target.value)}
-                style={{ ...inputStyle(theme), width: "auto", flex: "1 1 150px" }} />
-              <button disabled={!datum}
-                onClick={() => {
-                  onUpdate?.(task.id, { dueDate: datum });
-                  setOdkladam(false);
-                  setHotovo({ text: `Termín posunutý na ${formatDate(datum)}.`, zpet: false });
-                }}
-                style={{
-                  ...buttonStyle(), padding: "10px 18px", fontSize: "14px", fontWeight: 700,
-                  background: datum ? theme.accent : theme.inputBg,
-                  color: datum ? "#fff" : theme.textSub,
-                }}>Uložit</button>
+            <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 6 }}>
+              nebo vyber v kalendáři
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+              <Kalendar theme={theme} hodnota={datum}
+                onVyber={(d) => { setDatum(d); naDatum(d); }} />
               <button onClick={() => setOdkladam(false)}
                 title="Zpět k úkolu" aria-label="Zpět k úkolu"
                 style={{
@@ -10373,9 +10439,7 @@ function UkolOkno({
               {velkeTlacitko("Odložit", "Posune termín — zítra, za týden nebo konkrétní datum",
                 () => setOdkladam(true), theme.accent, false)}
               {!task.dueDate && velkeTlacitko("Dnes", "Dá úkolu dnešní termín",
-                () => { onUpdate?.(task.id, { dueDate: dnesISO() });
-                        setHotovo({ text: "Termín na dnešek.", zpet: false }); },
-                theme.accent, false)}
+                () => naDatum(dnesISO()), theme.accent, false)}
               {/* Smazat sem schválně NEPATŘÍ. Rychlá akce je ta,
                   kterou člověk udělá bez přemýšlení — smazání
                   přemýšlení vyžaduje. Zůstává dole v podrobnostech,
@@ -22303,25 +22367,91 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
   );
 }
 
-function Snackbar({ message, onUndo, visible, theme, canUndo = true }) {
+/* ══ LIŠTA S ODPOČTEM ══
+   Michal: „splněný úkol vyžaduje zbytečné kliknutí, nešlo by dát
+   automatický odpočet s možností vrácení? např dolů na lištu,
+   viditelně, ale abych mohl pracovat dále, když budu chtít?"
+
+   Proto: akce se provede hned, okno se zavře a tahle lišta drží
+   vrácení po dobu odpočtu. Je vidět, odpočítává a nic neblokuje —
+   kdo chce pracovat dál, prostě pracuje dál.
+
+   Ukazuje se čas i proužek. Číslo řekne, kolik zbývá; proužek to
+   řekne bez čtení. */
+function Snackbar({ message, onUndo, visible, theme, canUndo = true, nadListou = false }) {
+  const [zbyva, setZbyva] = useState(UNDO_MS);
+
+  // Nová hláška = nový odpočet. Klíčem je text, protože přesně ten
+  // se mění při každé další akci.
+  useEffect(() => {
+    if (!visible) return;
+    const start = Date.now();
+    setZbyva(UNDO_MS);
+    const id = setInterval(() => {
+      const z = UNDO_MS - (Date.now() - start);
+      setZbyva(z > 0 ? z : 0);
+    }, 100);
+    return () => clearInterval(id);
+  }, [visible, message]);
+
   if (!visible) return null;
+  const podil = Math.max(0, Math.min(1, zbyva / UNDO_MS));
+  const vteriny = Math.ceil(zbyva / 1000);
+
   return (
-    <div style={{
-      position: "fixed", bottom: "24px", left: "50%",
-      transform: "translateX(-50%)",
+    <div role="status" aria-live="polite" style={{
+      position: "fixed",
+      // Nad spodní lištou, ne přes ni. Na počítači je navigace
+      // vlevo, takže tam stačí odsadit od kraje obrazovky.
+      bottom: nadListou
+        ? "calc(66px + env(safe-area-inset-bottom, 0px))"
+        : "24px",
+      left: "50%", transform: "translateX(-50%)",
       background: theme.snackBg, border: `1px solid ${theme.cardBorder}`,
-      borderRadius: "12px", padding: "12px 16px",
-      display: "flex", alignItems: "center", gap: "12px",
-      zIndex: 100, animation: "snackIn 0.25s ease",
-      fontFamily: FONT, boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-      maxWidth: "90vw",
+      borderRadius: "12px",
+      zIndex: 1200,   // i nad oknem úkolu, aby ho nic nepřekrylo
+      animation: "snackIn 0.25s ease",
+      fontFamily: FONT, boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
+      maxWidth: "min(92vw, 460px)", overflow: "hidden",
     }}>
-      <span style={{ fontSize: "13px", color: theme.text }}>{message}</span>
-      <button onClick={onUndo} style={{
-        ...buttonStyle(), background: canUndo ? theme.accent : "transparent",
-        color: canUndo ? "#fff" : theme.textSub,
-        padding: "6px 14px", fontSize: "12px",
-      }}>{canUndo ? "VRÁTIT" : "OK"}</button>
+      <div style={{
+        display: "flex", alignItems: "center", gap: "12px",
+        padding: "11px 14px",
+      }}>
+        {/* Jeden řádek s třemi tečkami. Bez toho se na telefonu
+            dlouhý název láme po jednom slově a lišta naroste přes
+            půl obrazovky — přesně to, co má nepřekážet. */}
+        <span title={message} style={{
+          fontSize: "13px", fontWeight: 500, color: theme.text,
+          flex: 1, minWidth: 0,
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}>{message}</span>
+        {canUndo && (
+          <span aria-hidden="true" style={{
+            fontSize: "12px", fontWeight: 500, color: theme.textSub,
+            fontVariantNumeric: "tabular-nums", flex: "0 0 auto",
+          }}>{vteriny} s</span>
+        )}
+        <button onClick={onUndo}
+          title={canUndo
+            ? `Vrátit zpět — máš na to ještě ${vteriny} s`
+            : "Zavřít hlášku"}
+          aria-label={canUndo ? "Vrátit zpět" : "Zavřít"}
+          style={{
+            ...buttonStyle(), flex: "0 0 auto",
+            background: canUndo ? theme.accent : "transparent",
+            color: canUndo ? "#fff" : theme.textSub,
+            padding: "8px 14px", fontSize: "12px", fontWeight: 700,
+          }}>{canUndo ? "VRÁTIT ZPĚT" : "OK"}</button>
+      </div>
+      {canUndo && (
+        <div aria-hidden="true" style={{ height: 3, background: theme.cardBorder }}>
+          <div style={{
+            height: "100%", width: `${podil * 100}%`,
+            background: theme.accent, transition: "width 0.1s linear",
+          }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -26511,6 +26641,17 @@ function App() {
     }
   }, []);
 
+  /* Posun termínu s vrácením zpět. updateTask vrácení nemá a
+     u odkládání je to přesně ta akce, kterou člověk nejčastěji
+     klikne vedle — tak ať se dá vzít zpátky jako všechno ostatní. */
+  const posunTermin = useCallback((taskId, datum) => {
+    const t = (tasks || []).find(x => x.id === taskId);
+    const nazev = (t?.title || "");
+    const kratky = nazev.length > 30 ? nazev.slice(0, 30) + "…" : nazev;
+    withUndo(`Termín ${formatDate(datum)}: ${kratky}`, taskId,
+      prev => prev.map(x => x.id === taskId ? { ...x, dueDate: datum } : x));
+  }, [tasks, withUndo]);
+
   const addTask = useCallback(async (task) => {
     // Block protection — odfiltruj uživatele kteří MĚ blokují (createdBy je v jejich blocklistu).
     // Pokud někdo blokuje currentUser, jeho jméno NESMÍ být v assignedTo.
@@ -29758,7 +29899,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               comments={comments.filter(c => c.taskId === u.id)}
               onZavri={() => setUkolNaCeleObrazovce(null)}
               onUkazVSeznamu={() => { setUkolNaCeleObrazovce(null); skocNaUkol(u.id, false); }}
-              onVratZpet={performUndo}
+              onPosunTermin={posunTermin}
               onStatusChange={changeStatus}
               onMarkSeen={markSeen}
               onUpdate={updateTask}
@@ -32150,6 +32291,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         visible={!!undoState}
         canUndo={!!undoState?.previousTasks}
         onUndo={performUndo}
+        nadListou={!jeRail}
         theme={theme}
       />
 
