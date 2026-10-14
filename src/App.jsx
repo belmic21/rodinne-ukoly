@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_1735";
+const FILE_VERSION = "261014_2010";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -10126,6 +10126,305 @@ function RevizeSheet({ tasks, theme, onClose, onOtevriUkol, onUkazProsle }) {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══ OKNO JEDNOHO ÚKOLU ═══════════════════════════════════════
+   Michal se ptal třikrát, než jsem to pochopil:
+
+     1. „když kliknu na úkol, zobrazí se seznam všech"
+        → opravil jsem to napůl: úkol se otevřel, ale v seznamu
+     2. „pořád se zobrazí seznam"
+        → udělal jsem okno, ale ZABALIL DO NĚJ ŘÁDEK SEZNAMU
+     3. „to zobrazení není dobré… chtěl bych jasně viditelná
+        tlačítka splnit, odložit, rychlé akce bez přemýšlení"
+
+   Ta druhá chyba je ta podstatná. TaskCard je řádek seznamu —
+   má vlastní stav rozbalení, akce schované po najetí a animace
+   počítané na to, že kolem jsou další řádky. V okně z toho byla
+   hlavička plovoucí mimo kartu, tlačítka jako duchové na
+   ztmaveném pozadí a po akci se karta sbalila do pahýlu.
+
+   Tohle je okno postavené jako okno: jedna ohraničená karta,
+   hlavička uvnitř, čtyři velká tlačítka nahoře a teprve pod nimi
+   podrobnosti. Po akci se nic nezavírá samo — zůstane potvrzení
+   s možností vzít to zpět. */
+function UkolOkno({
+  task, currentUser, users, theme, comments = [],
+  onZavri, onUkazVSeznamu,
+  onStatusChange, onUpdate, onDelete, onRestore, onPermanentDelete,
+  onReject, onResubmit, onArchive, onUnarchive, onMarkSeen,
+  onAddComment, onToggleReaction, onMarkCommentsSeen, onConvertTaskToNote,
+  onVratZpet,
+}) {
+  const [hotovo, setHotovo] = useState(null);   // co se právě stalo
+  const [odkladam, setOdkladam] = useState(false);
+  const [datum, setDatum] = useState("");
+  useEscapeKey(() => { if (odkladam) setOdkladam(false); else onZavri(); }, true);
+
+  useEffect(() => { onMarkSeen?.(task.id); }, [task.id]);  // eslint-disable-line
+
+  const zaDni = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const dnesISO = () => zaDni(0);
+
+  const priorita = PRIORITIES.find(p => p.id === task.priority);
+  const poTerminu = task.dueDate && daysDiff(task.dueDate) < 0;
+  const dni = task.dueDate ? Math.abs(daysDiff(task.dueDate)) : 0;
+
+  /* Čtyři akce, které člověk u úkolu dělá v devíti případech
+     z deseti. Velké, popsané, vedle sebe — žádné přemýšlení,
+     žádné hledání v menu. */
+  const splnit = () => {
+    onStatusChange?.(task.id, "done");
+    setHotovo({ text: "Hotovo.", zpet: true });
+  };
+  const odloz = (dni2) => {
+    const d = zaDni(dni2);
+    onUpdate?.(task.id, { dueDate: d });
+    setOdkladam(false);
+    setHotovo({ text: `Termín posunutý na ${formatDate(d)}.`, zpet: false });
+  };
+  const smazat = () => {
+    onDelete?.(task.id);
+    setHotovo({ text: "Smazáno do koše.", zpet: true });
+  };
+
+  const velkeTlacitko = (popis, napoveda, akce, barva, hlavni) => (
+    <button onClick={akce} title={napoveda} aria-label={`${popis} — ${napoveda}`}
+      style={{
+        ...buttonStyle(), flex: "1 1 120px", minHeight: 46,
+        padding: "12px 10px", fontSize: "14px", fontWeight: 700,
+        background: hlavni ? barva : "transparent",
+        color: hlavni ? "#fff" : barva,
+        border: hlavni ? "none" : `1.5px solid ${barva}`,
+      }}>{popis}</button>
+  );
+
+  return (
+    <div onClick={onZavri} style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(15,23,42,0.55)", display: "flex",
+      alignItems: "flex-start", justifyContent: "center",
+      padding: "18px 12px", overflowY: "auto",
+    }}>
+      {/* Jedna ohraničená karta. Všechno je uvnitř ní — hlavička,
+          akce i podrobnosti. Nic nevisí venku na ztmaveném pozadí,
+          kde to bylo nečitelné. */}
+      <div onClick={e => e.stopPropagation()} role="dialog"
+        aria-label={`Úkol ${task.title}`}
+        style={{
+          width: "100%", maxWidth: "640px", marginTop: "3vh", marginBottom: "4vh",
+          background: theme.card,
+          border: `1.5px solid ${theme.cardBorder}`,
+          borderRadius: "14px",
+          boxShadow: "0 12px 40px rgba(0,0,0,0.3)",
+          overflow: "hidden",
+        }}>
+
+        {/* ══ HLAVIČKA ══ */}
+        <div style={{
+          display: "flex", alignItems: "flex-start", gap: 10,
+          padding: "14px 16px 12px",
+          borderBottom: `1px solid ${theme.cardBorder}`,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap",
+              marginBottom: 5,
+            }}>
+              {priorita && priorita.id !== "low" && (
+                <span style={{
+                  fontSize: "13px", fontWeight: 700,
+                  color: priorita.id === "urgent" ? theme.red : theme.yellow,
+                }} title={priorita.label}>{priorita.sym}</span>
+              )}
+              <span style={{
+                fontSize: "17px", fontWeight: 700, color: theme.text, lineHeight: 1.3,
+                wordBreak: "break-word",
+              }}>{task.title}</span>
+            </div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+              {task.dueDate && (
+                <span style={{
+                  fontSize: "11.5px", fontWeight: poTerminu ? 700 : 400,
+                  color: poTerminu ? theme.red : theme.textSub,
+                }}>
+                  {poTerminu
+                    ? `${dni} ${dni === 1 ? "den" : dni < 5 ? "dny" : "dní"} po termínu`
+                    : `termín ${formatDate(task.dueDate)}`}
+                </span>
+              )}
+              {!task.dueDate && (
+                <span style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub }}>
+                  bez termínu
+                </span>
+              )}
+              {task.osoba && (
+                <span style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub }}>
+                  · {task.osoba}
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onZavri}
+            title="Zavřít — vrátíš se tam, odkud jsi přišel"
+            aria-label="Zavřít okno"
+            style={{
+              ...buttonStyle(), flex: "0 0 auto",
+              width: 34, height: 34, padding: 0, fontSize: 20,
+              background: "transparent", color: theme.textSub, border: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>×</button>
+        </div>
+
+        {/* ══ CO SE PRÁVĚ STALO ══
+            Nezavírá se samo. Michal: „při potvrzení úkolu jen
+            problikne okno, u kterého nemám možnost vzít zpět,
+            je průhledné a příliš rychle se ztratí." */}
+        {hotovo ? (
+          <div style={{ padding: "22px 16px", textAlign: "center" }}>
+            <div style={{
+              fontSize: "16px", fontWeight: 700, color: theme.green, marginBottom: 14,
+            }}>{hotovo.text}</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+              {hotovo.zpet && (
+                <button onClick={() => { onVratZpet?.(); setHotovo(null); }}
+                  title="Vrátit zpět — úkol se obnoví do původního stavu"
+                  aria-label="Vrátit zpět"
+                  style={{
+                    ...buttonStyle(), padding: "11px 20px", fontSize: "14px", fontWeight: 700,
+                    background: "transparent", color: theme.text,
+                    border: `1.5px solid ${theme.inputBorder}`,
+                  }}>Vrátit zpět</button>
+              )}
+              <button onClick={onZavri}
+                title="Zavřít okno" aria-label="Zavřít"
+                style={{
+                  ...buttonStyle(), padding: "11px 22px", fontSize: "14px", fontWeight: 700,
+                  background: theme.accent, color: "#fff",
+                }}>Zavřít</button>
+            </div>
+          </div>
+        ) : odkladam ? (
+          /* ══ ODKLAD ══ Rychlé volby, kalendář až pod nimi. */
+          <div style={{ padding: "14px 16px" }}>
+            <div style={{
+              fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+              textTransform: "uppercase", color: theme.textSub, marginBottom: 8,
+            }}>Na kdy to posunout</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 11 }}>
+              {[{ t: "Zítra", d: 1 }, { t: "Za 3 dny", d: 3 },
+                { t: "Za týden", d: 7 }, { t: "Za 14 dní", d: 14 }].map(v => (
+                <button key={v.t} onClick={() => odloz(v.d)}
+                  title={`Posunout termín na ${v.t.toLowerCase()}`}
+                  aria-label={`Posunout na ${v.t.toLowerCase()}`}
+                  style={{
+                    ...buttonStyle(), flex: "1 1 110px", minHeight: 46,
+                    padding: "12px 14px", fontSize: "14px", fontWeight: 700,
+                    background: theme.accent, color: "#fff",
+                  }}>{v.t}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <label htmlFor="okno-datum" style={{ fontSize: "12px", color: theme.textSub }}>
+                nebo konkrétní datum
+              </label>
+              <input id="okno-datum" type="date" value={datum}
+                onChange={e => setDatum(e.target.value)}
+                style={{ ...inputStyle(theme), width: "auto", flex: "1 1 150px" }} />
+              <button disabled={!datum}
+                onClick={() => {
+                  onUpdate?.(task.id, { dueDate: datum });
+                  setOdkladam(false);
+                  setHotovo({ text: `Termín posunutý na ${formatDate(datum)}.`, zpet: false });
+                }}
+                style={{
+                  ...buttonStyle(), padding: "10px 18px", fontSize: "14px", fontWeight: 700,
+                  background: datum ? theme.accent : theme.inputBg,
+                  color: datum ? "#fff" : theme.textSub,
+                }}>Uložit</button>
+              <button onClick={() => setOdkladam(false)}
+                title="Zpět k úkolu" aria-label="Zpět k úkolu"
+                style={{
+                  ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 500,
+                  background: "transparent", color: theme.textSub,
+                  border: `1px solid ${theme.inputBorder}`,
+                }}>Zpět</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* ══ RYCHLÉ AKCE ══
+                Čtyři věci, které u úkolu děláš v devíti případech
+                z deseti. Velké, popsané, hned pod hlavičkou. */}
+            <div style={{
+              display: "flex", gap: 7, flexWrap: "wrap",
+              padding: "12px 16px",
+              borderBottom: `1px solid ${theme.cardBorder}`,
+            }}>
+              {velkeTlacitko("Splnit", "Odškrtne úkol jako hotový", splnit, theme.green, true)}
+              {velkeTlacitko("Odložit", "Posune termín — zítra, za týden nebo konkrétní datum",
+                () => setOdkladam(true), theme.accent, false)}
+              {!task.dueDate && velkeTlacitko("Dnes", "Dá úkolu dnešní termín",
+                () => { onUpdate?.(task.id, { dueDate: dnesISO() });
+                        setHotovo({ text: "Termín na dnešek.", zpet: false }); },
+                theme.accent, false)}
+              {/* Smazat sem schválně NEPATŘÍ. Rychlá akce je ta,
+                  kterou člověk udělá bez přemýšlení — smazání
+                  přemýšlení vyžaduje. Zůstává dole v podrobnostech,
+                  ale vede přes stejné potvrzení s vrácením. */}
+            </div>
+
+            {/* ══ PODROBNOSTI ══
+                Tohle je skutečný detail úkolu, ne řádek seznamu.
+                Poznámka, odškrtávátka, komentáře, přílohy. */}
+            <div style={{ padding: "4px 10px 10px" }}>
+              <TaskDetail
+                task={task}
+                currentUser={currentUser}
+                users={users}
+                theme={theme}
+                comments={comments}
+                onUpdate={onUpdate}
+                onStatusChange={onStatusChange}
+                onDelete={smazat}
+                onRestore={onRestore}
+                onPermanentDelete={onPermanentDelete}
+                onReject={onReject}
+                onResubmit={onResubmit}
+                onArchive={onArchive}
+                onUnarchive={onUnarchive}
+                onAddComment={onAddComment}
+                onToggleReaction={onToggleReaction}
+                onMarkCommentsSeen={onMarkCommentsSeen}
+                onConvertTaskToNote={onConvertTaskToNote}
+                onClose={onZavri} />
+            </div>
+
+            {/* Cesta do seznamu zůstává, ale uvnitř okna a čitelně.
+                Venku na ztmaveném pozadí z ní byl duch. */}
+            <div style={{
+              padding: "10px 16px 14px",
+              borderTop: `1px solid ${theme.cardBorder}`,
+            }}>
+              <button onClick={onUkazVSeznamu}
+                title="Ukázat tenhle úkol v seznamu mezi ostatními"
+                aria-label="Ukázat v seznamu úkolů"
+                style={{
+                  ...buttonStyle(), padding: "7px 13px", fontSize: "12px", fontWeight: 500,
+                  background: "transparent", color: theme.textSub,
+                  border: `1px solid ${theme.cardBorder}`,
+                }}>Ukázat v seznamu</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -29444,88 +29743,36 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onSmaz={(id) => deleteTask(id)} />
         )}
 
-        {/* ══ JEDEN ÚKOL PŘES CELOU OBRAZOVKU ═══════════════════
-            Otevře se nad tím, kde jsi. Pod ním zůstane Dnes
+        {/* JEDEN ÚKOL PŘES CELOU OBRAZOVKU
+            Okno nad tím, kde zrovna jsi. Pod ním zůstane Dnes
             nedotčený a zavřením se vrátíš přesně tam. */}
         {ukolNaCeleObrazovce && (() => {
           const u = tasks.find(t => String(t.id) === String(ukolNaCeleObrazovce));
           if (!u) return null;
           return (
-            <div onClick={() => setUkolNaCeleObrazovce(null)} style={{
-              position: "fixed", inset: 0, zIndex: 1000,
-              background: "rgba(0,0,0,0.45)", display: "flex",
-              alignItems: "flex-start", justifyContent: "center",
-              padding: "16px 12px", overflowY: "auto",
-            }}>
-              <div onClick={e => e.stopPropagation()} role="dialog"
-                aria-label={`Úkol ${u.title}`} style={{
-                  width: "100%", maxWidth: "620px", marginTop: "3vh",
-                }}>
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  marginBottom: 9, padding: "0 2px",
-                }}>
-                  <span style={{
-                    flex: 1, minWidth: 0, fontSize: "10px", fontWeight: 700,
-                    letterSpacing: "0.1em", textTransform: "uppercase", color: "#fff",
-                    opacity: 0.85,
-                  }}>Úkol</span>
-                  <button onClick={() => setUkolNaCeleObrazovce(null)}
-                    title="Zavřít — vrátíš se tam, odkud jsi přišel"
-                    aria-label="Zavřít úkol"
-                    style={{
-                      ...buttonStyle(), width: 34, height: 34, padding: 0,
-                      fontSize: 20, background: "rgba(255,255,255,0.18)",
-                      color: "#fff", border: "none",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>×</button>
-                </div>
-                <TaskCard
-                  task={u}
-                  otevriRovnou
-                  isHighlighted
-                  currentUser={currentUser}
-                  users={users}
-                  onStatusChange={(id, action) => {
-                    changeStatus(id, action);
-                    // Po odškrtnutí nebo smazání nemá okno co ukazovat.
-                    if (action === "done" || action === "delete") setUkolNaCeleObrazovce(null);
-                  }}
-                  onMarkSeen={markSeen}
-                  onUpdate={updateTask}
-                  onDelete={(id) => { deleteTask(id); setUkolNaCeleObrazovce(null); }}
-                  onRestore={restoreTask}
-                  onPermanentDelete={permanentlyDeleteTask}
-                  onReject={rejectTask}
-                  onResubmit={resubmitTask}
-                  onArchive={archiveTask}
-                  onUnarchive={unarchiveTask}
-                  onUnreject={unrejectTask}
-                  onBlockUser={blockUser}
-                  theme={theme}
-                  comments={comments.filter(c => c.taskId === u.id)}
-                  onAddComment={addComment}
-                  onConvertTaskToNote={convertTaskToNote}
-                  onToggleReaction={toggleReaction}
-                  onMarkCommentsSeen={markCommentsSeen}
-                  customLists={customLists}
-                  onStartFocus={(taskId) => {
-                    setUkolNaCeleObrazovce(null);
-                    setFocusInitialTask(taskId);
-                    setShowFocus(true);
-                  }} />
-                {/* Cesta do seznamu zůstává — jen už není povinná. */}
-                <button
-                  onClick={() => { setUkolNaCeleObrazovce(null); skocNaUkol(u.id, false); }}
-                  title="Ukázat tenhle úkol v seznamu mezi ostatními"
-                  aria-label="Ukázat v seznamu úkolů"
-                  style={{
-                    ...buttonStyle(), marginTop: 10, padding: "7px 13px",
-                    fontSize: 12, fontWeight: 500,
-                    background: "rgba(255,255,255,0.18)", color: "#fff", border: "none",
-                  }}>Ukázat v seznamu</button>
-              </div>
-            </div>
+            <UkolOkno
+              task={u}
+              currentUser={currentUser}
+              users={users}
+              theme={theme}
+              comments={comments.filter(c => c.taskId === u.id)}
+              onZavri={() => setUkolNaCeleObrazovce(null)}
+              onUkazVSeznamu={() => { setUkolNaCeleObrazovce(null); skocNaUkol(u.id, false); }}
+              onVratZpet={performUndo}
+              onStatusChange={changeStatus}
+              onMarkSeen={markSeen}
+              onUpdate={updateTask}
+              onDelete={deleteTask}
+              onRestore={restoreTask}
+              onPermanentDelete={permanentlyDeleteTask}
+              onReject={rejectTask}
+              onResubmit={resubmitTask}
+              onArchive={archiveTask}
+              onUnarchive={unarchiveTask}
+              onAddComment={addComment}
+              onToggleReaction={toggleReaction}
+              onMarkCommentsSeen={markCommentsSeen}
+              onConvertTaskToNote={convertTaskToNote} />
           );
         })()}
 
