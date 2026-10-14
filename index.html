@@ -19,6 +19,21 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,700&display=swap" />
+    <!-- POZOR: aplikace smí používat JEN tyhle čtyři váhy.
+
+         Když se použije řez, který se nestahuje, prohlížeč ho
+         nahradí nejbližším vyšším. Do 14. 10. 2026 kód používal
+         600, 800 a 900 na 248 místech — a všechny se kreslily
+         jako 700. Celá hierarchie písma se slila do jedné váhy:
+         nadpis sekce byl fyzicky stejně tučný jako hlavní
+         tlačítko a obrazovka vypadala, že křičí celá.
+
+         Zkoušky to nechytily, protože jsdom žádné písmo nemá
+         a měří deklarace, ne výsledek. Hlídá to teď kontrola
+         v test18, která porovná použité váhy proti tomuhle
+         řádku. Když sem přidáš další řez, uprav i ji.
+
+         Stupnice aplikace: 400 tělo · 500 obsah · 700 to hlavní. -->
 
     <style>
       html, body { margin: 0; padding: 0; background: #0c1017; }
