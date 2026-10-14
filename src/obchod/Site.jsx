@@ -15,6 +15,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   hledejLidi, nactiLidi, nactiKarty, ulozKartu, smazKartu, zalozOsobu, ulozOsobu,
   nactiCiselniky, nactiOsobu, popis, aktivni,
+  nactiSoukromou, ulozSoukromou,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label,
@@ -392,11 +393,22 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
   const [f, setF] = useState(() => predvypln(osoba, predvyplnenoJmeno));
   const [chyba, setChyba] = useState(null);
   const [uklada, setUklada] = useState(false);
+  /* Soukromá poznámka se drží zvlášť, protože je i v databázi
+     zvlášť — vlastní tabulka s vlastním zámkem. */
+  const [soukroma, setSoukroma] = useState("");
   const ref = useRef(null);
 
   useEffect(() => {
     if (autoFocus) setTimeout(() => ref.current?.focus(), 60);
   }, [autoFocus]);
+
+  useEffect(() => {
+    let zrus = false;
+    const id = plna?.id || osoba?.id;
+    if (!id) { setSoukroma(""); return; }
+    nactiSoukromou(owner, id).then(t => { if (!zrus) setSoukroma(t); });
+    return () => { zrus = true; };
+  }, [owner, plna, osoba]);
 
   const uprav = (k, v) => { setF(p => ({ ...p, [k]: v })); setChyba(null); };
   const prepniRoli = (k) => setF(p => ({
@@ -409,8 +421,12 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
   const uloz = async () => {
     setUklada(true); setChyba(null);
     const res = novy ? await zalozOsobu(owner, f) : await ulozOsobu(plna?.id || osoba.id, f);
+    if (!res.ok) { setUklada(false); setChyba(res.chyba); return; }
+    /* Soukromá poznámka se ukládá až po osobě — u nového člověka
+       se její id dozvíme teprve z odpovědi. */
+    const id = res.osoba?.id || plna?.id || osoba?.id;
+    if (id) await ulozSoukromou(owner, id, soukroma);
     setUklada(false);
-    if (!res.ok) { setChyba(res.chyba); return; }
     onHotovo?.(res.osoba);
   };
 
@@ -520,10 +536,42 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
         </div>
       </div>
 
+      {/* ══ DVĚ POZNÁMKY, SCHVÁLNĚ ODDĚLENÉ ═══════════════════
+          Tohle je jediné místo v aplikaci, kde se dá omylem napsat
+          něco, co si přečte někdo jiný.
+
+          Poznámka u člověka je v tabulce map_people a tu vidí
+          každý, komu jsi sdílel zakázku, na které ten člověk visí.
+          Nešlo to vyřešit sloupcem „soukromá poznámka" vedle —
+          pravidla v databázi chrání řádky, ne sloupce, takže by
+          se sdílela úplně stejně, jen by to tak nevypadalo.
+
+          Proto má soukromá poznámka vlastní tabulku s vlastním
+          zámkem a obě pole mají nad sebou napsané, kdo je uvidí.
+          Barva to neřeší sama — stojí tam to slovy. */}
       <div style={{ marginBottom: 8 }}>
         <span style={label(theme)}>Poznámka</span>
         <input value={f.note} onChange={e => uprav("note", e.target.value)}
-          onKeyDown={naEnter} placeholder="Co je o něm dobré vědět" style={input(theme)} />
+          onKeyDown={naEnter} placeholder="Co je o něm dobré vědět"
+          title="Tuhle poznámku uvidí i spolupracovník, kterému sdílíš zakázku s tímhle člověkem."
+          aria-label="Poznámka — uvidí ji i spolupracovník"
+          style={input(theme)} />
+        <div style={{ fontSize: "10.5px", fontWeight: 400, color: theme.textSub, marginTop: 3 }}>
+          Uvidí ji i spolupracovník, kterému sdílíš zakázku s tímhle člověkem.
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Jen pro mě</span>
+        <input value={soukroma} onChange={e => setSoukroma(e.target.value)}
+          onKeyDown={naEnter}
+          placeholder="Co si o něm myslím, co nikomu neříkat"
+          title="Tohle nepřečte nikdo. Ani spolupracovník, ani správce."
+          aria-label="Soukromá poznámka — nepřečte ji nikdo jiný"
+          style={{ ...input(theme), borderStyle: "dashed" }} />
+        <div style={{ fontSize: "10.5px", fontWeight: 400, color: theme.textSub, marginTop: 3 }}>
+          Nepřečte to nikdo. Ani spolupracovník, ani správce.
+        </div>
       </div>
 
       {chyba && (

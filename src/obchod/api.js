@@ -726,6 +726,82 @@ export async function nactiOsobu(id) {
 // Profilové role: čím je člověk obecně. Role v konkrétní zakázce
 // jsou jinde — Radek je obecně investor i developer, ale v jedné
 // zakázce je právě jedním z nich.
+/* ── Soukromá poznámka ────────────────────────────────────
+   Leží ve vlastní tabulce, ne jako sloupec u člověka. Důvod je
+   v databázi: pravidla v Postgresu chrání ŘÁDKY, ne sloupce.
+   Kdyby to byl sloupec na map_people, viděl by ho každý, kdo vidí
+   toho člověka — tedy i ten, komu jsi sdílel zakázku. Vypadalo by
+   to soukromě a nebylo by. */
+
+export async function nactiSoukromou(owner, personId) {
+  if (!owner || !personId) return "";
+  try {
+    const { data, error } = await supabase
+      .from("map_people_soukrome")
+      .select("note")
+      .eq("owner", owner)
+      .eq("person_id", personId)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.note || "";
+  } catch (e) {
+    // Dokud neproběhne SQL, tabulka neexistuje. Prázdná poznámka
+    // je lepší než rozbitá obrazovka člověka.
+    return "";
+  }
+}
+
+export async function ulozSoukromou(owner, personId, note) {
+  if (!owner || !personId) return { ok: false, chyba: "Chybí člověk." };
+  const text = (note || "").trim();
+  try {
+    if (!text) {
+      const { error } = await supabase
+        .from("map_people_soukrome")
+        .delete().eq("owner", owner).eq("person_id", personId);
+      if (error) throw error;
+      return { ok: true };
+    }
+    const { error } = await supabase
+      .from("map_people_soukrome")
+      .upsert({ person_id: personId, owner, note: text, updated_at: new Date().toISOString() },
+              { onConflict: "person_id,owner" });
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    return selhalo("ulozSoukromou", e);
+  }
+}
+
+/* ── Stav lidí pro chytré seznamy ─────────────────────────
+   Má kartu? Má kontakt? Kdy jsme se naposled potkali? Kolikrát
+   byl osloven? Čtyři údaje, které by se jinak musely tahat ze
+   čtyř tabulek zvlášť. */
+export async function prehledStavuLidi() {
+  try {
+    const { data, error } = await supabase.rpc("lide_prehled_stav");
+    if (error) throw error;
+    const m = {};
+    for (const r of data || []) m[r.person_id] = r;
+    return m;
+  } catch (e) {
+    selhalo("prehledStavuLidi", e);
+    return {};
+  }
+}
+
+export async function neosloveni(projectId) {
+  if (!projectId) return [];
+  try {
+    const { data, error } = await supabase.rpc("lide_neosloveni", { p_project: projectId });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("lide_neosloveni", e);
+    return [];
+  }
+}
+
 export async function ulozRole(personId, role) {
   if (!personId) return { ok: false, chyba: "Chybí osoba." };
   try {
@@ -1843,6 +1919,232 @@ const SYNONYMA_TYPU = {
   rezidencni:       ["rezidencni", "rezidence", "bytovy projekt"],
   pozemek:          ["pozemek", "pozemky", "parcela", "parcely"],
 };
+
+/* ── Import kontaktů ──────────────────────────────────────
+   Michal má kontakty v telefonu a v tabulkách; most tam nevede
+   a bez lidí nemá polovina obchodního modulu co dělat.
+
+   Umí dva tvary, protože víc jich není potřeba:
+     vCard (.vcf) — co vyexportuje každý telefon
+     CSV / TSV    — co vyexportuje každá tabulka
+
+   Rozbor je čistá funkce bez databáze: vrátí seznam lidí a ty se
+   před uložením ukážou. Nic se nenahrává naslepo. */
+
+function vcardOdradkuj(text) {
+  /* vCard láme dlouhé řádky a pokračování značí mezerou nebo
+     tabulátorem na začátku. Bez slepení by se dlouhý e-mail
+     rozpadl na dva kusy. */
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\n[ \t]/g, "");
+}
+
+function vcardHodnota(radek) {
+  const i = radek.indexOf(":");
+  if (i < 0) return "";
+  let v = radek.slice(i + 1).trim();
+  // Některé telefony kódují diakritiku quoted-printable.
+  if (/ENCODING=QUOTED-PRINTABLE/i.test(radek)) {
+    try {
+      v = decodeURIComponent(v.replace(/=([0-9A-F]{2})/gi, "%$1"));
+    } catch (e) { /* nechat jak je, radši divný text než spadlý import */ }
+  }
+  return v;
+}
+
+export function rozeberVCard(text) {
+  const radky = vcardOdradkuj(text).split("\n");
+  const ven = [];
+  let akt = null;
+  for (const r of radky) {
+    const R = r.trim();
+    if (/^BEGIN:VCARD/i.test(R)) { akt = { name: "", tel: [], mail: [], org: "", note: "" }; continue; }
+    if (/^END:VCARD/i.test(R)) {
+      if (akt && akt.name) ven.push(akt);
+      akt = null; continue;
+    }
+    if (!akt) continue;
+    const klic = R.split(/[;:]/)[0].toUpperCase();
+    const v = vcardHodnota(R);
+    if (!v) continue;
+    if (klic === "FN") akt.name = v;
+    // N je příjmení;jméno;… — bere se jen když FN chybí.
+    else if (klic === "N" && !akt.name) {
+      const [prijmeni, jmeno] = v.split(";");
+      akt.name = [jmeno, prijmeni].filter(Boolean).join(" ").trim();
+    }
+    else if (klic === "TEL") akt.tel.push(v.replace(/[^\d+]/g, ""));
+    else if (klic === "EMAIL") akt.mail.push(v);
+    else if (klic === "ORG") akt.org = v.replace(/;+$/, "");
+    else if (klic === "NOTE") akt.note = v;
+  }
+  return ven.map(x => ({
+    name: x.name.trim(),
+    contact: [...new Set([...x.tel, ...x.mail])].filter(Boolean).join(", "),
+    note: [x.org, x.note].filter(Boolean).join(" · "),
+  })).filter(x => x.name);
+}
+
+/* CSV i TSV. Oddělovač se pozná z prvního řádku — kdo exportuje
+   z českého Excelu, dostane středníky, kdo odjinud čárky. */
+function csvRozdel(radek, odd) {
+  const ven = []; let akt = ""; let vUvozovkach = false;
+  for (let i = 0; i < radek.length; i++) {
+    const z = radek[i];
+    if (z === '"') {
+      if (vUvozovkach && radek[i + 1] === '"') { akt += '"'; i++; }
+      else vUvozovkach = !vUvozovkach;
+    } else if (z === odd && !vUvozovkach) { ven.push(akt); akt = ""; }
+    else akt += z;
+  }
+  ven.push(akt);
+  return ven.map(x => x.trim());
+}
+
+export function rozeberCSV(text) {
+  const radky = String(text || "").replace(/\r\n/g, "\n").split("\n").filter(r => r.trim());
+  if (radky.length < 2) return [];
+  const odd = [";", "\t", ","]
+    .map(o => ({ o, n: csvRozdel(radky[0], o).length }))
+    .sort((a, b) => b.n - a.n)[0].o;
+
+  const bez = (x) => x.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  const hlavicka = csvRozdel(radky[0], odd).map(bez);
+
+  /* Jak se sloupce jmenují v praxi. Google, Outlook i ručně
+     psaná tabulka — každý si to pojmenuje po svém. */
+  const najdi = (varianty) => hlavicka.findIndex(h => varianty.some(v => h.includes(v)));
+  const iJmeno  = najdi(["jmeno a prijmeni", "cele jmeno", "jmeno", "name", "nazev", "kontakt"]);
+  const iPrijmeni = najdi(["prijmeni", "last name", "surname"]);
+  const iTel    = najdi(["telefon", "mobil", "phone", "tel", "cislo"]);
+  const iMail   = najdi(["mail", "e-mail"]);
+  const iPozn   = najdi(["poznamka", "note", "popis", "firma", "organizace", "company"]);
+  if (iJmeno < 0) return [];
+
+  const ven = [];
+  for (const r of radky.slice(1)) {
+    const c = csvRozdel(r, odd);
+    const jmeno = [c[iJmeno], iPrijmeni >= 0 ? c[iPrijmeni] : ""].filter(Boolean).join(" ").trim();
+    if (!jmeno) continue;
+    ven.push({
+      name: jmeno,
+      contact: [iTel >= 0 ? (c[iTel] || "").replace(/[^\d+]/g, "") : "",
+                iMail >= 0 ? c[iMail] : ""].filter(Boolean).join(", "),
+      note: iPozn >= 0 ? (c[iPozn] || "") : "",
+    });
+  }
+  return ven;
+}
+
+export function rozeberKontakty(text, nazevSouboru = "") {
+  const t = String(text || "");
+  if (/BEGIN:VCARD/i.test(t) || /\.vcf$/i.test(nazevSouboru)) return rozeberVCard(t);
+  return rozeberCSV(t);
+}
+
+/* Duplicita: stejné jméno, nebo stejné telefonní číslo. Jméno se
+   porovnává bez diakritiky a bez ohledu na velikost písmen, aby
+   „Ondřej Fer" a „ondrej fer" nebyli dva lidi. */
+export function oznacDuplicity(noviLide, stavajici) {
+  const bez = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/\s+/g, " ").trim();
+  const cisla = (x) => (String(x || "").match(/\+?\d[\d\s]{7,}\d/g) || [])
+    .map(c => c.replace(/[^\d]/g, "").slice(-9));
+  const jmena = new Set((stavajici || []).map(p => bez(p.name)));
+  const tel = new Set((stavajici || []).flatMap(p => cisla(p.contact)));
+  return (noviLide || []).map(x => ({
+    ...x,
+    duplicita: jmena.has(bez(x.name)) || cisla(x.contact).some(c => tel.has(c)),
+  }));
+}
+
+export async function naimportujLidi(owner, lide) {
+  if (!owner || !lide?.length) return { ok: false, chyba: "Není co importovat.", pocet: 0 };
+  try {
+    const davka = lide.map(x => ({
+      owner,
+      name: (x.name || "").trim().slice(0, 200),
+      contact: (x.contact || "").trim().slice(0, 500) || null,
+      note: (x.note || "").trim().slice(0, 1000) || null,
+    })).filter(x => x.name);
+    if (!davka.length) return { ok: false, chyba: "Nikdo s vyplněným jménem.", pocet: 0 };
+    // Po stovkách — jeden velký insert umí spadnout na časový limit
+    // a pak se neví, kolik se jich uložilo.
+    let hotovo = 0;
+    for (let i = 0; i < davka.length; i += 100) {
+      const { error } = await supabase.from("map_people").insert(davka.slice(i, i + 100));
+      if (error) throw error;
+      hotovo += Math.min(100, davka.length - i);
+    }
+    return { ok: true, pocet: hotovo };
+  } catch (e) {
+    return { ...selhalo("naimportujLidi", e), pocet: 0 };
+  }
+}
+
+/* ── Rychlé zadání člověka ────────────────────────────────
+   Michal: zakázku hodíš jednou větou, člověka musíš proklikat
+   formulářem. Zadávání je ten skutečný brzdič, ne algoritmy.
+
+   Z řádku „Ondřej Fer, 603 123 456, investor, od Davida"
+   vytáhne, co umí, a zbytek nechá na tobě. Nic nehádá do
+   databáze — obrazovka ukáže, co pochopila, ještě než uložíš.
+
+   Pořadí v textu je libovolné. Telefon a mail se poznají podle
+   tvaru, role podle číselníku, „od koho" podle slova od. Co
+   zbyde, je jméno. */
+export function rozeberOsobu(text, ciselniky) {
+  const puvodni = (text || "").trim();
+  if (!puvodni) return { name: "" };
+  let zbytek = puvodni;
+  const out = { role: [] };
+
+  // Mail — nejjednoznačnější tvar, jde první.
+  const mMail = zbytek.match(/[\w.+-]+@[\w-]+\.[\w.]{2,}/);
+  if (mMail) { out.mail = mMail[0]; zbytek = zbytek.replace(mMail[0], " "); }
+
+  /* Telefon. Devět číslic je české číslo, s předvolbou dvanáct.
+     Kratší se nebere — „2026" nebo „50 mil" telefon není. */
+  const mTel = zbytek.match(/(\+?\d[\d\s/-]{7,15}\d)/);
+  if (mTel) {
+    const cisla = mTel[1].replace(/[^\d+]/g, "");
+    const delka = cisla.replace(/^\+/, "").length;
+    if (delka >= 9 && delka <= 15) {
+      out.telefon = cisla;
+      zbytek = zbytek.replace(mTel[1], " ");
+    }
+  }
+
+  // Od koho — stejné pravidlo jako u tipu.
+  const mOd = zbytek.match(new RegExp(
+    `\\bod\\s+(?:pana\\s+|pan\u00ed\\s+)?([${VELKA}][${MALA}]+)(?:\\s+([${VELKA}][${MALA}]+))?`, "u"));
+  if (mOd) {
+    out.odKoho = [mOd[1], mOd[2]].filter(Boolean).join(" ");
+    zbytek = zbytek.replace(mOd[0], " ");
+  }
+
+  /* Role podle číselníku. Hledá se celý popisek s hranicemi slova,
+     aby „investor" nenašlo uvnitř jiného slova. Rolí může být víc. */
+  const bezDiakritiky = (x) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  for (const r of (ciselniky?.role || []).filter(x => x.active)) {
+    const ln = bezDiakritiky(r.label);
+    if (ln.length < 3) continue;
+    const re = new RegExp(`(^|[^${MALA}${VELKA}])${ln.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")}`, "i");
+    const mm = bezDiakritiky(zbytek).match(re);
+    if (mm) {
+      out.role.push(r.key);
+      const i = mm.index + mm[1].length;
+      zbytek = zbytek.slice(0, i) + " " + zbytek.slice(i + ln.length);
+    }
+  }
+
+  // Co zbylo, je jméno. Čárky a středníky byly oddělovače.
+  out.name = zbytek.replace(/[,;]+/g, " ").replace(/\s+/g, " ").trim();
+
+  /* Kontakt je jedno volné pole — tam, kde je uložený, se nedělí
+     na telefon a mail. Skládá se zpátky v pořadí telefon, mail. */
+  out.contact = [out.telefon, out.mail].filter(Boolean).join(", ");
+  return out;
+}
 
 /* ── Rychlé zadání ───────────────────────────────────────
    Z věty "rodinný dům Beroun 3,5 mil" vytáhne, co umí, a zbytek
