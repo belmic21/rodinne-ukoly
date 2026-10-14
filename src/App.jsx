@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_0645";
+const FILE_VERSION = "261014_0700";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1467,11 +1467,22 @@ const cardStyle = (th) => ({
    proto obchod vypadal jinak než úkoly. Viz JAZYK.md, oddíl 4. */
 const inputStyle = (th) => polePlne(th);
 
+/* POZOR NA DĚDĚNÍ VÁHY.
+   Tenhle objekt se používá 339× a 212 tlačítek si váhu samo
+   nepřepisuje. A protože na Dnešku je každý řádek tlačítko,
+   dědil VŠECHEN text uvnitř váhu 600 — včetně druhotných řádků
+   („dnes · Ondřej Fer", „— nepřečtené úkoly"), které mají být
+   tiché. Výsledek: 81 % textu na hlavní obrazovce bylo tučných
+   a nemělo se co od čeho odlišit.
+
+   Proto je tady 500, ne 600. Tlačítko, které má být hlasité,
+   si váhu nastaví samo — takových je 127 a jsou to ta, kvůli
+   kterým na obrazovce jsi. */
 const buttonStyle = () => ({
   border: "none",
   borderRadius: "8px",
   fontFamily: FONT,
-  fontWeight: 600,
+  fontWeight: 500,
   cursor: "pointer",
 });
 
@@ -8787,7 +8798,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       {akce && (
         <button onClick={onKlik} title={popisAkce} aria-label={popisAkce}
           style={{
-            ...buttonStyle(), padding: "5px 11px", fontSize: "12px", fontWeight: 600,
+            ...buttonStyle(), padding: "5px 11px", fontSize: "12px", fontWeight: 400,
             background: "transparent", color: theme.text,
             border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
           }}>{akce}</button>
@@ -8809,7 +8820,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
         gap: 8, marginBottom: 6,
       }}>
         <span style={{
-          fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+          fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
           textTransform: "uppercase", color: theme.textSub,
         }}>{nadpis} <span style={{ color: theme.text }}>{polozky.length}</span></span>
         <span style={{ fontSize: "11px", color: theme.textSub }}>{podnadpis}</span>
@@ -8841,7 +8852,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                 </span>
               </span>
               <span style={{
-                flex: "0 0 auto", fontSize: "11px", fontWeight: 700,
+                flex: "0 0 auto", fontSize: "11px", fontWeight: 600,
                 color: dni >= barvaOd ? theme.red : theme.textSub,
               }}>{dniPopis(t)}</span>
             </button>
@@ -8857,7 +8868,9 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       {/* Hlavička — datum a jedna věta, ne další seznam. */}
       <div style={{ marginBottom: 10 }}>
         <div style={{
-          fontSize: "15px", fontWeight: 700, color: theme.text,
+          /* Datum bylo na 700 a soupeřilo s hlavní akcí. Je to
+             orientace („kde jsem"), ne obsah („co mám dělat"). */
+          fontSize: "15px", fontWeight: 500, color: theme.text,
           textTransform: "capitalize", letterSpacing: "-0.01em",
         }}>{datum}</div>
         {(sliby.length > 0 || cekam.length > 0) && (
@@ -8888,7 +8901,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           borderRadius: "12px", padding: "15px 16px", marginBottom: 14,
         }}>
           <div style={{
-            fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+            fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
             textTransform: "uppercase", color: theme.accent, marginBottom: 6,
           }}>Dnes máš jedinou věc</div>
           <div style={{ fontSize: "15px", fontWeight: 700, color: theme.text, lineHeight: 1.35 }}>
@@ -8923,12 +8936,12 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1px solid ${theme.accentBorder}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 700 }}>
+            <strong style={{ fontWeight: 600 }}>
               {nepochopeno} {nepochopeno === 1 ? "věc nemá jasno" : nepochopeno < 5 ? "věci nemají jasno" : "věcí nemá jasno"}
             </strong>
-            <span style={{ color: theme.textSub }}> — po termínu nebo bez termínu</span>
+            <span style={{ color: theme.textSub, fontWeight: 400 }}> — po termínu nebo bez termínu</span>
           </span>
-          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Protřídit</span>
+          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 500 }}>Protřídit</span>
         </button>
       )}
 
@@ -8954,13 +8967,13 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1.5px solid ${theme.accent}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 700 }}>Zavři den</strong>
-            <span style={{ color: theme.textSub }}>
+            <strong style={{ fontWeight: 600 }}>Zavři den</strong>
+            <span style={{ color: theme.textSub, fontWeight: 400 }}>
               {" "}— na dnešek {dnesekZbyva === 1 ? "zbývá" : "zbývají"} {dnesekZbyva}
               {dnesekZbyva === 1 ? " věc" : dnesekZbyva < 5 ? " věci" : " věcí"}
             </span>
           </span>
-          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Projít</span>
+          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 500 }}>Projít</span>
         </button>
       )}
 
@@ -8978,10 +8991,10 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1px solid ${theme.accentBorder}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 700 }}>Čeká na tebe {cekaNaMe}</strong>
-            <span style={{ color: theme.textSub }}> — nepřečtené úkoly a odpovědi</span>
+            <strong style={{ fontWeight: 600 }}>Čeká na tebe {cekaNaMe}</strong>
+            <span style={{ color: theme.textSub, fontWeight: 400 }}> — nepřečtené úkoly a odpovědi</span>
           </span>
-          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 600 }}>Otevřít</span>
+          <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 500 }}>Otevřít</span>
         </button>
       )}
 
@@ -8990,7 +9003,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       {ted.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <div style={{
-            fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+            fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
             textTransform: "uppercase", color: theme.accent, marginBottom: 7,
           }}>Teď</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -9053,7 +9066,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           {skupiny.map(s => (
             <div key={s.k} style={{ marginBottom: 11 }}>
               <div style={{
-                fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em",
+                fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
                 textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
               }}>{s.popis} · {s.polozky.length}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -9075,7 +9088,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                           {t.title}
                         </span>
                         {(t.osoba || t.osobaKontakt) && (
-                          <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                          <span style={{ display: "block", fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginTop: 2 }}>
                             {t.osoba}{t.osobaKontakt && !tel ? ` · ${t.osobaKontakt}` : ""}
                           </span>
                         )}
@@ -9194,7 +9207,7 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
           style={{
             ...buttonStyle(), width: "100%", display: "flex", alignItems: "center", gap: 11,
             padding: "9px 11px", borderRadius: "9px", textAlign: "left",
-            fontSize: "14px", fontWeight: zap ? 700 : 500,
+            fontSize: "14px", fontWeight: zap ? 600 : 400,
             background: zap ? theme.accent : "transparent",
             color: zap ? "#fff" : theme.text,
           }}>
@@ -9256,7 +9269,7 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
               title={r.napoveda} aria-label={r.napoveda}
               style={{
                 ...buttonStyle(), flex: 1, padding: "7px 4px", borderRadius: 7,
-                fontSize: "12px", fontWeight: zap ? 700 : 500,
+                fontSize: "12px", fontWeight: zap ? 600 : 400,
                 background: zap ? theme.card : "transparent",
                 color: zap ? theme.text : theme.textSub,
                 boxShadow: zap ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
@@ -9328,7 +9341,7 @@ function SpodniLista({ theme, cile, aktivniKlic }) {
                 }}>{c.pocet > 99 ? "99+" : c.pocet}</span>
               )}
             </span>
-            <span style={{ fontSize: "10px", fontWeight: zap ? 700 : 500 }}>{c.popis}</span>
+            <span style={{ fontSize: "10px", fontWeight: zap ? 700 : 400 }}>{c.popis}</span>
           </button>
         );
       })}
@@ -12182,7 +12195,10 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         {/* Task content */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontSize: "14px", fontWeight: 500,
+            /* Dřív 500, zatímco drobné odznaky kolem měly 700 —
+               obsah byl lehčí než štítky. Teď je název nejtěžší
+               věc na kartě a odznaky jsou na 500. */
+            fontSize: "14px", fontWeight: 600,
             color: taskIsDone ? theme.textSub : theme.text,
             textDecoration: taskIsDone ? "line-through" : "none",
             opacity: taskIsDone ? 0.7 : 1,
@@ -12224,7 +12240,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                       onClick={(e) => { e.stopPropagation(); onFiltrujZakazku?.(kod, task.projectId); }}
                       title={`Zobrazit jen úkoly k ${kod}`}
                       style={{
-                        fontSize: "10px", fontWeight: 700, letterSpacing: "0.02em",
+                        fontSize: "10px", fontWeight: 500, letterSpacing: "0.02em",
                         color: theme.purple, border: `1px solid ${theme.purple}44`,
                         borderRadius: 5, padding: "1px 5px", marginRight: 6,
                         whiteSpace: "nowrap", verticalAlign: "middle", cursor: "pointer",
@@ -12271,7 +12287,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                   }
                 }}
                 style={{
-                  fontSize: "10px", fontWeight: 700,
+                  fontSize: "10px", fontWeight: 500,
                   color: theme.accent,
                   background: theme.accentSoft,
                   padding: "2px 8px", borderRadius: "10px",
@@ -12290,7 +12306,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                 e.stopPropagation();
                 onMarkSeen(task.id);
               }} title="Označit jako přečteno — úkol se zařadí do své kategorie" aria-label="Označit jako přečteno — úkol se zařadí do své kategorie" style={{
-                fontSize: "10px", fontWeight: 700,
+                fontSize: "10px", fontWeight: 500,
                 color: theme.green,
                 background: `${theme.green}15`,
                 padding: "2px 8px", borderRadius: "10px",
@@ -12322,7 +12338,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
 
               return (
                 <span title="Kdo úkol odmítl" style={{
-                  fontSize: "10px", fontWeight: 700,
+                  fontSize: "10px", fontWeight: 500,
                   color,
                   background: `${color}15`,
                   padding: "1px 6px", borderRadius: "10px",
@@ -12348,7 +12364,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               if (!list) return null;
               return (
                 <span title={list.name} style={{
-                  fontSize: "10px", fontWeight: 700,
+                  fontSize: "10px", fontWeight: 500,
                   color: list.color,
                   padding: "1px 6px", borderRadius: "8px",
                   background: `${list.color}15`,
@@ -12387,7 +12403,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               <span title={unseenItemNotes > 0
                 ? `${unseenItemNotes} nepřečtených z ${totalItemNotes} poznámek k položkám`
                 : `${totalItemNotes} poznámek k položkám`} style={{
-                fontSize: "10px", fontWeight: 700,
+                fontSize: "10px", fontWeight: 500,
                 color: unseenItemNotes > 0 ? "#fff" : theme.purple,
                 padding: "1px 6px", borderRadius: "8px",
                 background: unseenItemNotes > 0 ? theme.purple : `${theme.purple}15`,
@@ -12404,7 +12420,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               if (!def) return null;
               return (
                 <span key={tagId} title={def.label} style={{
-                  fontSize: "10px", fontWeight: 600, color: theme.textSub,
+                  fontSize: "10px", fontWeight: 500, color: theme.textSub,
                   padding: "1px 6px", borderRadius: "8px",
                   background: theme.inputBg,
                   border: `1px solid ${theme.cardBorder}`,
@@ -12448,7 +12464,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               </span>
             )}
             {task.showFrom && daysDiff(task.showFrom) > 0 && (
-              <span style={{ fontSize: "10px", fontWeight: 600, color: theme.purple }}>
+              <span style={{ fontSize: "10px", fontWeight: 500, color: theme.purple }}>
                 ⏰ od {formatDate(task.showFrom)}
               </span>
             )}
@@ -12464,7 +12480,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               const c = colors[intensity];
               return (
                 <span style={{
-                  fontSize: "10px", fontWeight: 700, color: c.fg,
+                  fontSize: "10px", fontWeight: 500, color: c.fg,
                   background: c.bg,
                   padding: "1px 6px", borderRadius: "4px",
                   border: intensity >= 2 ? `1px solid ${c.fg}40` : "none",
@@ -12481,7 +12497,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               const kricet = daysOverdue > 7;
               return (
                 <span style={{
-                  fontSize: "10px", fontWeight: 600,
+                  fontSize: "10px", fontWeight: 500,
                   color: overdue ? barvaZpozdeni : soon ? theme.yellow : theme.textMid,
                   display: "inline-flex", alignItems: "center", gap: 6,
                 }}>
@@ -12489,7 +12505,11 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                   {overdue && (
                     <span style={{
                       fontSize: "10px",
-                      fontWeight: 700,
+                      /* Plnou váhu až když to opravdu hoří (nad týden
+                         po termínu). Do té doby byl tenhle odznak
+                         těžší než samotný název úkolu — tedy štítek
+                         křičel víc než obsah. */
+                      fontWeight: kricet ? 700 : 500,
                       color: kricet ? "white" : barvaZpozdeni,
                       background: kricet ? theme.red : "transparent",
                       padding: kricet ? "1px 6px" : 0,
@@ -12546,7 +12566,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {/* Progress indicator — this card shows a completed checklist item */}
             {progressItem && (
               <span style={{
-                fontSize: "10px", fontWeight: 700,
+                fontSize: "10px", fontWeight: 500,
                 color: theme.accent,
                 background: theme.accentSoft,
                 padding: "2px 8px", borderRadius: "10px",
