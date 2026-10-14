@@ -324,12 +324,118 @@ export function Geneze({ theme, owner, ciselniky, zakazka, onOtevriOsobu, spravc
         </Tise>
       )}
 
+      {!busy && radky.length > 0 && (
+        <Zebricek theme={theme} ciselniky={ciselniky} radky={radky}
+          onOtevriOsobu={onOtevriOsobu} />
+      )}
+
       {serazene.map(r => (
         <OsloveniRadek key={r.id} r={r} theme={theme} owner={owner}
           ciselniky={ciselniky} onZmena={nacti} onOtevriOsobu={onOtevriOsobu}
           moje={smimMenit(r, owner, spravce)} />
       ))}
     </Sekce>
+  );
+}
+
+/* ── Žebříček ───────────────────────────────────────────
+   Seznam oslovení odpoví na „co je s Ferem". Neodpoví na otázku,
+   která tě zajímá víc: KDE JSEM S KÝM. Při deseti oslovených se
+   to ze seznamu nedá přečíst, protože každý řádek čteš zvlášť.
+
+   Tady je osm příček vedle sebe a pod každou lidé, kteří na ní
+   stojí. Jedním pohledem je vidět, jestli je zakázka rozjetá
+   (hodně lidí vysoko) nebo se dusí (všichni na „osloveno").
+
+   Příčky jsou z číselníku stav_osloveni podle sort_order — když
+   si pořadí přerovnáš ve Správě číselníků, žebříček se přerovná
+   taky. Odmítnutí a bez odezvy mezi příčky nepatří: nejsou to
+   stupně cesty, ale její konec. Stojí stranou a tiše. */
+function Zebricek({ theme, ciselniky, radky, onOtevriOsobu }) {
+  const pricky = useMemo(
+    () => aktivni(ciselniky, "stav_osloveni")
+      .filter(s => !KONEC.includes(s.key))
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)),
+    [ciselniky]);
+
+  const naPricce = useMemo(() => {
+    const m = {};
+    for (const r of radky) {
+      if (KONEC.includes(r.stav)) continue;
+      (m[r.stav] = m[r.stav] || []).push(r);
+    }
+    return m;
+  }, [radky]);
+
+  const mimo = radky.filter(r => KONEC.includes(r.stav));
+  if (radky.length === 0 || pricky.length === 0) return null;
+
+  // Nejvyšší obsazená příčka — podle ní se obarví cesta pod ní.
+  const nejvyssi = pricky.reduce(
+    (max, s, i) => (naPricce[s.key]?.length ? i : max), -1);
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{
+        display: "flex", gap: 3, alignItems: "stretch",
+        overflowX: "auto", paddingBottom: 4,
+      }}>
+        {pricky.map((s, i) => {
+          const lide = naPricce[s.key] || [];
+          const dosazeno = i <= nejvyssi;
+          return (
+            <div key={s.key} style={{
+              flex: "1 1 0", minWidth: 74,
+              display: "flex", flexDirection: "column", gap: 4,
+            }}>
+              {/* Proužek nad příčkou: dokud jsi se nikdo nedostal
+                  dál, je bledý. Tím je vidět, kam zakázka došla,
+                  i když na konkrétní příčce zrovna nikdo nestojí. */}
+              <div style={{
+                height: 4, borderRadius: 2,
+                background: lide.length ? theme.accent
+                  : dosazeno ? theme.accentBorder : theme.cardBorder,
+              }} />
+              <div style={{
+                fontSize: 9.5, fontWeight: lide.length ? 600 : 400,
+                color: lide.length ? theme.text : theme.textSub,
+                lineHeight: 1.25, minHeight: 24,
+              }}>{s.label}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {lide.map(r => (
+                  <button key={r.id}
+                    onClick={() => onOtevriOsobu?.(r.person_id)}
+                    title={`${r.osoba?.name || "bez jména"} — ${s.label}. Otevřít člověka.`}
+                    aria-label={`${r.osoba?.name || "bez jména"}, ${s.label}`}
+                    style={{
+                      ...btn(), textAlign: "left", padding: "4px 6px",
+                      fontSize: 10.5, fontWeight: 500, lineHeight: 1.2,
+                      background: theme.accentSoft, color: theme.text,
+                      border: `1px solid ${theme.accentBorder}`,
+                      borderRadius: 6, overflow: "hidden",
+                      textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>{r.osoba?.name || "—"}</button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {mimo.length > 0 && (
+        <div style={{
+          fontSize: 11, color: theme.textSub, marginTop: 6,
+          display: "flex", flexWrap: "wrap", gap: 5, alignItems: "baseline",
+        }}>
+          <span>Mimo hru:</span>
+          {mimo.map(r => (
+            <span key={r.id} style={{ textDecoration: "line-through" }}>
+              {r.osoba?.name || "—"}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

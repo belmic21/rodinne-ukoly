@@ -15,7 +15,7 @@ import {
   nactiCiselniky, nactiPanel, nactiZakazky, nactiZakazku, zalozZakazku,
   upravZakazku, smazZakazku, popis, aktivni, rozeberVetu, jsemSpravce,
   kolikZakazek, prirustekZakazek, prehledPrilepenych, hledejVObsahu, nactiZakazku as nactiCelou,
-  prehledFazi, probudSpici, prerazitKod, nazevSlozky, hledejObce,
+  prehledFazi, probudSpici, prerazitKod, nazevSlozky, hledejObce, prehledOkresu,
 } from "./api.js";
 import {
   FONT, card, input, btn, btnMain, btnGhost, label,
@@ -25,6 +25,9 @@ import {
 import Site from "./Site.jsx";
 import { Retezec, Geneze } from "./Zakazka.jsx";
 import { SdileniZakazky, SdilenoSeMnou, Uzivatele } from "./Sdileni.jsx";
+/* Hranice okresů. Vygenerovaný soubor, 67 kB — hotové cesty pro
+   SVG, aby komponenta za běhu nic nepočítala. */
+import { OKRESY, MAPA_SIRKA, MAPA_VYSKA } from "./okresy.js";
 import Ciselniky from "./Ciselniky.jsx";
 import Osoba from "./Osoba.jsx";
 import { TerminySekce, TerminyPrehled } from "./Terminy.jsx";
@@ -78,6 +81,10 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   const [otevrena, setOtevrena] = useState(null);
   const [nova, setNova] = useState(null);
   const [vicFiltru, setVicFiltru] = useState(false);
+  /* Mapa je schválně vypnutá. Zabírá půl obrazovky a odpovídá na
+     otázku, kterou si člověk klade jednou za čas („kde mám
+     pokrytí“), ne při každém otevření seznamu. */
+  const [mapa, setMapa] = useState(false);
   const [statistika, setStatistika] = useState(false);
   const [faze, setFaze] = useState([]);
   const [prilepene, setPrilepene] = useState({});   // počty u řádků seznamu
@@ -351,6 +358,16 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       borderColor: vicFiltru || filtrAktivni ? theme.accentBorder : theme.cardBorder,
                       whiteSpace: "nowrap",
                     }}>filtry</button>
+                    <button onClick={() => setMapa(v => !v)}
+                      title="Mapa okresů — kde máš zakázky podle stávajícího filtru"
+                      aria-label="Mapa okresů"
+                      style={{
+                        ...btnGhost(theme),
+                        background: mapa || (filtr.okresy || []).length ? theme.accentSoft : "transparent",
+                        color: mapa || (filtr.okresy || []).length ? theme.accent : theme.textSub,
+                        borderColor: mapa || (filtr.okresy || []).length ? theme.accentBorder : theme.cardBorder,
+                        whiteSpace: "nowrap",
+                      }}>mapa</button>
                     <button onClick={() => setStatistika(v => !v)} title="Kolik zakázek v čase" aria-label="Kolik zakázek v čase"
                       style={{
                         ...btnGhost(theme),
@@ -394,6 +411,11 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       navíc je důvod ho nezapsat. */}
                   <RychlyTip theme={theme} owner={owner} ciselniky={ciselniky}
                     onZalozeno={() => setObnov(k => k + 1)} />
+
+                  {mapa && (
+                    <MapaZakazek theme={theme} owner={owner} ciselniky={ciselniky}
+                      filtr={filtr} zmen={zmenFiltr} />
+                  )}
 
                   {statistika && <Statistika theme={theme} owner={owner} />}
 
@@ -789,6 +811,156 @@ function Select({ theme, nadpis, hodnota, polozky, onZmena, skupiny = false,
             ))
           : polozky.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
       </select>
+    </div>
+  );
+}
+
+/* ── Mapa zakázek ───────────────────────────────────────
+   Michal: „Nedávalo by smysl zobrazit mapu, ve které by byly
+   projekty viditelné a mohl jsem si kliknout na detail?"
+
+   Kreslí se vlastním SVG z hranic okresů, ne mapovou knihovnou:
+   žádné dlaždice z internetu, žádná další závislost, 67 kB
+   předpočítaných cest. Funguje i offline a stejně na mobilu.
+
+   Co mapa ukazuje: kolik zakázek je ve kterém okrese PODLE
+   STÁVAJÍCÍHO FILTRU. Takže když si nahoře zapneš Tip a typ
+   Zdravotnictví, mapa odpoví na „kde mám tipy na zdravotnictví".
+   Není to druhý pohled na data, je to tentýž pohled z výšky.
+
+   Klik na okres ho přidá do filtru, druhý klik odebere. Tím se
+   mapa a seznam drží spolu — nemůže nastat, že mapa ukazuje
+   jedno a seznam pod ní druhé. */
+function MapaZakazek({ theme, owner, ciselniky, filtr, zmen }) {
+  const [pocty, setPocty] = useState({});
+  const [nacitam, setNacitam] = useState(true);
+  const [najeto, setNajeto] = useState(null);
+
+  useEffect(() => {
+    let zrus = false;
+    setNacitam(true);
+    prehledOkresu(owner, filtr).then(p => {
+      if (zrus) return;
+      setPocty(p); setNacitam(false);
+    });
+    return () => { zrus = true; };
+  }, [owner, filtr]);
+
+  const max = useMemo(
+    () => Math.max(1, ...Object.values(pocty)), [pocty]);
+  const celkem = useMemo(
+    () => Object.values(pocty).reduce((a, b) => a + b, 0), [pocty]);
+  const vybrane = filtr.okresy || [];
+
+  /* Sytost podle počtu, ne pevné stupně. U čtyř zakázek by pevná
+     stupnice („1–5 světle, 6–20 středně") obarvila všechno stejně
+     a mapa by neřekla nic. Takhle je nejhustší okres vždycky
+     nejtmavší, ať jich jsou čtyři nebo čtyři sta.
+
+     Barva není jediný nositel významu — v okrese je i číslo
+     a po najetí se ukáže jméno s počtem. Viz JAZYK.md, oddíl 7. */
+  const vypln = (k) => {
+    const n = pocty[k] || 0;
+    if (vybrane.includes(k)) return theme.accent;
+    if (!n) return theme.inputBg;
+    const podil = n / max;
+    const kryti = 0.18 + podil * 0.62;
+    return `${theme.accent}${Math.round(kryti * 255).toString(16).padStart(2, "0")}`;
+  };
+
+  const klik = (k) => {
+    const s = new Set(vybrane);
+    if (s.has(k)) s.delete(k); else s.add(k);
+    zmen("okresy", [...s]);
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{
+        display: "flex", flexWrap: "wrap", gap: 8,
+        alignItems: "baseline", marginBottom: 6,
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 600, letterSpacing: "0.1em",
+          textTransform: "uppercase", color: theme.textSub,
+        }}>Kde to mám</span>
+        <span style={{ fontSize: 11.5, fontWeight: 400, color: theme.textSub }}>
+          {nacitam ? "počítám…"
+            : celkem === 0 ? "Pro tenhle filtr není na mapě nic."
+            : `${celkem} ${celkem === 1 ? "zakázka" : celkem < 5 ? "zakázky" : "zakázek"} v ${Object.keys(pocty).length} ${Object.keys(pocty).length === 1 ? "okrese" : Object.keys(pocty).length < 5 ? "okresech" : "okresech"}`}
+        </span>
+        {vybrane.length > 0 && (
+          <button onClick={() => zmen("okresy", [])}
+            title="Přestat filtrovat podle okresu"
+            aria-label="Zrušit výběr okresů"
+            style={{
+              ...btn(), marginLeft: "auto", background: "transparent",
+              color: theme.textSub, border: `1px solid ${theme.cardBorder}`,
+              padding: "4px 10px", fontSize: 11.5,
+            }}>Celá republika</button>
+        )}
+      </div>
+
+      <div style={{
+        ...card(theme), padding: 8, position: "relative",
+        background: theme.bg,
+      }}>
+        <svg viewBox={`0 0 ${MAPA_SIRKA} ${MAPA_VYSKA}`}
+          role="img"
+          aria-label={`Mapa okresů. ${celkem} zakázek podle stávajícího filtru.`}
+          style={{ width: "100%", height: "auto", display: "block" }}>
+          {OKRESY.map(o => {
+            const n = pocty[o.k] || 0;
+            const zap = vybrane.includes(o.k);
+            return (
+              <g key={o.k}>
+                <path
+                  d={o.d}
+                  fill={vypln(o.k)}
+                  stroke={zap ? theme.accent : theme.cardBorder}
+                  strokeWidth={zap ? 3 : 1}
+                  onClick={() => klik(o.k)}
+                  onMouseEnter={() => setNajeto(o.k)}
+                  onMouseLeave={() => setNajeto(null)}
+                  style={{ cursor: "pointer" }}>
+                  {/* Nápověda i pro dotyk — na telefonu není najetí. */}
+                  <title>{`${o.o}: ${n} ${n === 1 ? "zakázka" : n < 5 && n > 0 ? "zakázky" : "zakázek"}`}</title>
+                </path>
+                {/* Číslo se píše jen tam, kde něco je. Nuly po celé
+                    republice by z mapy udělaly tabulku nul. */}
+                {n > 0 && (
+                  <text x={o.t[0]} y={o.t[1] + 3}
+                    textAnchor="middle" pointerEvents="none"
+                    style={{
+                      fontSize: 15, fontWeight: 700, fontFamily: FONT,
+                      fill: zap || n / max > 0.55 ? "#fff" : theme.text,
+                    }}>{n}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+
+        {/* Jméno okresu po najetí. Je mimo SVG, aby se nemuselo
+            řešit přetékání textu přes hranice. */}
+        {najeto && (
+          <div style={{
+            position: "absolute", left: 10, bottom: 10,
+            background: theme.card, border: `1px solid ${theme.cardBorder}`,
+            borderRadius: 8, padding: "5px 10px", fontSize: 12,
+            fontWeight: 400, color: theme.text, pointerEvents: "none",
+          }}>
+            <strong style={{ fontWeight: 600 }}>
+              {OKRESY.find(o => o.k === najeto)?.o}
+            </strong>
+            {" · "}{pocty[najeto] || 0}
+          </div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, color: theme.textSub, marginTop: 5 }}>
+        Klikni na okres a přidá se do filtru. Mapa ukazuje totéž, co seznam pod ní.
+      </div>
     </div>
   );
 }

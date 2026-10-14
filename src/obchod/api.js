@@ -270,6 +270,59 @@ export async function jsemSpravce() {
   }
 }
 
+/* Skládání filtru. Je schválně samostatně: používá ho seznam
+   zakázek i mapa okresů, a kdyby to byly dvě kopie, mapa by
+   dřív nebo později ukazovala jiná čísla než seznam pod ní.
+   Dostane rozdělaný dotaz a vrátí ho s podmínkami. */
+function pouzijFiltr(q, filtr = {}) {
+    /* Víc typů naráz — „nemocnice NEBO alzheimer centrum NEBO LDN".
+     Jeden typ zůstává kvůli starým uloženým filtrům a odkazům;
+     nové obrazovky posílají typy. Stejný vzor jako u krajů. */
+  if (filtr.typy && filtr.typy.length) q = q.in("typ", filtr.typy);
+  else if (filtr.typ)  q = q.eq("typ", filtr.typ);
+  /* Okresy. Pole okres u zakázky se dopočítává z města, takže
+     filtr na okres je spolehlivější než na město — „průmyslové
+     parky na jihu Čech" se neptá na konkrétní obec. */
+  if (filtr.okresy && filtr.okresy.length) q = q.in("okres", filtr.okresy);
+  // Jeden kraj, nebo celá oblast (Čechy, Morava) jako seznam krajů.
+  if (filtr.kraje && filtr.kraje.length) q = q.in("kraj", filtr.kraje);
+  else if (filtr.kraj) q = q.eq("kraj", filtr.kraj);
+  if (filtr.faze)      q = q.eq("faze", filtr.faze);
+  if (filtr.stav)      q = q.eq("stav", filtr.stav);
+  // Hotové, padlé a spící z výchozího seznamu pryč. Nemažou se,
+  // jen netříští pozornost — a dají se kdykoli zapnout.
+  //
+  // Ten "stav.is.null" tam musí být. V SQL je NULL not in (…) zase
+  // NULL, ne pravda — takže zakázka bez vyplněné fáze by se ze
+  // seznamu tiše ztratila. Přesně to se stalo zakázkám založeným
+  // dřív, než fáze vůbec existovaly: v databázi byly, v seznamu ne.
+  else if (!filtr.archiv) {
+    /* Tip je od 14. 10. ve výchozím seznamu taky schovaný. Není to
+       archiv, ale není to ani živá zakázka — na tipu nepracuješ,
+       zatím o něm jen víš. Kdyby se pletl mezi živé, kazil by
+       odpověď na otázku „na čem teď dělám". Zobrazí se kliknutím
+       na dlaždici Tip v pásu fází. */
+    q = q.or("stav.is.null,stav.not.in.(vyplaceno,nerealizovano,spi,tip)");
+  }
+  if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
+  if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);
+  // Od kdy byla zadaná. Hranici počítá aplikace, ne databáze —
+  // "dnes" se řídí časem u tebe, ne na serveru v Americe.
+  if (filtr.odKdy)              q = q.gte("created_at", filtr.odKdy);
+  // Velikost se filtruje prahem: "nad 50" vrátí i 85 a 100.
+  if (filtr.velikostOd != null) q = q.gte("velikost", filtr.velikostOd);
+
+  const h = (filtr.hledat || "").trim();
+  if (h) {
+    const v = h.replace(/[%,]/g, " ");
+    q = q.or(
+      `kod.ilike.%${v}%,nazev.ilike.%${v}%,mesto.ilike.%${v}%,` +
+      `lokalita_text.ilike.%${v}%,souhrn.ilike.%${v}%`
+    );
+  }
+  return q;
+}
+
 export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
   if (!owner) return [];
   try {
@@ -279,51 +332,7 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
       .eq("owner", owner)
       .is("deleted_at", null);
 
-    /* Víc typů naráz — „nemocnice NEBO alzheimer centrum NEBO LDN".
-       Jeden typ zůstává kvůli starým uloženým filtrům a odkazům;
-       nové obrazovky posílají typy. Stejný vzor jako u krajů. */
-    if (filtr.typy && filtr.typy.length) q = q.in("typ", filtr.typy);
-    else if (filtr.typ)  q = q.eq("typ", filtr.typ);
-    /* Okresy. Pole okres u zakázky se dopočítává z města, takže
-       filtr na okres je spolehlivější než na město — „průmyslové
-       parky na jihu Čech" se neptá na konkrétní obec. */
-    if (filtr.okresy && filtr.okresy.length) q = q.in("okres", filtr.okresy);
-    // Jeden kraj, nebo celá oblast (Čechy, Morava) jako seznam krajů.
-    if (filtr.kraje && filtr.kraje.length) q = q.in("kraj", filtr.kraje);
-    else if (filtr.kraj) q = q.eq("kraj", filtr.kraj);
-    if (filtr.faze)      q = q.eq("faze", filtr.faze);
-    if (filtr.stav)      q = q.eq("stav", filtr.stav);
-    // Hotové, padlé a spící z výchozího seznamu pryč. Nemažou se,
-    // jen netříští pozornost — a dají se kdykoli zapnout.
-    //
-    // Ten "stav.is.null" tam musí být. V SQL je NULL not in (…) zase
-    // NULL, ne pravda — takže zakázka bez vyplněné fáze by se ze
-    // seznamu tiše ztratila. Přesně to se stalo zakázkám založeným
-    // dřív, než fáze vůbec existovaly: v databázi byly, v seznamu ne.
-    else if (!filtr.archiv) {
-      /* Tip je od 14. 10. ve výchozím seznamu taky schovaný. Není to
-         archiv, ale není to ani živá zakázka — na tipu nepracuješ,
-         zatím o něm jen víš. Kdyby se pletl mezi živé, kazil by
-         odpověď na otázku „na čem teď dělám". Zobrazí se kliknutím
-         na dlaždici Tip v pásu fází. */
-      q = q.or("stav.is.null,stav.not.in.(vyplaceno,nerealizovano,spi,tip)");
-    }
-    if (filtr.cenaOd != null)     q = q.gte("cena", filtr.cenaOd);
-    if (filtr.cenaDo != null)     q = q.lte("cena", filtr.cenaDo);
-    // Od kdy byla zadaná. Hranici počítá aplikace, ne databáze —
-    // "dnes" se řídí časem u tebe, ne na serveru v Americe.
-    if (filtr.odKdy)              q = q.gte("created_at", filtr.odKdy);
-    // Velikost se filtruje prahem: "nad 50" vrátí i 85 a 100.
-    if (filtr.velikostOd != null) q = q.gte("velikost", filtr.velikostOd);
-
-    const h = (filtr.hledat || "").trim();
-    if (h) {
-      const v = h.replace(/[%,]/g, " ");
-      q = q.or(
-        `kod.ilike.%${v}%,nazev.ilike.%${v}%,mesto.ilike.%${v}%,` +
-        `lokalita_text.ilike.%${v}%,souhrn.ilike.%${v}%`
-      );
-    }
+    q = pouzijFiltr(q, filtr);
 
     const { data, error } = await q
       .order("created_at", { ascending: false })
@@ -340,6 +349,38 @@ export async function nactiZakazky(owner, filtr = {}, limit = 50, offset = 0) {
    při hledání do seznamu a otevře se jako plný editovatelný detail —
    dal by se do ní zapsat termín i sdílení. Tohle je jediná cesta
    k detailu, takže filtr musí být přímo tady. */
+/* ── Mapa: kolik zakázek je ve kterém okrese ───────────
+   Odpověď na „kde mám pokrytí". Používá stejný filtr jako seznam,
+   takže mapa a seznam pod ní nemůžou ukazovat jiná čísla.
+
+   Tahá se jen sloupec okres, ne celé zakázky — i při tisícovce
+   zakázek je to pár desítek kilobajtů. Strop deset tisíc řádků
+   je pojistka, ne očekávání; kdyby se na něj narazilo, mapa by
+   byla stejně nečitelná a problém by byl jinde. */
+export async function prehledOkresu(owner, filtr = {}) {
+  if (!owner) return {};
+  try {
+    let q = supabase
+      .from("deal_projects")
+      .select("okres")
+      .eq("owner", owner)
+      .is("deleted_at", null);
+    q = pouzijFiltr(q, filtr);
+    const { data, error } = await q.limit(10000);
+    if (error) throw error;
+    const out = {};
+    for (const r of data || []) {
+      // Zakázka bez okresu se nepočítá nikam — na mapě by neměla
+      // kam sednout a tiše by zvedla číslo u náhodného okresu.
+      if (r.okres) out[r.okres] = (out[r.okres] || 0) + 1;
+    }
+    return out;
+  } catch (e) {
+    selhalo("prehledOkresu", e);
+    return {};
+  }
+}
+
 export async function nactiZakazku(id) {
   if (!id) return null;
   try {
