@@ -425,9 +425,44 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
 
   return (
     <div style={{ ...card(theme), padding: "11px 12px", marginBottom: 10 }}>
+      {/* Ovládání nahoře, ne dole pod formulářem.
+          Dole bylo mimo zorné pole: člověk vyplnil jméno, chtěl
+          uložit a musel hledat, kam tlačítko uteklo. Navíc je
+          lepidlo (sticky) — při rolování dlouhým formulářem
+          zůstane na očích a Uložit je pořád na stejném místě.
+
+          Pořadí je uložit, pak zrušit: nejdřív to, co chceš,
+          až potom cesta zpátky. */}
+      <div style={{
+        position: "sticky", top: 0, zIndex: 2,
+        display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
+        background: theme.card, paddingBottom: 8, marginBottom: 2,
+        borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        <span style={{
+          flex: 1, minWidth: 0, fontSize: "10px", fontWeight: 500,
+          letterSpacing: "0.06em", textTransform: "uppercase", color: theme.textSub,
+        }}>{novy ? "Nový kontakt" : "Úprava kontaktu"}</span>
+        <button onClick={uloz} disabled={!f.name.trim() || uklada}
+          title={f.name.trim()
+            ? (novy ? "Založit kontakt" : "Uložit změny u kontaktu")
+            : "Nejdřív vyplň jméno"}
+          aria-label={novy ? "Založit kontakt" : "Uložit kontakt"}
+          style={{
+            ...btnMain(theme), opacity: f.name.trim() && !uklada ? 1 : 0.5,
+          }}>{uklada ? "UKLÁDÁM…" : novy ? "ZALOŽIT" : "ULOŽIT"}</button>
+        {onZrus && (
+          <button onClick={onZrus}
+            title="Zavřít beze změn — co jsi tu napsal, se neuloží"
+            aria-label="Zavřít beze změn"
+            style={btnGhost(theme)}>Zrušit</button>
+        )}
+        {extra}
+      </div>
+
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-        gap: 7, marginBottom: 7,
+        gap: 7, marginBottom: 7, marginTop: 9,
       }}>
         <div>
           <span style={label(theme)}>Jméno</span>
@@ -495,13 +530,9 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
         <div style={{ fontSize: "11.5px", color: theme.red, marginBottom: 7 }}>{chyba}</div>
       )}
 
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <button onClick={uloz} disabled={!f.name.trim() || uklada} style={{
-          ...btnMain(theme), opacity: f.name.trim() && !uklada ? 1 : 0.5,
-        }}>{uklada ? "UKLÁDÁM…" : novy ? "ZALOŽIT" : "ULOŽIT"}</button>
-        {onZrus && <button onClick={onZrus} style={btnGhost(theme)}>Zrušit</button>}
-        {extra}
-      </div>
+      {/* Tady bývalo ULOŽIT a Zrušit. Přestěhovalo se nahoru —
+          dvě stejná tlačítka na jedné obrazovce by znamenala, že
+          ani jedno není to hlavní. Viz JAZYK.md, oddíl 7. */}
     </div>
   );
 }
@@ -570,12 +601,26 @@ export function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }
 
   return (
     <div style={{ padding: "12px 16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button title="Zpět" aria-label="Zpět" onClick={onZpet} style={{
+      {/* Ovládání nahoře a přilepené, stejně jako u kontaktu.
+          Karta je dlouhý formulář — dole se tlačítko ULOŽIT
+          muselo hledat rolováním. */}
+      <div style={{
+        position: "sticky", top: 0, zIndex: 2,
+        display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
+        background: theme.bg, paddingBottom: 9,
+        borderBottom: `1px solid ${theme.cardBorder}`,
+      }}>
+        <button title="Zpět na člověka" aria-label="Zpět na člověka" onClick={onZpet} style={{
           ...btn(), background: "transparent", color: theme.textSub,
           fontSize: "15px", padding: "2px 6px",
         }}>←</button>
-        <div style={{ fontSize: "14px", fontWeight: 700, color: theme.text }}>{jmeno}</div>
+        <div style={{ flex: 1, minWidth: 0, fontSize: "14px", fontWeight: 700, color: theme.text,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jmeno}</div>
+        <button onClick={uloz} disabled={uklada}
+          title="Uložit kartu — co člověk hledá a co nabízí"
+          aria-label="Uložit kartu"
+          style={{ ...btnMain(theme), opacity: uklada ? 0.6 : 1 }}>
+          {uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
       </div>
 
       {/* Profilové role — čím je obecně, napříč zakázkami */}
@@ -793,11 +838,10 @@ export function KartaEditor({ theme, owner, ciselniky, karta, onHotovo, onZpet }
         }}>{chyba}</div>
       )}
 
+      {/* ULOŽIT a Zpět se přestěhovaly nahoru do přilepené lišty.
+          Dole zůstalo jen mazání — nebezpečná akce patří daleko
+          od té, kterou člověk mačká pořád. */}
       <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
-        <button onClick={uloz} disabled={uklada} style={{
-          ...btnMain(theme), opacity: uklada ? 0.6 : 1,
-        }}>{uklada ? "UKLÁDÁM…" : "ULOŽIT"}</button>
-        <button onClick={onZpet} style={btnGhost(theme)}>Zpět</button>
         <span style={{ flex: 1 }} />
         {f.id && !ptamSe && (
           <button onClick={() => setPtamSe(true)} style={{
