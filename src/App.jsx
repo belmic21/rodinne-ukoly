@@ -100,7 +100,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_0915";
+const FILE_VERSION = "261014_1020";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1344,7 +1344,7 @@ body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
   pointer-events: none;
   height: 0;
 }
-.tiptap-editor-content h1 { font-size: 22px; font-weight: 800; margin: 12px 0 6px; }
+.tiptap-editor-content h1 { font-size: 22px; font-weight: 700; margin: 12px 0 6px; }
 .tiptap-editor-content h2 { font-size: 18px; font-weight: 700; margin: 10px 0 6px; }
 .tiptap-editor-content ul, .tiptap-editor-content ol { margin: 6px 0; padding-left: 22px; }
 .tiptap-editor-content li { margin: 2px 0; }
@@ -1887,7 +1887,7 @@ function AttachmentUploader({
           fontSize: compact ? 16 : 13,
           cursor: buttonCursor,
           fontFamily: FONT,
-          fontWeight: 600,
+          fontWeight: 500,
           display: "inline-flex",
           alignItems: "center",
           gap: 6,
@@ -5402,7 +5402,7 @@ function QuickReminderModal({ theme, currentUser, users = [], onCreate, onClose,
   // Helper: render předvolby button
   const PresetButton = ({ active, onClick, children }) => (
     <button onClick={onClick} style={{
-      padding: "8px 12px", fontSize: 12, fontWeight: 600,
+      padding: "8px 12px", fontSize: 12, fontWeight: 500,
       background: active ? theme.accent : theme.inputBg,
       color: active ? "#fff" : theme.text,
       border: `1px solid ${active ? theme.accent : theme.inputBorder}`,
@@ -5636,7 +5636,7 @@ function ReminderToast({ reminder, theme, onDismiss, onSnooze, onClose }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: theme.accent, marginBottom: 3,
             textTransform: "uppercase", letterSpacing: "0.4px" }}>Připomínka</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: theme.text, wordBreak: "break-word" }}>
             {reminder.text}
           </div>
           <div style={{ fontSize: 11, color: theme.textMid, marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -5789,7 +5789,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontSize: 14, fontWeight: 600, color: theme.text, wordBreak: "break-word",
+            fontSize: 14, fontWeight: 500, color: theme.text, wordBreak: "break-word",
             textDecoration: variant === "history" ? "line-through" : "none",
           }}>
             {r.text}
@@ -5850,7 +5850,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
       <button onClick={() => setPtam(true)} title="Smazat připomínku" aria-label="Smazat připomínku" style={{
         ...buttonStyle(), padding: "5px 9px", fontSize: 13,
         background: "transparent", color: theme.textSub,
-        border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+        border: `1px solid ${theme.inputBorder}`, fontWeight: 500,
       }}>×</button>
     );
   };
@@ -5865,7 +5865,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
           background: otevreno ? theme.accentSoft : theme.inputBg,
           color: otevreno ? theme.accent : theme.text,
           border: `1px solid ${otevreno ? theme.accentBorder : theme.inputBorder}`,
-          fontWeight: 600,
+          fontWeight: 500,
         }}>⏱</button>
         {otevreno && (
           <div style={{
@@ -5890,7 +5890,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
 
   const sectionLabel = (icon, text, count, color) => (
     <div style={{
-      fontSize: 10, fontWeight: 800, color: color || theme.textMid,
+      fontSize: 10, fontWeight: 700, color: color || theme.textMid,
       textTransform: "uppercase", letterSpacing: "0.4px",
       marginTop: 12, marginBottom: 6, padding: "0 2px",
       display: "flex", alignItems: "center", gap: 6,
@@ -5956,7 +5956,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
               <button onClick={() => zahrajSirenu({ naplno: true })} style={{
                 ...buttonStyle(), padding: "4px 8px", fontSize: 11,
                 background: "transparent", color: theme.textSub,
-                border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                border: `1px solid ${theme.inputBorder}`, fontWeight: 500,
               }}>zkusit</button>
             )}
           </div>
@@ -6032,7 +6032,7 @@ function RemindersSheet({ reminders, theme, currentUser, onClose, onDismiss, onC
                         <button onClick={() => onReactivate(r)} title="Reaktivovat" aria-label="Reaktivovat" style={{
                           ...buttonStyle(), padding: "5px 9px", fontSize: 12,
                           background: theme.inputBg, color: theme.text,
-                          border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                          border: `1px solid ${theme.inputBorder}`, fontWeight: 500,
                         }}>↻</button>
                         <SmazatTlacitko r={r} zHistorie />
                       </>
@@ -6103,7 +6103,7 @@ function SharedWithSelector({ value = [], onChange, users = [], currentUser, the
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {/* "Všichni" speciální option */}
         <button onClick={toggleAll} type="button" style={{
-          padding: "5px 10px", fontSize: 12, fontWeight: 600,
+          padding: "5px 10px", fontSize: 12, fontWeight: 500,
           background: allWithStar ? theme.accent : "transparent",
           color: allWithStar ? "#fff" : theme.text,
           border: `1px solid ${allWithStar ? theme.accent : theme.inputBorder}`,
@@ -6116,7 +6116,7 @@ function SharedWithSelector({ value = [], onChange, users = [], currentUser, the
           const active = !allWithStar && value.includes(u.name);
           return (
             <button key={u.name} onClick={() => toggleUser(u.name)} type="button" style={{
-              padding: "5px 10px", fontSize: 12, fontWeight: 600,
+              padding: "5px 10px", fontSize: 12, fontWeight: 500,
               background: active ? theme.accent : "transparent",
               color: active ? "#fff" : theme.text,
               opacity: allWithStar ? 0.5 : 1,
@@ -6172,7 +6172,7 @@ function TipTapToolbar({ editor, theme }) {
       padding: "6px 8px", borderBottom: `1px solid ${theme.cardBorder}`,
       background: theme.bg,
     }}>
-      {btn(editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), "Tučně", "B", { fontWeight: 900 })}
+      {btn(editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), "Tučně", "B", { fontWeight: 700 })}
       {btn(editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), "Kurzíva", "I", { fontStyle: "italic" })}
       {btn(editor.isActive("underline"), () => editor.chain().focus().toggleUnderline().run(), "Podtrženo", "U", { textDecoration: "underline" })}
       {btn(editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run(), "Přeškrtnuto", "S", { textDecoration: "line-through" })}
@@ -6493,7 +6493,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
             <button onClick={handleConvert} title="Vytvořit úkol z této poznámky" aria-label="Vytvořit úkol z této poznámky" style={{
               ...buttonStyle(), padding: "6px 10px", fontSize: 12,
               background: theme.inputBg, color: theme.text,
-              border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+              border: `1px solid ${theme.inputBorder}`, fontWeight: 500,
             }}>📋 Vytvořit úkol</button>
           )}
 
@@ -6503,13 +6503,13 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
               <button onClick={handleUnarchive} title="Vrátit z archivu" aria-label="Vrátit z archivu" style={{
                 ...buttonStyle(), padding: "6px 10px", fontSize: 12,
                 background: `${theme.green}15`, color: theme.green,
-                border: `1px solid ${theme.green}40`, fontWeight: 600,
+                border: `1px solid ${theme.green}40`, fontWeight: 500,
               }}>↩ Z archivu</button>
             ) : (
               <button onClick={handleArchive} title="Archivovat poznámku (jen ty ji neuvidíš)" aria-label="Archivovat poznámku (jen ty ji neuvidíš)" style={{
                 ...buttonStyle(), padding: "6px 10px", fontSize: 12,
                 background: `${theme.accent}10`, color: theme.accent,
-                border: `1px solid ${theme.accent}30`, fontWeight: 600,
+                border: `1px solid ${theme.accent}30`, fontWeight: 500,
               }}>📂 Archivovat</button>
             )
           )}
@@ -6519,7 +6519,7 @@ function NoteEditor({ note, theme, currentUser, users = [], onSave, onDelete, on
             <button onClick={handleDelete} title="Smazat poznámku" aria-label="Smazat poznámku" style={{
               ...buttonStyle(), padding: "6px 10px", fontSize: 12,
               background: "transparent", color: theme.red,
-              border: `1px solid ${theme.red}40`, fontWeight: 600,
+              border: `1px solid ${theme.red}40`, fontWeight: 500,
             }}>🗑 Smazat</button>
           )}
 
@@ -6593,7 +6593,7 @@ function NoteAttachmentsSection({ noteId, currentUser, theme }) {
             fontSize: 12,
             cursor: uploading ? "wait" : "pointer",
             fontFamily: FONT,
-            fontWeight: 600,
+            fontWeight: 500,
           }}
         >📷 {uploading ? "..." : "+"}</button>
       </div>
@@ -6720,7 +6720,7 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
 
   const sectionLabel = (icon, text, count) => (
     <div style={{
-      fontSize: 10, fontWeight: 800, color: theme.textMid,
+      fontSize: 10, fontWeight: 700, color: theme.textMid,
       textTransform: "uppercase", letterSpacing: "0.4px",
       marginTop: 12, marginBottom: 6, padding: "0 2px",
       display: "flex", alignItems: "center", gap: 6,
@@ -6738,7 +6738,7 @@ function NotesSheet({ notes, theme, currentUser, onClose, onCreate, onEdit }) {
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: theme.card,
-        width: "100%", maxWidth: 600, maxHeight: "85vh",
+        width: "100%", maxWidth: 500, maxHeight: "85vh",
         borderRadius: 14,
         display: "flex", flexDirection: "column",
         boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
@@ -6956,7 +6956,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
     }}>
       <span style={{ fontSize: 14 }}>{icon}</span>
       <span style={{
-        fontSize: 11, fontWeight: 800, color: accentColor || theme.text,
+        fontSize: 11, fontWeight: 700, color: accentColor || theme.text,
         textTransform: "uppercase", letterSpacing: "0.5px", flex: 1,
       }}>{title}</span>
       <span style={{ fontSize: 10, color: theme.textSub }}>{count}</span>
@@ -6969,7 +6969,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
       )}
       {onShowAll && (
         <button onClick={onShowAll} title="Vše" aria-label="Vše" style={{
-          ...buttonStyle(), padding: "2px 7px", fontSize: 10, fontWeight: 600,
+          ...buttonStyle(), padding: "2px 7px", fontSize: 10, fontWeight: 500,
           background: "transparent", color: theme.textSub,
           border: `1px solid ${theme.inputBorder}`,
         }}>›</button>
@@ -7021,7 +7021,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
           const isPast = new Date(r.remindAt).getTime() < Date.now();
           return (
             <ItemRow key={r.id} onClick={onOpenReminders}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: theme.text, wordBreak: "break-word" }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: theme.text, wordBreak: "break-word" }}>
                 {r.text}
               </div>
               <div style={{ fontSize: 10, color: isPast ? theme.red : theme.textSub, marginTop: 2 }}>
@@ -7042,7 +7042,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
           return (
             <button key={v.k} onClick={() => setPanel(v.k)} style={{
               ...buttonStyle(), flex: 1,
-              padding: "5px 8px", fontSize: "11.5px", fontWeight: zap ? 700 : 600,
+              padding: "5px 8px", fontSize: "11.5px", fontWeight: zap ? 700 : 500,
               background: zap ? theme.accentSoft : "transparent",
               color: zap ? theme.accent : theme.textSub,
               border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
@@ -7081,7 +7081,7 @@ function DashboardSidebar({ reminders, notes, comments, tasks, currentUser, them
           const isMine = n.createdBy === currentUser?.name;
           return (
             <ItemRow key={n.id} onClick={() => onOpenNote(n)}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: theme.text,
+              <div style={{ fontSize: 12, fontWeight: 500, color: theme.text,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}>
                 {n.pinned && "📌 "}
@@ -7327,7 +7327,7 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           cursor: "pointer", marginBottom: expanded ? "8px" : 0,
         }}>
         <span style={{
-          fontSize: "11px", color: hasEntries ? theme.purple : theme.textMid, fontWeight: 800,
+          fontSize: "11px", color: hasEntries ? theme.purple : theme.textMid, fontWeight: 700,
           textTransform: "uppercase", letterSpacing: "0.5px",
         }}>
           📔 Pracovní deník {hasEntries && `(${task.scratchPad.filter(e => !e.deletedAt).length})`}
@@ -7384,7 +7384,7 @@ function ScratchPadInline({ task, currentUser, onUpdate, theme }) {
           {/* Pending přílohy (před uložením entry) */}
           {pendingAttachments.length > 0 && (
             <div style={{ marginBottom: 8, padding: "6px 8px", background: theme.accentSoft, borderRadius: 6 }}>
-              <div style={{ fontSize: 9, color: theme.textMid, marginBottom: 4, fontWeight: 600 }}>
+              <div style={{ fontSize: 9, color: theme.textMid, marginBottom: 4, fontWeight: 500 }}>
                 ČEKÁ NA ULOŽENÍ ({pendingAttachments.length}/5)
               </div>
               <AttachmentGallery
@@ -7468,7 +7468,7 @@ function ScratchEntryRow({ entry, currentUser, theme, editingId, editText, setEd
     }}>
       <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
         <span style={{
-          fontSize: "9px", color: theme.textMid, fontWeight: 600,
+          fontSize: "9px", color: theme.textMid, fontWeight: 500,
           whiteSpace: "nowrap", marginTop: "2px",
         }}>
           {formatTimeTrace(entry.createdAt)}
@@ -7753,7 +7753,7 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
                 background: item.done ? theme.green : "transparent",
                 cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                color: "#fff", fontSize: "11px", fontWeight: 800,
+                color: "#fff", fontSize: "11px", fontWeight: 700,
               }}>
                 {item.done && "✓"}
               </button>
@@ -7802,7 +7802,7 @@ function Checklist({ items = [], onChange, userName, theme, onAllCompleted, task
                   <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }} title="Uložit" aria-label="Uložit" style={{
                     ...buttonStyle(), width: "26px", height: "22px", padding: 0,
                     background: theme.green, color: "#fff", border: "none",
-                    fontSize: "13px", fontWeight: 800,
+                    fontSize: "13px", fontWeight: 700,
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>✓</button>
                   <button onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }} title="Zrušit" aria-label="Zrušit" style={{
@@ -8459,7 +8459,7 @@ function TaskAttachmentsSection({ task, currentUser, theme }) {
             fontSize: 12,
             cursor: uploading ? "wait" : "pointer",
             fontFamily: FONT,
-            fontWeight: 600,
+            fontWeight: 500,
           }}
         >📷 {uploading ? "..." : "+"}</button>
       </div>
@@ -8559,7 +8559,7 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", alignItems: "center" }}>
           <span style={{
             display: "inline-flex", alignItems: "center", gap: 6,
-            padding: "6px 10px", borderRadius: "14px", fontSize: "12px", fontWeight: 600,
+            padding: "6px 10px", borderRadius: "14px", fontSize: "12px", fontWeight: 500,
             background: theme.accentSoft, color: theme.accent,
             border: `1px solid ${theme.accentBorder}`,
           }}>
@@ -8579,7 +8579,7 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
         <button
           onClick={() => setVybiram(v => !v)}
           style={{
-            ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+            ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 500,
             background: "transparent", color: theme.textSub,
             border: `1px dashed ${theme.inputBorder}`, borderRadius: "14px",
           }}>
@@ -8625,7 +8625,7 @@ function VazbaNaOsobu({ task, currentUser, theme, onZmena }) {
                 onClick={() => uloz(task.osobaId, task.osoba, s.k)}
                 disabled={uklada}
                 style={{
-                  ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                  ...buttonStyle(), padding: "6px 12px", fontSize: "12px", fontWeight: 500,
                   background: zap ? theme.accent : "transparent",
                   color: zap ? "#fff" : theme.textSub,
                   border: `1px solid ${zap ? theme.accent : theme.inputBorder}`,
@@ -8820,7 +8820,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
         gap: 8, marginBottom: 6,
       }}>
         <span style={{
-          fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
+          fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
           textTransform: "uppercase", color: theme.textSub,
         }}>{nadpis} <span style={{ color: theme.text }}>{polozky.length}</span></span>
         <span style={{ fontSize: "11px", color: theme.textSub }}>{podnadpis}</span>
@@ -8852,7 +8852,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                 </span>
               </span>
               <span style={{
-                flex: "0 0 auto", fontSize: "11px", fontWeight: 600,
+                flex: "0 0 auto", fontSize: "11px", fontWeight: 500,
                 color: dni >= barvaOd ? theme.red : theme.textSub,
               }}>{dniPopis(t)}</span>
             </button>
@@ -8901,7 +8901,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           borderRadius: "12px", padding: "15px 16px", marginBottom: 14,
         }}>
           <div style={{
-            fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
+            fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
             textTransform: "uppercase", color: theme.accent, marginBottom: 6,
           }}>Dnes máš jedinou věc</div>
           <div style={{ fontSize: "15px", fontWeight: 700, color: theme.text, lineHeight: 1.35 }}>
@@ -8917,7 +8917,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             aria-label={`Protřídit ${nepochopeno} věcí`}
             style={{
               ...buttonStyle(), marginTop: 12, width: "100%", minHeight: 48,
-              padding: "13px 18px", fontSize: "15px", fontWeight: 800,
+              padding: "13px 18px", fontSize: "15px", fontWeight: 700,
               letterSpacing: "0.03em", background: theme.accent, color: "#fff",
             }}>
             PROTŘÍDIT · ≈ {Math.max(1, Math.round(nepochopeno * 15 / 60))} min
@@ -8936,7 +8936,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1px solid ${theme.accentBorder}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 600 }}>
+            <strong style={{ fontWeight: 500 }}>
               {nepochopeno} {nepochopeno === 1 ? "věc nemá jasno" : nepochopeno < 5 ? "věci nemají jasno" : "věcí nemá jasno"}
             </strong>
             <span style={{ color: theme.textSub, fontWeight: 400 }}> — po termínu nebo bez termínu</span>
@@ -8967,7 +8967,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1.5px solid ${theme.accent}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 600 }}>Zavři den</strong>
+            <strong style={{ fontWeight: 500 }}>Zavři den</strong>
             <span style={{ color: theme.textSub, fontWeight: 400 }}>
               {" "}— na dnešek {dnesekZbyva === 1 ? "zbývá" : "zbývají"} {dnesekZbyva}
               {dnesekZbyva === 1 ? " věc" : dnesekZbyva < 5 ? " věci" : " věcí"}
@@ -8991,7 +8991,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             border: `1px solid ${theme.accentBorder}`,
           }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            <strong style={{ fontWeight: 600 }}>Čeká na tebe {cekaNaMe}</strong>
+            <strong style={{ fontWeight: 500 }}>Čeká na tebe {cekaNaMe}</strong>
             <span style={{ color: theme.textSub, fontWeight: 400 }}> — nepřečtené úkoly a odpovědi</span>
           </span>
           <span style={{ flex: "0 0 auto", fontSize: "12px", color: theme.accent, fontWeight: 500 }}>Otevřít</span>
@@ -9003,7 +9003,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       {ted.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <div style={{
-            fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
+            fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
             textTransform: "uppercase", color: theme.accent, marginBottom: 7,
           }}>Teď</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -9024,10 +9024,10 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                   }}>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{
-                      display: "block", fontSize: "15px", fontWeight: 600, color: theme.text,
+                      display: "block", fontSize: "15px", fontWeight: 500, color: theme.text,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     }}>{t.title}</span>
-                    <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                    <span style={{ display: "block", fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginTop: 2 }}>
                       {zpozdeni === 0 ? "dnes" : `${dni} ${dni < 5 ? "dny" : "dní"} po termínu`}
                       {t.osoba ? ` · ${t.osoba}` : ""}
                     </span>
@@ -9066,7 +9066,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           {skupiny.map(s => (
             <div key={s.k} style={{ marginBottom: 11 }}>
               <div style={{
-                fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
+                fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
                 textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
               }}>{s.popis} · {s.polozky.length}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -9084,7 +9084,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                           ...buttonStyle(), flex: 1, minWidth: 0, textAlign: "left",
                           background: "transparent", padding: 0,
                         }}>
-                        <span style={{ display: "block", fontSize: "13.5px", fontWeight: 600, color: theme.text }}>
+                        <span style={{ display: "block", fontSize: "13.5px", fontWeight: 500, color: theme.text }}>
                           {t.title}
                         </span>
                         {(t.osoba || t.osobaKontakt) && (
@@ -9112,7 +9112,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                   );
                 })}
                 {s.polozky.length > 6 && (
-                  <div style={{ fontSize: "11.5px", color: theme.textSub, padding: "2px 2px" }}>
+                  <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub, padding: "2px 2px" }}>
                     a další {s.polozky.length - 6} — v Úkolech
                   </div>
                 )}
@@ -9142,13 +9142,13 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             "Je pátek. Mrkni, co se za týden zaseklo.",
             "Revize týdne", "Otevřít revizi týdne", () => onRevize?.())}
           {odlozeno > 0 && radekPaty(
-            <>V zásobníku {odlozeno === 1 ? "čeká" : "čekají"} <strong style={{ color: theme.text, fontWeight: 600 }}>{odlozeno}</strong>
+            <>V zásobníku {odlozeno === 1 ? "čeká" : "čekají"} <strong style={{ color: theme.text, fontWeight: 500 }}>{odlozeno}</strong>
               {odlozeno === 1 ? " věc" : odlozeno < 5 ? " věci" : " věcí"}
               {nejblizsiNavrat && <>, nejbližší se vrátí {formatDate(nejblizsiNavrat)}</>}</>,
             "Zásobník", "Zobrazit odložené věci a jejich datum návratu",
             () => onUkazZasobnik?.())}
           {posledni && radekPaty(
-            <>Naposled jsi byl u <strong style={{ color: theme.text, fontWeight: 600 }}>{posledni.title}</strong></>,
+            <>Naposled jsi byl u <strong style={{ color: theme.text, fontWeight: 500 }}>{posledni.title}</strong></>,
             "Pokračovat", "Otevřít, kde jsi skončil", () => onOtevriUkol?.(posledni.id))}
         </div>
       )}
@@ -9207,7 +9207,7 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
           style={{
             ...buttonStyle(), width: "100%", display: "flex", alignItems: "center", gap: 11,
             padding: "9px 11px", borderRadius: "9px", textAlign: "left",
-            fontSize: "14px", fontWeight: zap ? 600 : 400,
+            fontSize: "14px", fontWeight: zap ? 500 : 400,
             background: zap ? theme.accent : "transparent",
             color: zap ? "#fff" : theme.text,
           }}>
@@ -9252,7 +9252,7 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
           fontWeight: 700, fontSize: "13px", flexShrink: 0,
         }}>{(jmeno || "?").slice(0, 1).toUpperCase()}</div>
         <div style={{
-          fontSize: "14px", fontWeight: 600, color: theme.text,
+          fontSize: "14px", fontWeight: 500, color: theme.text,
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>{jmeno}</div>
       </div>
@@ -9269,7 +9269,7 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
               title={r.napoveda} aria-label={r.napoveda}
               style={{
                 ...buttonStyle(), flex: 1, padding: "7px 4px", borderRadius: 7,
-                fontSize: "12px", fontWeight: zap ? 600 : 400,
+                fontSize: "12px", fontWeight: zap ? 500 : 400,
                 background: zap ? theme.card : "transparent",
                 color: zap ? theme.text : theme.textSub,
                 boxShadow: zap ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
@@ -9335,7 +9335,7 @@ function SpodniLista({ theme, cile, aktivniKlic }) {
                 <span style={{
                   position: "absolute", top: "-5px", right: "-9px",
                   background: c.hori ? theme.red : theme.accent, color: "#fff",
-                  fontSize: "9px", fontWeight: 800, lineHeight: 1,
+                  fontSize: "9px", fontWeight: 700, lineHeight: 1,
                   padding: "2px 4px", borderRadius: "7px", minWidth: "8px",
                   textAlign: "center",
                 }}>{c.pocet > 99 ? "99+" : c.pocet}</span>
@@ -9695,7 +9695,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                     }}>Uložit</button>
                   <button onClick={() => setOdkladam(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
-                    ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 600,
+                    ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 500,
                     background: "transparent", color: theme.textSub,
                     border: `1px solid ${theme.inputBorder}`,
                   }}>Zpět</button>
@@ -9737,7 +9737,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                     }}>Uložit</button>
                   <button onClick={() => setZadavamDatum(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
-                    ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 600,
+                    ...buttonStyle(), padding: "10px 16px", fontSize: "14px", fontWeight: 500,
                     background: "transparent", color: theme.textSub,
                     border: `1px solid ${theme.inputBorder}`,
                   }}>Zpět</button>
@@ -9832,7 +9832,7 @@ function ZasobnikSheet({ tasks, theme, onClose, onOtevriUkol, onUprav }) {
 
         {polozky.length === 0 ? (
           <div style={{ padding: "22px 2px", textAlign: "center" }}>
-            <div style={{ fontSize: "14px", fontWeight: 600, color: theme.text, marginBottom: 6 }}>
+            <div style={{ fontSize: "14px", fontWeight: 500, color: theme.text, marginBottom: 6 }}>
               Zásobník je prázdný.
             </div>
             <div style={{ fontSize: "13px", color: theme.textSub, lineHeight: 1.5 }}>
@@ -9856,10 +9856,10 @@ function ZasobnikSheet({ tasks, theme, onClose, onOtevriUkol, onUprav }) {
                       ...buttonStyle(), flex: 1, minWidth: 150, textAlign: "left",
                       background: "transparent", padding: 0,
                     }}>
-                    <span style={{ display: "block", fontSize: "14px", fontWeight: 600, color: theme.text }}>
+                    <span style={{ display: "block", fontSize: "14px", fontWeight: 500, color: theme.text }}>
                       {t.title}
                     </span>
-                    <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 3 }}>
+                    <span style={{ display: "block", fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginTop: 3 }}>
                       vrátí se {formatDate(t.showFrom)}
                       {dni > 0 && ` — za ${dni} ${dni === 1 ? "den" : dni < 5 ? "dny" : "dní"}`}
                       {t.osoba && ` · ${t.osoba}`}
@@ -9874,7 +9874,7 @@ function ZasobnikSheet({ tasks, theme, onClose, onOtevriUkol, onUprav }) {
                     aria-label={`Vrátit hned úkol ${t.title}`}
                     style={{
                       ...buttonStyle(), flex: "0 0 auto", padding: "7px 12px",
-                      fontSize: "12px", fontWeight: 600,
+                      fontSize: "12px", fontWeight: 500,
                       background: "transparent", color: theme.text,
                       border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
                     }}>Vrátit hned</button>
@@ -9996,7 +9996,7 @@ function RevizeSheet({ tasks, theme, onClose, onOtevriUkol, onUkazProsle }) {
             }}>{s.nadpis} · {s.polozky.length}</div>
             {/* Každá sekce říká, PROČ se na ni v pátek koukáš.
                 Bez toho je to jen další seznam. */}
-            <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 7 }}>{s.proc}</div>
+            <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginBottom: 7 }}>{s.proc}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               {s.polozky.slice(0, 8).map(({ t, popis }) => (
                 <button key={t.id}
@@ -10007,16 +10007,16 @@ function RevizeSheet({ tasks, theme, onClose, onOtevriUkol, onUkazProsle }) {
                     background: theme.card, border: `1px solid ${theme.cardBorder}`,
                     borderRadius: "9px", padding: "9px 11px",
                   }}>
-                  <span style={{ display: "block", fontSize: "13.5px", fontWeight: 600, color: theme.text }}>
+                  <span style={{ display: "block", fontSize: "13.5px", fontWeight: 500, color: theme.text }}>
                     {t.title}
                   </span>
-                  <span style={{ display: "block", fontSize: "11.5px", color: theme.textSub, marginTop: 2 }}>
+                  <span style={{ display: "block", fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginTop: 2 }}>
                     {popis}
                   </span>
                 </button>
               ))}
               {s.polozky.length > 8 && (
-                <div style={{ fontSize: "11.5px", color: theme.textSub, padding: "3px 2px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub, padding: "3px 2px" }}>
                   a další {s.polozky.length - 8}
                   {s.k === "lezi" && " — projdeš je v Protřídit"}
                 </div>
@@ -10283,7 +10283,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       background: item.done ? theme.green : "transparent",
                       cursor: "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      color: "#fff", fontSize: "12px", fontWeight: 800,
+                      color: "#fff", fontSize: "12px", fontWeight: 700,
                     }}>
                     {item.done && "✓"}
                   </button>
@@ -10346,7 +10346,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   marginTop: "4px",
                   background: `${theme.green}15`, color: theme.green,
                   border: `1px solid ${theme.green}30`,
-                  fontSize: "12px", fontWeight: 600,
+                  fontSize: "12px", fontWeight: 500,
                   display: "flex", alignItems: "center", justifyContent: "center", gap: "4px",
                 }}>
                 ✓ Splnit vše
@@ -10436,7 +10436,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   {task.status !== "deleted" && (
                     <button onClick={() => setIsEditing(true)} title="Upravit úkol" aria-label="Upravit úkol" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: theme.accentSoft, color: theme.accent,
                       border: `1px solid ${theme.accentBorder}`,
                       borderRadius: "12px",
@@ -10453,7 +10453,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       }
                     }} title="Archivovat úkol" aria-label="Archivovat úkol" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.accent}10`, color: theme.accent,
                       border: `1px solid ${theme.accent}30`,
                       borderRadius: "12px",
@@ -10466,7 +10466,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   {onConvertTaskToNote && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
                     <button onClick={() => onConvertTaskToNote(task)} title="Převést úkol na poznámku" aria-label="Převést úkol na poznámku" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
                       border: `1px solid ${theme.purple || "#a855f7"}30`,
                       borderRadius: "12px",
@@ -10478,7 +10478,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   {onDelete && task.status !== "deleted" && (
                     <button onClick={() => onDelete(task.id)} title="Smazat úkol" aria-label="Smazat úkol" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.red}08`, color: theme.red,
                       border: `1px solid ${theme.red}25`,
                       borderRadius: "12px",
@@ -10524,7 +10524,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                 }}>
                   <button onClick={() => setIsEditing(true)} title="Upravit úkol" aria-label="Upravit úkol" style={{
                     ...buttonStyle(),
-                    padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                    padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                     background: theme.accentSoft, color: theme.accent,
                     border: `1px solid ${theme.accentBorder}`,
                     borderRadius: "12px",
@@ -10540,7 +10540,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       }
                     }} title="Archivovat úkol" aria-label="Archivovat úkol" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.accent}10`, color: theme.accent,
                       border: `1px solid ${theme.accent}30`,
                       borderRadius: "12px",
@@ -10553,7 +10553,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   {task.createdBy === currentUser.name && (task.status === "active" || task.status === "in_progress" || task.status === "done") && (
                     <button onClick={() => onConvertTaskToNote && onConvertTaskToNote(task)} title="Převést úkol na poznámku" aria-label="Převést úkol na poznámku" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.purple || "#a855f7"}10`, color: theme.purple || "#a855f7",
                       border: `1px solid ${theme.purple || "#a855f7"}30`,
                       borderRadius: "12px",
@@ -10577,7 +10577,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                       title={`Odmítnout úkol — ${task.createdBy} se to dozví`}
                       style={{
                         ...buttonStyle(),
-                        padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                        padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                         background: `${theme.orange || "#f59e0b"}15`,
                         color: theme.orange || "#f59e0b",
                         border: `1px solid ${theme.orange || "#f59e0b"}40`,
@@ -10591,7 +10591,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   {onDelete && (
                     <button onClick={() => onDelete(task.id)} title="Smazat úkol" aria-label="Smazat úkol" style={{
                       ...buttonStyle(),
-                      padding: "5px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "5px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${theme.red}08`, color: theme.red,
                       border: `1px solid ${theme.red}25`,
                       borderRadius: "12px",
@@ -10657,7 +10657,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
           borderRadius: "8px", padding: "10px 12px", marginBottom: "10px",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <span style={{ fontSize: "13px", color: theme.green, fontWeight: 600 }}>
+          <span style={{ fontSize: "13px", color: theme.green, fontWeight: 500 }}>
             ✓ Checklist kompletní!
           </span>
           <button onClick={() => onStatusChange(task.id, task.assignTo === "both" ? "done_all" : "done")}
@@ -10676,7 +10676,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
         value={editTitle}
         onChange={e => setEditTitle(e.target.value)}
         style={{
-          ...inputStyle(theme), fontSize: "15px", fontWeight: 600,
+          ...inputStyle(theme), fontSize: "15px", fontWeight: 500,
           marginBottom: "6px", padding: "8px 10px",
         }}
       />
@@ -10744,7 +10744,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     title={`${priObj.label} (klikni pro změnu)`}
                     style={{
                       ...buttonStyle(),
-                      padding: "8px 14px", fontSize: "16px", fontWeight: 900,
+                      padding: "8px 14px", fontSize: "16px", fontWeight: 700,
                       background: isDefault ? "transparent" : priTheme.cardBg,
                       color: isDefault ? theme.textDim : priTheme.text,
                       border: `2px solid ${isDefault ? theme.inputBorder : priTheme.border}`,
@@ -10802,7 +10802,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                     }}
                     style={{
                       ...buttonStyle(),
-                      padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 500,
                       background: isSelected ? theme.accentSoft : theme.inputBg,
                       color: isSelected ? theme.accent : theme.textSub,
                       border: `1px solid ${isSelected ? theme.accentBorder : theme.inputBorder}`,
@@ -10823,7 +10823,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                   }}
                   style={{
                     ...buttonStyle(),
-                    padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                    padding: "6px 12px", fontSize: "12px", fontWeight: 500,
                     background: editAssignedTo?.length === users.length ? theme.accent : "transparent",
                     color: editAssignedTo?.length === users.length ? "#fff" : theme.textSub,
                     border: `1px dashed ${theme.inputBorder}`,
@@ -10947,7 +10947,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
                             setEditDueDate(target.toISOString().slice(0, 10));
                           }}
                           style={{
-                            padding: "6px 0", fontSize: "11px", fontWeight: 600,
+                            padding: "6px 0", fontSize: "11px", fontWeight: 500,
                             background: isSel ? theme.accent : "transparent",
                             color: isSel ? "#fff" : theme.text,
                             border: "none", borderRadius: "5px", cursor: "pointer",
@@ -11191,7 +11191,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               }
             }} style={{
               ...buttonStyle(),
-              padding: "6px 14px", fontSize: "12px", fontWeight: 600,
+              padding: "6px 14px", fontSize: "12px", fontWeight: 500,
               background: `${theme.accent}15`, color: theme.accent,
               border: `1px solid ${theme.accent}40`,
             }}>
@@ -11205,7 +11205,7 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
               }
             }} style={{
               ...buttonStyle(),
-              padding: "6px 14px", fontSize: "12px", fontWeight: 600,
+              padding: "6px 14px", fontSize: "12px", fontWeight: 500,
               background: `${theme.red}10`, color: theme.red,
               border: `1px solid ${theme.red}40`,
             }}>
@@ -11394,7 +11394,7 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
             {isUnseen && (
               <span style={{
                 position: "absolute", top: "-4px", right: "6px",
-                fontSize: "9px", fontWeight: 800, color: "#fff",
+                fontSize: "9px", fontWeight: 700, color: "#fff",
                 background: theme.purple,
                 padding: "1px 6px", borderRadius: "8px",
                 textTransform: "uppercase", letterSpacing: "0.4px",
@@ -12055,7 +12055,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         <span style={{
           position: "absolute", top: "7px", right: "9px",
           background: theme.green, color: "#fff",
-          fontSize: "8px", fontWeight: 800, padding: "2px 6px",
+          fontSize: "8px", fontWeight: 700, padding: "2px 6px",
           borderRadius: "4px", textTransform: "uppercase",
         }}>Nové</span>
       )}
@@ -12063,7 +12063,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
         <span style={{
           position: "absolute", top: "7px", right: isNew ? "50px" : "9px",
           background: theme.purple, color: "#fff",
-          fontSize: "8px", fontWeight: 800, padding: "2px 6px", borderRadius: "4px",
+          fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: "4px",
         }}>⚠ 7+d</span>
       )}
       {allChecked && !taskIsDone && (
@@ -12071,7 +12071,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
           position: "absolute", top: "7px",
           right: (isNew || forgotten) ? (isNew && forgotten ? "90px" : "50px") : "9px",
           background: theme.green, color: "#fff",
-          fontSize: "8px", fontWeight: 800, padding: "2px 6px", borderRadius: "4px",
+          fontSize: "8px", fontWeight: 700, padding: "2px 6px", borderRadius: "4px",
         }}>Vše ✓</span>
       )}
 
@@ -12198,7 +12198,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             /* Dřív 500, zatímco drobné odznaky kolem měly 700 —
                obsah byl lehčí než štítky. Teď je název nejtěžší
                věc na kartě a odznaky jsou na 500. */
-            fontSize: "14px", fontWeight: 600,
+            fontSize: "14px", fontWeight: 500,
             color: taskIsDone ? theme.textSub : theme.text,
             textDecoration: taskIsDone ? "line-through" : "none",
             opacity: taskIsDone ? 0.7 : 1,
@@ -12215,7 +12215,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {/* Priority symbol inline — only for important/urgent, no text. Hidden on progress cards. */}
             {!progressItem && task.priority && task.priority !== "low" && (
               <span style={{
-                fontWeight: 900, marginRight: "6px",
+                fontWeight: 700, marginRight: "6px",
                 color: priorityTheme.text,
                 fontSize: "15px",
               }}>
@@ -12392,7 +12392,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                     borderRadius: "2px", transition: "width 0.3s",
                   }} />
                 </span>
-                <span style={{ fontSize: "10px", color: theme.textSub, fontWeight: 600 }}>
+                <span style={{ fontSize: "10px", color: theme.textSub, fontWeight: 500 }}>
                   {checklistDone}/{checklistTotal}
                 </span>
               </span>
@@ -12447,7 +12447,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             {task.recDays > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>🔄</span>}
             {task.images?.length > 0 && <span style={{ fontSize: "10px", color: theme.textSub }}>📷</span>}
             {task.scratchPad?.length > 0 && (
-              <span style={{ fontSize: "10px", color: theme.accent, fontWeight: 600 }}>
+              <span style={{ fontSize: "10px", color: theme.accent, fontWeight: 500 }}>
                 📝 {task.scratchPad.length}
               </span>
             )}
@@ -12525,7 +12525,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
             })()}
             {/* Time trace for completed */}
             {taskIsDone && task.completedAt && (
-              <span style={{ fontSize: "10px", color: theme.green, fontWeight: 600 }}>
+              <span style={{ fontSize: "10px", color: theme.green, fontWeight: 500 }}>
                 ✓ {formatTimeTrace(task.completedAt)}{task.completedByUser ? ` — ${task.completedByUser}` : ""}
               </span>
             )}
@@ -12535,7 +12535,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
               const daysLeft = Math.max(0, Math.ceil(30 - ageDays));
               const isUrgent = daysLeft <= 7;
               return (
-                <span style={{ fontSize: "10px", color: theme.red, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: "10px", color: theme.red, fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 6 }}>
                   🗑 {formatTimeTrace(task.deletedAt)}
                   {daysLeft > 0 ? (
                     <span style={{
@@ -12544,7 +12544,7 @@ function TaskCard({ task, currentUser, users, onStatusChange, onMarkSeen, onUpda
                       background: isUrgent ? "rgba(239,68,68,0.1)" : theme.inputBg,
                       padding: "1px 6px",
                       borderRadius: 8,
-                      fontWeight: 600,
+                      fontWeight: 500,
                     }}>
                       {isUrgent ? "⏰ " : ""}smaže se za {daysLeft}{daysLeft === 1 ? " den" : daysLeft < 5 ? " dny" : " dní"}
                     </span>
@@ -13242,7 +13242,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                   onMouseEnter={() => setSlashIdx(mapaHits.length)}
                   style={{
                     padding: "8px 11px", fontSize: "12px", cursor: "pointer",
-                    color: theme.green, fontWeight: 600,
+                    color: theme.green, fontWeight: 500,
                     background: slashIdx === mapaHits.length ? theme.inputBg : "transparent",
                   }}>
                   + nový člověk „{mapaName}“
@@ -13391,7 +13391,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               background: theme.green, color: "#fff",
               border: `1px solid ${theme.green}`,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: "15px", fontWeight: 800, flexShrink: 0,
+              fontSize: "15px", fontWeight: 700, flexShrink: 0,
               animation: "fadeIn 0.15s",
             }}>
             ✓
@@ -13460,7 +13460,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               background: t.ok ? `${theme.green}15` : `${theme.red}15`,
               color: t.ok ? theme.green : theme.red,
               border: `1px solid ${t.ok ? theme.green : theme.red}40`,
-              fontWeight: 600,
+              fontWeight: 500,
               fontFamily: FONT,
             }}>
               {t.ok ? "✓" : "⚠"} {t.raw}
@@ -13504,7 +13504,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               borderRadius: "4px",
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
               fontSize: "11px",
-              fontWeight: 600,
+              fontWeight: 500,
               color: theme.accent,
               whiteSpace: "nowrap",
             };
@@ -13642,7 +13642,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             padding: "6px 0",
           }}>
             <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              fontSize: "9px", fontWeight: 700, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.4px",
               marginBottom: "5px", padding: "0 2px",
               display: "flex", alignItems: "center", gap: "5px",
@@ -13665,7 +13665,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
                 background: theme.inputBg, color: theme.textSub,
                 border: `1px solid ${theme.inputBorder}`,
-                borderRadius: "12px", fontWeight: 600,
+                borderRadius: "12px", fontWeight: 500,
                 display: "inline-flex", gap: "4px", alignItems: "center",
               }}>
                 <span>{v.emoji}</span>
@@ -13680,7 +13680,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
                 background: theme.inputBg, color: theme.textSub,
                 border: `1px solid ${theme.inputBorder}`,
-                borderRadius: "12px", fontWeight: 600,
+                borderRadius: "12px", fontWeight: 500,
                 display: "inline-flex", gap: "4px", alignItems: "center",
                 maxWidth: "200px",
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -13714,7 +13714,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           animation: "slideUp 0.15s",
         };
         const popoverHeader = {
-          fontSize: "10px", fontWeight: 800, color: theme.textMid,
+          fontSize: "10px", fontWeight: 700, color: theme.textMid,
           textTransform: "uppercase", letterSpacing: "0.4px",
           marginBottom: "8px",
           paddingBottom: "6px",
@@ -13799,7 +13799,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             position: "relative",
           }}>
             <div style={{
-              fontSize: "9px", fontWeight: 800, color: theme.textMid,
+              fontSize: "9px", fontWeight: 700, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.4px",
               marginBottom: "3px", padding: "0 2px",
               display: "flex", alignItems: "center", gap: "5px",
@@ -13863,7 +13863,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                         onClick={() => { setDueDate(opt.value); setOpenSegment(null); }}
                         style={{
                           ...buttonStyle(),
-                          padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                          padding: "8px 10px", fontSize: "12px", fontWeight: 500,
                           background: isSel ? theme.accentSoft : "transparent",
                           color: isSel ? theme.accent : theme.text,
                           border: "none", textAlign: "left", borderRadius: "6px",
@@ -13906,7 +13906,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                         }}
                         style={{
                           ...buttonStyle(),
-                          padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                          padding: "8px 10px", fontSize: "12px", fontWeight: 500,
                           background: isSel ? theme.accentSoft : "transparent",
                           color: isSel ? theme.accent : theme.text,
                           border: "none", textAlign: "left", borderRadius: "6px",
@@ -13929,7 +13929,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 <button type="button" onClick={() => setOpenSegment(null)}
                   style={{
                     ...buttonStyle(), width: "100%",
-                    padding: "8px", fontSize: "12px", fontWeight: 600,
+                    padding: "8px", fontSize: "12px", fontWeight: 500,
                     background: theme.accent, color: "#fff",
                     border: "none", borderRadius: "6px", marginTop: "6px",
                   }}>Zavřít</button>
@@ -13945,7 +13945,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     onClick={() => { setQuickCategory(null); setOpenSegment(null); }}
                     style={{
                       ...buttonStyle(),
-                      padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                      padding: "8px 10px", fontSize: "12px", fontWeight: 500,
                       background: !quickCategory ? theme.accentSoft : "transparent",
                       color: !quickCategory ? theme.accent : theme.text,
                       border: "none", textAlign: "left", borderRadius: "6px",
@@ -13962,7 +13962,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                         onClick={() => { setQuickCategory(cat.id); setOpenSegment(null); }}
                         style={{
                           ...buttonStyle(),
-                          padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                          padding: "8px 10px", fontSize: "12px", fontWeight: 500,
                           background: isSel ? theme.accentSoft : "transparent",
                           color: isSel ? theme.accent : theme.text,
                           border: "none", textAlign: "left", borderRadius: "6px",
@@ -13979,7 +13979,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     <div style={{
                       margin: "6px 0 4px", paddingTop: "6px",
                       borderTop: `1px solid ${theme.cardBorder}`,
-                      fontSize: "9px", fontWeight: 800, color: theme.textMid,
+                      fontSize: "9px", fontWeight: 700, color: theme.textMid,
                       textTransform: "uppercase", letterSpacing: "0.4px",
                       paddingLeft: "8px",
                     }}>Vlastní seznamy</div>
@@ -13992,7 +13992,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                         onClick={() => { setQuickCategory(v); setOpenSegment(null); }}
                         style={{
                           ...buttonStyle(),
-                          padding: "8px 10px", fontSize: "12px", fontWeight: 600,
+                          padding: "8px 10px", fontSize: "12px", fontWeight: 500,
                           background: isSel ? `${list.color}20` : "transparent",
                           color: isSel ? list.color : theme.text,
                           border: "none", textAlign: "left", borderRadius: "6px",
@@ -14008,7 +14008,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     onClick={() => { onCreateList && onCreateList(); setOpenSegment(null); }}
                     style={{
                       ...buttonStyle(),
-                      padding: "8px 10px", fontSize: "11px", fontWeight: 600,
+                      padding: "8px 10px", fontSize: "11px", fontWeight: 500,
                       background: "transparent", color: theme.accent,
                       border: `1px dashed ${theme.accent}50`,
                       borderRadius: "6px", textAlign: "left",
@@ -14055,7 +14055,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               border: `2px solid ${theme.accent}30`,
             }}>
               <div style={{
-                ...labelStyle, fontSize: "10px", fontWeight: 800,
+                ...labelStyle, fontSize: "10px", fontWeight: 700,
                 color: theme.accent, textTransform: "uppercase",
                 letterSpacing: "0.5px", marginBottom: "5px",
                 display: "flex", alignItems: "center", gap: "4px",
@@ -14071,7 +14071,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 autoFocus
                 style={{
                   ...inputStyle(theme),
-                  fontSize: "15px", fontWeight: 600,
+                  fontSize: "15px", fontWeight: 500,
                   background: theme.card,
                   border: `1px solid ${theme.accent}40`,
                   padding: "10px 12px",
@@ -14099,7 +14099,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               border: `2px solid ${theme.purple}40`,
             }}>
               <div style={{
-                ...labelStyle, fontSize: "10px", fontWeight: 800,
+                ...labelStyle, fontSize: "10px", fontWeight: 700,
                 color: theme.purple, textTransform: "uppercase",
                 letterSpacing: "0.5px", marginBottom: "8px",
                 display: "flex", alignItems: "center", gap: "4px",
@@ -14229,7 +14229,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     onClick={() => setRecurrence(r.value)}
                     style={{
                       ...buttonStyle(),
-                      padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                      padding: "5px 10px", fontSize: "11px", fontWeight: 500,
                       background: isSel ? theme.accent : theme.inputBg,
                       color: isSel ? "#fff" : theme.textSub,
                       border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
@@ -14370,7 +14370,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                               color: isSel ? "#fff" : theme.text,
                               border: isTodayCell && !isSel ? `1px solid ${theme.accent}` : `1px solid transparent`,
                               borderRadius: "6px",
-                              fontSize: "11px", fontWeight: isSel ? 800 : 600,
+                              fontSize: "11px", fontWeight: isSel ? 700 : 500,
                               cursor: "pointer",
                             }}>
                             {d}
@@ -14398,7 +14398,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", marginBottom: "4px" }}>
               {quickDates.map(qd => (
                 <button key={qd.label} onClick={() => setDueDate(qd.value)} style={{
-                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 500,
                   background: dueDate === qd.value ? theme.accent : theme.inputBg,
                   color: dueDate === qd.value ? "#fff" : theme.textSub,
                   border: `1px solid ${dueDate === qd.value ? theme.accent : theme.inputBorder}`,
@@ -14436,7 +14436,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                     if (shifted) setDueDate(shifted);
                   }
                 }} style={{
-                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                  ...buttonStyle(), padding: "5px 10px", fontSize: "11px", fontWeight: 500,
                   background: showFrom === sf.value ? theme.accent : theme.inputBg,
                   color: showFrom === sf.value ? "#fff" : theme.textSub,
                   border: `1px solid ${showFrom === sf.value ? theme.accent : theme.inputBorder}`,
@@ -14608,7 +14608,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
           <div style={{
             padding: "10px", borderRadius: "6px",
             background: `${theme.yellow}15`, color: theme.yellow,
-            fontSize: "11px", fontWeight: 600, border: `1px solid ${theme.yellow}40`,
+            fontSize: "11px", fontWeight: 500, border: `1px solid ${theme.yellow}40`,
           }}>
             🔒 Tento seznam vytvořil/a {editingList.created_by_user}, můžeš ho jen vidět.
           </div>
@@ -14691,7 +14691,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 background: isShared ? `${color}15` : theme.inputBg,
                 color: isShared ? color : theme.text,
                 border: `1px solid ${isShared ? color : theme.cardBorder}`,
-                fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
+                fontWeight: 500, opacity: (isEditing && !canEdit) ? 0.5 : 1,
               }}>👥 Sdílený — vidí všichni v rodině</button>
             <button type="button" onClick={() => {
               if (isEditing && !canEdit) return;
@@ -14704,7 +14704,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 background: !isShared ? `${color}15` : theme.inputBg,
                 color: !isShared ? color : theme.text,
                 border: `1px solid ${!isShared ? color : theme.cardBorder}`,
-                fontWeight: 600, opacity: (isEditing && !canEdit) ? 0.5 : 1,
+                fontWeight: 500, opacity: (isEditing && !canEdit) ? 0.5 : 1,
               }}>🔒 Soukromý — jen já</button>
           </div>
         </div>
@@ -14765,7 +14765,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 disabled={saving}
                 style={{
                   ...buttonStyle(),
-                  padding: "12px", fontSize: "12px", fontWeight: 600,
+                  padding: "12px", fontSize: "12px", fontWeight: 500,
                   background: theme.inputBg, color: theme.text,
                   border: `1px solid ${theme.inputBorder}`, borderRadius: "8px",
                   textAlign: "left",
@@ -14784,7 +14784,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 if (otherLists.length === 0) return null;
                 return (
                   <div>
-                    <div style={{ fontSize: "11px", fontWeight: 600, color: theme.textMid, marginBottom: "5px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 500, color: theme.textMid, marginBottom: "5px" }}>
                       ↪ Přesunout do jiného seznamu:
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
@@ -14794,7 +14794,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                           disabled={saving}
                           style={{
                             ...buttonStyle(),
-                            padding: "6px 10px", fontSize: "11px", fontWeight: 600,
+                            padding: "6px 10px", fontSize: "11px", fontWeight: 500,
                             background: `${list.color}15`, color: list.color,
                             border: `1px solid ${list.color}40`, borderRadius: "10px",
                           }}>
@@ -14815,7 +14815,7 @@ function CreateListModal({ theme, currentUser, onClose, onCreate, onUpdate, onDe
                 disabled={saving}
                 style={{
                   ...buttonStyle(),
-                  padding: "12px", fontSize: "12px", fontWeight: 600,
+                  padding: "12px", fontSize: "12px", fontWeight: 500,
                   background: `${theme.red}10`, color: theme.red,
                   border: `1px solid ${theme.red}40`, borderRadius: "8px",
                   textAlign: "left",
@@ -14878,7 +14878,7 @@ function MoreFiltersSheet({
 
   const chipStyle = (active, color) => ({
     ...buttonStyle(),
-    padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+    padding: "6px 12px", fontSize: "12px", fontWeight: 500,
     background: active ? `${color}15` : "transparent",
     color: active ? color : theme.text,
     border: `1px solid ${active ? color : theme.inputBorder}`,
@@ -14886,7 +14886,7 @@ function MoreFiltersSheet({
   });
 
   const sectionLabel = {
-    fontSize: "11px", fontWeight: 800, color: theme.accent,
+    fontSize: "11px", fontWeight: 700, color: theme.accent,
     textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
   };
   const sectionStyle = {
@@ -14944,7 +14944,7 @@ function MoreFiltersSheet({
                   }}>
                     <div style={{
                       ...buttonStyle(),
-                      padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                      padding: "6px 12px", fontSize: "12px", fontWeight: 500,
                       background: `${list.color}15`, color: list.color,
                       border: `1px solid ${list.color}40`,
                       borderRadius: isOwner ? "12px 0 0 12px" : "12px",
@@ -14972,7 +14972,7 @@ function MoreFiltersSheet({
               <button onClick={() => { onClose(); onCreateList && onCreateList(); }}
                 style={{
                   ...buttonStyle(),
-                  padding: "6px 12px", fontSize: "12px", fontWeight: 600,
+                  padding: "6px 12px", fontSize: "12px", fontWeight: 500,
                   background: theme.inputBg, color: theme.accent,
                   border: `1px dashed ${theme.accent}50`, borderRadius: "12px",
                 }}>+ Vytvořit nový</button>
@@ -15074,7 +15074,7 @@ function MoreFiltersSheet({
               onCreatedByFilterChange("all");
             }} style={{
               ...buttonStyle(),
-              padding: "10px", fontSize: "12px", fontWeight: 600,
+              padding: "10px", fontSize: "12px", fontWeight: 500,
               background: `${theme.red}10`, color: theme.red,
               border: `1px solid ${theme.red}40`, borderRadius: "8px",
               marginTop: "4px",
@@ -15218,7 +15218,7 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
             border: `1px solid ${theme.inputBorder}`,
           }}>›</button>
           <button onClick={goToday} style={{
-            ...buttonStyle(), padding: "6px 10px", fontSize: "11px", fontWeight: 600,
+            ...buttonStyle(), padding: "6px 10px", fontSize: "11px", fontWeight: 500,
             background: theme.accentSoft, color: theme.accent,
             border: `1px solid ${theme.accentBorder}`,
           }}>Dnes</button>
@@ -15273,7 +15273,7 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
                   borderRadius: "8px",
                   display: "flex", flexDirection: "column",
                   alignItems: "center", justifyContent: "flex-start",
-                  fontSize: "13px", fontWeight: isToday ? 800 : 600,
+                  fontSize: "13px", fontWeight: isToday ? 700 : 500,
                   cursor: "pointer",
                   position: "relative",
                   paddingTop: "4px",
@@ -15358,7 +15358,7 @@ function CalendarSheet({ tasks, currentUser, theme, onClose, onNavigate }) {
                   onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
                   onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
                   <div style={{
-                    fontSize: "13px", fontWeight: 600, color: theme.text,
+                    fontSize: "13px", fontWeight: 500, color: theme.text,
                     textDecoration: isDone(t) ? "line-through" : "none",
                   }}>
                     {isDone(t) && "✓ "}
@@ -15522,13 +15522,13 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
         <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" }}>
           <div style={{ display: "flex", gap: "2px", background: theme.inputBg, padding: "2px", borderRadius: "8px" }}>
             <button onClick={() => setViewMode("month")} style={{
-              padding: "4px 10px", fontSize: "12px", fontWeight: 600,
+              padding: "4px 10px", fontSize: "12px", fontWeight: 500,
               background: viewMode === "month" ? theme.accent : "transparent",
               color: viewMode === "month" ? "#fff" : theme.textMid,
               border: "none", borderRadius: "6px", cursor: "pointer", fontFamily: FONT,
             }}>Měsíc</button>
             <button onClick={() => setViewMode("week")} style={{
-              padding: "4px 10px", fontSize: "12px", fontWeight: 600,
+              padding: "4px 10px", fontSize: "12px", fontWeight: 500,
               background: viewMode === "week" ? theme.accent : "transparent",
               color: viewMode === "week" ? "#fff" : theme.textMid,
               border: "none", borderRadius: "6px", cursor: "pointer", fontFamily: FONT,
@@ -15548,7 +15548,7 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
             background: theme.inputBg, color: theme.text, border: `1px solid ${theme.cardBorder}`,
           }}>›</button>
           <button onClick={() => { setCurrentDate(new Date()); setSelectedDate(null); }} style={{
-            ...buttonStyle(), padding: "4px 10px", fontSize: "11px", fontWeight: 600,
+            ...buttonStyle(), padding: "4px 10px", fontSize: "11px", fontWeight: 500,
             background: theme.accentSoft, color: theme.accent, border: `1px solid ${theme.accentBorder}`,
           }}>Dnes</button>
         </div>
@@ -15603,7 +15603,7 @@ function CalendarSheetV2({ tasks, reminders, currentUser, theme, onClose, onOpen
                     fontSize: "12px",
                     opacity: isOtherMonth ? 0.55 : 1,
                   }}>
-                    <span style={{ fontWeight: isToday ? 800 : 500 }}>{day.getDate()}</span>
+                    <span style={{ fontWeight: isToday ? 700 : 500 }}>{day.getDate()}</span>
                     {totalCount > 0 && (
                       <div style={{ display: "flex", gap: "2px", marginTop: "auto", flexWrap: "wrap", justifyContent: "center" }}>
                         {items.tasks.length > 0 && (
@@ -15909,7 +15909,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
           {/* DNES */}
           <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
             <div style={{
-              fontSize: "10px", fontWeight: 800, color: theme.textMid,
+              fontSize: "10px", fontWeight: 700, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px",
             }}>🎯 Dnes</div>
             {dayTotal > 0 ? (
@@ -15924,7 +15924,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
                     transition: "width 0.4s",
                   }} />
                 </div>
-                <div style={{ fontSize: "20px", fontWeight: 800, color: theme.text }}>
+                <div style={{ fontSize: "20px", fontWeight: 700, color: theme.text }}>
                   {dayDone}/{dayTotal}
                   <span style={{ fontSize: "14px", fontWeight: 500, color: theme.textSub, marginLeft: "8px" }}>
                     ({Math.round(dayDone / dayTotal * 100)}%)
@@ -15941,10 +15941,10 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
           {/* TÝDEN */}
           <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
             <div style={{
-              fontSize: "10px", fontWeight: 800, color: theme.textMid,
+              fontSize: "10px", fontWeight: 700, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px",
             }}>📊 Tento týden</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: theme.green, lineHeight: 1 }}>
+            <div style={{ fontSize: "28px", fontWeight: 700, color: theme.green, lineHeight: 1 }}>
               {doneThisWeek}
               {weekAvg !== null && (
                 <span style={{ fontSize: "16px", fontWeight: 500, color: theme.textSub }}>
@@ -15970,7 +15970,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
           {dayOfWeekCounts.some(c => c > 0) && (
             <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
               <div style={{
-                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                fontSize: "10px", fontWeight: 700, color: theme.textMid,
                 textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
               }}>📅 Aktivita per den (4 týdny)</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
@@ -15981,7 +15981,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
                   return (
                     <div key={day} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <span style={{
-                        width: "24px", fontSize: "11px", fontWeight: 600,
+                        width: "24px", fontSize: "11px", fontWeight: 500,
                         color: isBest ? theme.green : theme.text,
                       }}>{day}</span>
                       <div style={{
@@ -16018,7 +16018,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
           {topTags.length > 0 && (
             <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
               <div style={{
-                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                fontSize: "10px", fontWeight: 700, color: theme.textMid,
                 textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
               }}>🏷 Tvůj mix (tento týden)</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -16039,7 +16039,7 @@ function StatsSheet({ tasks, currentUser, users, theme, onClose }) {
           {currentUser.admin && perUserWeek.length > 1 && (
             <div style={{ ...cardStyle(theme), padding: "12px 14px" }}>
               <div style={{
-                fontSize: "10px", fontWeight: 800, color: theme.textMid,
+                fontSize: "10px", fontWeight: 700, color: theme.textMid,
                 textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px",
               }}>👥 Per osoba (tento týden)</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -16422,7 +16422,7 @@ function PersonPicker({ owner, theme, onPick, onCancel, autoFocus = true, initia
             onMouseEnter={() => setIdx(hits.length)}
             style={{
               padding: "8px 11px", fontSize: "12px", cursor: "pointer",
-              color: looksLikeSentence(text) ? theme.yellow : theme.green, fontWeight: 600,
+              color: looksLikeSentence(text) ? theme.yellow : theme.green, fontWeight: 500,
               background: idx === hits.length ? theme.inputBg : "transparent",
             }}>
             + nový člověk „{text.trim()}“
@@ -16707,7 +16707,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
     background: active ? theme.accentSoft : "transparent",
     border: `1px solid ${active ? theme.accentBorder : theme.cardBorder}`,
     color: active ? theme.accent : theme.textSub,
-    padding: "3px 10px", fontSize: "11px", fontWeight: 600, borderRadius: 12,
+    padding: "3px 10px", fontSize: "11px", fontWeight: 500, borderRadius: 12,
   });
 
   const openPerson = (p) => setOpen({
@@ -16736,13 +16736,13 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
             style={{
               background: theme.accentSoft, border: `1px solid ${theme.accentBorder}`,
               color: theme.accent, padding: "1px 7px", borderRadius: "10px",
-              fontWeight: 600, cursor: "pointer",
+              fontWeight: 500, cursor: "pointer",
             }}><Zvyrazneno text={r.person_name} dotaz={query} theme={theme} /></span>
         ) : (
           <button onClick={() => setAssigning(assigning === r.id ? null : r.id)} style={{
             ...buttonStyle(), background: "transparent",
             border: `1px dashed ${theme.yellow}88`, color: theme.yellow,
-            padding: "1px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600,
+            padding: "1px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 500,
           }}>+ kdo to řekl?</button>
         )}
         {(r.tags || []).map(t => (
@@ -16930,13 +16930,13 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                       display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
                     }}>
                       <span onClick={() => openPerson({ id: d.a_id, name: d.a_name })}
-                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 500 }}>
                         {d.a_name}
                       </span>
                       <span style={{ color: theme.textMid }}>({d.a_count})</span>
                       <span style={{ color: theme.textMid }}>↔</span>
                       <span onClick={() => openPerson({ id: d.b_id, name: d.b_name })}
-                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                        style={{ color: theme.accent, cursor: "pointer", fontWeight: 500 }}>
                         {d.b_name}
                       </span>
                       <span style={{ color: theme.textMid }}>({d.b_count})</span>
@@ -17028,7 +17028,7 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                   ...buttonStyle(), width: "100%", marginTop: 4,
                   background: "transparent", color: theme.accent,
                   border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
-                  padding: "8px 0", fontSize: "12px", fontWeight: 600,
+                  padding: "8px 0", fontSize: "12px", fontWeight: 500,
                 }}>Načíst dalších 50</button>
               )}
               {tab === "vse" && !query.trim() && facts.length >= visible && (
@@ -17302,7 +17302,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                 <>
                   <span>představil
                     <span onClick={() => onOpenPerson?.({ id: person.introduced_by, name: person.introduced_name })}
-                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 500 }}>
                       {" "}{person.introduced_name}
                     </span>
                   </span>
@@ -17335,7 +17335,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                   <span key={p.id}>
                     {i > 0 && ", "}
                     <span onClick={() => onOpenPerson?.(p)}
-                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 600 }}>
+                      style={{ color: theme.accent, cursor: "pointer", fontWeight: 500 }}>
                       {p.name}
                     </span>
                   </span>
@@ -17659,7 +17659,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
     }}>
       <span style={{ fontSize: 14 }}>{icon}</span>
       <span style={{
-        fontSize: 11, fontWeight: 800, color: color,
+        fontSize: 11, fontWeight: 700, color: color,
         textTransform: "uppercase", letterSpacing: "0.5px",
         flex: 1,
       }}>{text}</span>
@@ -17718,7 +17718,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
             borderBottom: `1px solid ${theme.cardBorder}`,
             fontSize: "11px", color: theme.textMid, lineHeight: 1.6,
           }}>
-            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.textSub }}>💡 Smart query — hledá jen v úkolech</div>
+            <div style={{ fontWeight: 500, marginBottom: 4, color: theme.textSub }}>💡 Smart query — hledá jen v úkolech</div>
             <div>Pro hledání v poznámkách/připomínkách napiš obyčejný text.</div>
           </div>
         )}
@@ -17742,7 +17742,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
             </div>
           ) : (
             <>
-              <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 600 }}>
+              <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: "8px", fontWeight: 500 }}>
                 {totalResults} {totalResults === 1 ? "výsledek" : totalResults < 5 ? "výsledky" : "výsledků"}
               </div>
 
@@ -17766,7 +17766,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                             {"  "}{z.kod}
                           </span>
                         </div>
-                        <div style={{ fontSize: "11.5px", color: theme.textSub }}>
+                        <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub }}>
                           {[z.mesto, z.cena ? (z.cena / 1e6).toFixed(1).replace(".", ",") + " mil" : null]
                             .filter(Boolean).join(" · ")}
                         </div>
@@ -17861,7 +17861,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                         }}
                         onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
                         onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
-                        <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text,
+                        <div style={{ fontSize: "13px", fontWeight: 500, color: theme.text,
                           textDecoration: isDeleted(t) ? "line-through" : "none",
                           opacity: isDeleted(t) ? 0.6 : isDone(t) ? 0.75 : 1,
                         }}>
@@ -17903,14 +17903,14 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                         <div style={{ fontSize: "10px", color: theme.textMid, display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
                           {isDeleted(t) && (
                             <span style={{
-                              fontSize: "9px", fontWeight: 800, color: theme.red,
+                              fontSize: "9px", fontWeight: 700, color: theme.red,
                               background: `${theme.red}15`, padding: "1px 5px", borderRadius: "4px",
                               textTransform: "uppercase", letterSpacing: "0.3px",
                             }}>Koš</span>
                           )}
                           {!isDeleted(t) && isDone(t) && (
                             <span style={{
-                              fontSize: "9px", fontWeight: 800, color: theme.green,
+                              fontSize: "9px", fontWeight: 700, color: theme.green,
                               background: `${theme.green}15`, padding: "1px 5px", borderRadius: "4px",
                               textTransform: "uppercase", letterSpacing: "0.3px",
                             }}>Splněné</span>
@@ -17976,7 +17976,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                         }}
                         onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
                         onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: theme.text,
+                        <div style={{ fontSize: 13, fontWeight: 500, color: theme.text,
                           textDecoration: r.dismissedAt ? "line-through" : "none",
                           opacity: r.dismissedAt ? 0.6 : 1,
                         }}>
@@ -18017,7 +18017,7 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                           }}
                           onMouseEnter={(e) => e.currentTarget.style.background = theme.inputBg}
                           onMouseLeave={(e) => e.currentTarget.style.background = theme.card}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: theme.text }}>
                             {n.pinned && "📌 "}
                             {n.isShared && "👥 "}
                             {n.title ? highlight(n.title, query) : <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
@@ -18148,7 +18148,7 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
         {/* DNES */}
         <div>
           <div style={{
-            fontSize: "9px", fontWeight: 800, color: theme.textMid,
+            fontSize: "9px", fontWeight: 700, color: theme.textMid,
             textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px",
           }}>🎯 Dnes</div>
           {dayTotal > 0 ? (
@@ -18190,10 +18190,10 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
         {/* TÝDEN */}
         <div style={{ textAlign: "right" }}>
           <div style={{
-            fontSize: "9px", fontWeight: 800, color: theme.textMid,
+            fontSize: "9px", fontWeight: 700, color: theme.textMid,
             textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px",
           }}>📊 Tento týden</div>
-          <div style={{ fontSize: "18px", fontWeight: 800, color: theme.green, lineHeight: 1 }}>
+          <div style={{ fontSize: "18px", fontWeight: 700, color: theme.green, lineHeight: 1 }}>
             {doneThisWeekByMe}
             {weekTarget && (
               <span style={{ fontSize: "12px", fontWeight: 500, color: theme.textSub }}>
@@ -18244,12 +18244,12 @@ function StatsBar({ tasks, currentUser, users, theme, onStatClick, activeStatId 
                 display: "flex", alignItems: "center", justifyContent: "center", gap: "3px",
               }}>
                 <span>{card.icon}</span>
-                <span style={{ fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.2px" }}>
+                <span style={{ fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.2px" }}>
                   {card.label}
                 </span>
               </div>
               <div style={{
-                fontSize: "16px", fontWeight: 800, color: card.color, marginTop: "2px",
+                fontSize: "16px", fontWeight: 700, color: card.color, marginTop: "2px",
               }}>{card.value}</div>
             </button>
           );
@@ -18474,7 +18474,7 @@ function AuthLoginScreen({ themeName, onSignedIn }) {
                   background: zap ? theme.accentSoft : "transparent",
                   border: `1px solid ${zap ? theme.accentBorder : theme.cardBorder}`,
                   color: zap ? theme.accent : theme.textSub,
-                  fontWeight: zap ? 700 : 600,
+                  fontWeight: zap ? 700 : 500,
                 }}>{v.t}</button>
             );
           })}
@@ -18555,7 +18555,7 @@ function LoginScreen({ users, onLogin, themeName }) {
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {users.map(u => (
               <button key={u.name} onClick={() => setSelected(u.name)} style={{
-                ...cardStyle(theme), padding: "16px", fontSize: "16px", fontWeight: 600,
+                ...cardStyle(theme), padding: "16px", fontSize: "16px", fontWeight: 500,
                 color: theme.text, cursor: "pointer", fontFamily: FONT, textAlign: "left",
                 display: "flex", alignItems: "center", justifyContent: "space-between",
               }}>
@@ -18566,7 +18566,7 @@ function LoginScreen({ users, onLogin, themeName }) {
           </div>
         ) : (
           <div style={{ animation: "slideUp 0.2s" }}>
-            <div style={{ fontSize: "16px", fontWeight: 600, marginBottom: "16px" }}>{selected}</div>
+            <div style={{ fontSize: "16px", fontWeight: 500, marginBottom: "16px" }}>{selected}</div>
             <input placeholder="PIN" value={pin}
               onChange={e => { if (/^\d{0,4}$/.test(e.target.value)) { setPin(e.target.value); setError(false); } }}
               onKeyDown={e => e.key === "Enter" && pin.length === 4 && tryLogin()}
@@ -18840,7 +18840,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
         padding: "40px 20px", textAlign: "center",
       }}>
         <div style={{ fontSize: "72px", marginBottom: "16px" }}>🎉</div>
-        <div style={{ fontSize: "22px", fontWeight: 800, color: theme.text, marginBottom: "8px" }}>
+        <div style={{ fontSize: "22px", fontWeight: 700, color: theme.text, marginBottom: "8px" }}>
           Všechno hotovo na dnes!
         </div>
         <div style={{ fontSize: "14px", color: theme.textSub, marginBottom: "24px" }}>
@@ -18958,7 +18958,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
           <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
             {(currentTask.priority === "urgent" || currentTask.priority === "important") && (
               <span style={{
-                fontSize: "11px", fontWeight: 800,
+                fontSize: "11px", fontWeight: 700,
                 color: priTheme.text, background: priTheme.bg,
                 padding: "3px 10px", borderRadius: "12px",
                 border: `1px solid ${priTheme.border}`,
@@ -18968,7 +18968,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
             )}
             {currentTask.dueDate && (
               <span style={{
-                fontSize: "11px", fontWeight: 600,
+                fontSize: "11px", fontWeight: 500,
                 color: overdue ? theme.red : theme.textSub,
                 background: overdue ? `${theme.red}10` : theme.inputBg,
                 padding: "3px 10px", borderRadius: "12px",
@@ -19000,7 +19000,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
 
           {/* Title */}
           <div style={{
-            fontSize: "22px", fontWeight: 800, color: theme.text,
+            fontSize: "22px", fontWeight: 700, color: theme.text,
             lineHeight: 1.3, marginBottom: "10px",
           }}>
             {currentTask.title}
@@ -19053,7 +19053,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
                           border: `2px solid ${item.done ? theme.green : theme.textDim}`,
                           background: item.done ? theme.green : "transparent",
                           display: "flex", alignItems: "center", justifyContent: "center",
-                          color: "#fff", fontSize: "14px", fontWeight: 800,
+                          color: "#fff", fontSize: "14px", fontWeight: 700,
                           cursor: "pointer",
                         }}>
                         {item.done && "✓"}
@@ -19136,7 +19136,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
                   display: "flex", gap: "8px", alignItems: "flex-start",
                 }}>
                   <span style={{
-                    fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                    fontSize: "10px", color: theme.textMid, fontWeight: 500,
                     whiteSpace: "nowrap", marginTop: "2px",
                   }}>
                     {formatTimeTrace(entry.createdAt)}
@@ -19212,7 +19212,7 @@ function FocusMode({ tasks, currentUser, users, comments, theme, onClose, onUpda
           ✓ Hotovo
         </button>
         <button onClick={() => setShowParkModal(true)} style={{
-          ...buttonStyle(), padding: "12px 14px", fontSize: "13px", fontWeight: 600,
+          ...buttonStyle(), padding: "12px 14px", fontSize: "13px", fontWeight: 500,
           background: `${theme.yellow}20`, color: theme.yellow,
           border: `1px solid ${theme.yellow}40`,
         }}>
@@ -19333,7 +19333,7 @@ function FaqPanel({ theme, onClose }) {
     borderRadius: "4px",
     fontFamily: "ui-monospace, monospace",
     fontSize: "11px",
-    fontWeight: 600,
+    fontWeight: 500,
     color: theme.accent,
   };
   const h3 = { fontSize: "13px", fontWeight: 700, color: theme.text, margin: "14px 0 6px" };
@@ -19382,7 +19382,7 @@ function FaqPanel({ theme, onClose }) {
             return (
               <button key={s.key} onClick={() => setActiveSection(s.key)} style={{
                 ...buttonStyle(),
-                padding: "5px 10px", fontSize: "11px", fontWeight: 600,
+                padding: "5px 10px", fontSize: "11px", fontWeight: 500,
                 background: isActive ? theme.accent : "transparent",
                 color: isActive ? "#fff" : theme.textMid,
                 border: `1px solid ${isActive ? theme.accent : theme.cardBorder}`,
@@ -19707,7 +19707,7 @@ function CustomDialog({ dialog, theme }) {
               color: opt.color ? (colorMap[opt.color] || theme.accent) : theme.text,
               border: `1px solid ${opt.color ? `${colorMap[opt.color] || theme.accent}40` : theme.cardBorder}`,
               borderRadius: "10px",
-              fontSize: "14px", fontWeight: 600,
+              fontSize: "14px", fontWeight: 500,
               cursor: "pointer", fontFamily: FONT,
               textAlign: "left",
               display: "flex", flexDirection: "column", gap: "2px",
@@ -19960,7 +19960,7 @@ function FolderManagerPanel({
         {/* Default kategorie */}
         <div style={{ marginBottom: "20px" }}>
           <div style={{
-            fontSize: "11px", fontWeight: 800, color: theme.textMid,
+            fontSize: "11px", fontWeight: 700, color: theme.textMid,
             textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
           }}>
             Výchozí kategorie ({orderedCategories.length - hiddenCategories.length}/{orderedCategories.length})
@@ -20000,7 +20000,7 @@ function FolderManagerPanel({
         {orderedLists.length > 0 && (
           <div style={{ marginBottom: "20px" }}>
             <div style={{
-              fontSize: "11px", fontWeight: 800, color: theme.textMid,
+              fontSize: "11px", fontWeight: 700, color: theme.textMid,
               textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: "8px",
             }}>
               Vlastní složky ({orderedLists.length - hiddenLists.length}/{orderedLists.length})
@@ -20074,7 +20074,7 @@ function FolderManagerPanel({
             🔄 Vrátit výchozí stav
           </button>
           <button onClick={onClose} style={{
-            padding: "8px 14px", fontSize: "12px", fontWeight: 600,
+            padding: "8px 14px", fontSize: "12px", fontWeight: 500,
             background: theme.accent, color: "white",
             border: "none", borderRadius: "8px", cursor: "pointer", fontFamily: FONT,
             flex: 1,
@@ -20114,7 +20114,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
         animation: "slideUp 0.2s",
       }}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontSize: 16, fontWeight: 800, flex: 1 }}>🚫 Blokovaní a ztlumení</span>
+          <span style={{ fontSize: 16, fontWeight: 700, flex: 1 }}>🚫 Blokovaní a ztlumení</span>
           <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
             background: "none", border: "none", color: theme.textSub,
             cursor: "pointer", fontSize: 20, padding: 0,
@@ -20160,7 +20160,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                   <button onClick={() => onBlock(b.blocked_name, "mute")} title="Změnit na Ztlumit" aria-label="Změnit na Ztlumit"
                     style={{
                       ...buttonStyle(),
-                      padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                      padding: "4px 10px", fontSize: 11, fontWeight: 500,
                       background: "transparent", color: theme.textMid,
                       border: `1px solid ${theme.cardBorder}`,
                     }}>
@@ -20170,7 +20170,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                   <button onClick={() => onBlock(b.blocked_name, "block")} title="Změnit na Blokovat" aria-label="Změnit na Blokovat"
                     style={{
                       ...buttonStyle(),
-                      padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                      padding: "4px 10px", fontSize: 11, fontWeight: 500,
                       background: "transparent", color: theme.textMid,
                       border: `1px solid ${theme.cardBorder}`,
                     }}>
@@ -20180,7 +20180,7 @@ function BlockListPanel({ currentUser, users, blocks, onBlock, onUnblock, onClos
                 <button onClick={() => onUnblock(b.blocked_name)} title="Zrušit" aria-label="Zrušit"
                   style={{
                     ...buttonStyle(),
-                    padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                    padding: "4px 10px", fontSize: 11, fontWeight: 500,
                     background: `${theme.green}10`, color: theme.green,
                     border: `1px solid ${theme.green}40`,
                   }}>
@@ -20386,7 +20386,7 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
         animation: "slideUp 0.2s",
       }}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontSize: 16, fontWeight: 800, flex: 1 }}>📢 Doručování notifikací</span>
+          <span style={{ fontSize: 16, fontWeight: 700, flex: 1 }}>📢 Doručování notifikací</span>
           <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
             background: "none", border: "none", color: theme.textSub,
             cursor: "pointer", fontSize: 20, padding: 0,
@@ -20528,7 +20528,7 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button onClick={toggleEmail} disabled={saving} style={{
                 ...buttonStyle(),
-                padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                padding: "6px 12px", fontSize: 11, fontWeight: 500,
                 background: prefs?.email_enabled ? `${theme.red}10` : `${theme.green}10`,
                 color: prefs?.email_enabled ? theme.red : theme.green,
                 border: `1px solid ${prefs?.email_enabled ? theme.red : theme.green}40`,
@@ -20537,7 +20537,7 @@ function NotificationPrefs({ currentUser, onClose, theme }) {
               </button>
               <button onClick={removeEmail} disabled={saving} style={{
                 ...buttonStyle(),
-                padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                padding: "6px 12px", fontSize: 11, fontWeight: 500,
                 background: "transparent", color: theme.textSub,
                 border: `1px solid ${theme.inputBorder}`,
               }}>
@@ -20974,7 +20974,7 @@ function NotificationPanel({ currentUser, onClose, theme }) {
             borderRadius: "10px", padding: "14px", marginBottom: "12px",
           }}>
             <div style={{
-              fontSize: "13px", fontWeight: 800, color: theme.orange || "#f59e0b",
+              fontSize: "13px", fontWeight: 700, color: theme.orange || "#f59e0b",
               marginBottom: 8, display: "flex", alignItems: "center", gap: 6,
             }}>
               📱 iPhone — návod pro spolehlivé notifikace
@@ -21190,7 +21190,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
           </div>
           <div style={{ color: theme.text, marginBottom: "6px" }}>
             Nový PIN: <span style={{
-              fontFamily: "monospace", fontSize: "18px", fontWeight: 800,
+              fontFamily: "monospace", fontSize: "18px", fontWeight: 700,
               letterSpacing: "4px", color: theme.green,
               background: `${theme.green}20`, padding: "2px 10px", borderRadius: "4px",
             }}>{resetMessage.pin}</span>
@@ -21218,7 +21218,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
               gap: "8px",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
-                <span style={{ fontSize: "13px", fontWeight: 600 }}>{u.name}</span>
+                <span style={{ fontSize: "13px", fontWeight: 500 }}>{u.name}</span>
                 {u.admin && (
                   <span style={{
                     fontSize: "9px", color: theme.accent,
@@ -21255,7 +21255,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                   }} title="Resetovat PIN" aria-label="Resetovat PIN" style={{
                     ...buttonStyle(), padding: "5px 10px", fontSize: "11px",
                     background: theme.accentSoft, color: theme.accent,
-                    border: `1px solid ${theme.accentBorder}`, fontWeight: 600,
+                    border: `1px solid ${theme.accentBorder}`, fontWeight: 500,
                   }}>🔑 Reset</button>
                   {!u.admin && (
                     <button onClick={() => {
@@ -21264,7 +21264,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                       setDeleteTransferTo("");
                     }} style={{
                       background: "none", border: "none", color: theme.red,
-                      fontSize: "11px", cursor: "pointer", fontFamily: FONT, fontWeight: 600,
+                      fontSize: "11px", cursor: "pointer", fontFamily: FONT, fontWeight: 500,
                       padding: "5px 8px",
                     }}>Odebrat</button>
                   )}
@@ -21278,7 +21278,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                 background: theme.inputBg, borderRadius: "6px",
                 display: "flex", flexDirection: "column", gap: "8px",
               }}>
-                <div style={{ fontSize: "11px", color: theme.textMid, fontWeight: 600 }}>
+                <div style={{ fontSize: "11px", color: theme.textMid, fontWeight: 500 }}>
                   Nový PIN pro {u.name}:
                 </div>
                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
@@ -21299,7 +21299,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                     style={{
                       ...buttonStyle(), padding: "6px 10px", fontSize: "11px",
                       background: theme.inputBg, color: theme.text,
-                      border: `1px solid ${theme.inputBorder}`, fontWeight: 600,
+                      border: `1px solid ${theme.inputBorder}`, fontWeight: 500,
                     }}>🎲 Náhodný</button>
                   <span style={{ flex: 1 }} />
                   <button
@@ -21405,7 +21405,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                       {tasksAssigned > 0 && <li><strong>{tasksAssigned}</strong> úkolů, které mu byly přiřazeny</li>}
                       {userComments > 0 && <li><strong>{userComments}</strong> komentářů</li>}
                     </ul>
-                    <div style={{ marginBottom: 10, fontWeight: 600 }}>
+                    <div style={{ marginBottom: 10, fontWeight: 500 }}>
                       Co s nimi chceš udělat?
                     </div>
                     <label style={{
@@ -21418,7 +21418,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                       <input type="radio" name="del-action" checked={deleteAction === "transfer_me"}
                         onChange={() => setDeleteAction("transfer_me")} style={{ marginTop: 3 }} />
                       <div>
-                        <div style={{ fontWeight: 600 }}>Převést na mě ({currentUser?.name})</div>
+                        <div style={{ fontWeight: 500 }}>Převést na mě ({currentUser?.name})</div>
                         <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
                           Úkoly + komentáře se přepíšou tak, že tě budou označovat jako autora/vlastníka.
                         </div>
@@ -21436,7 +21436,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                         <input type="radio" name="del-action" checked={deleteAction === "transfer_other"}
                           onChange={() => setDeleteAction("transfer_other")} style={{ marginTop: 3 }} />
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600 }}>Převést na jiného uživatele</div>
+                          <div style={{ fontWeight: 500 }}>Převést na jiného uživatele</div>
                           {deleteAction === "transfer_other" && (
                             <select value={deleteTransferTo}
                               onChange={e => setDeleteTransferTo(e.target.value)}
@@ -21464,7 +21464,7 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
                       <input type="radio" name="del-action" checked={deleteAction === "delete"}
                         onChange={() => setDeleteAction("delete")} style={{ marginTop: 3 }} />
                       <div>
-                        <div style={{ fontWeight: 600, color: theme.red }}>Smazat všechny úkoly a komentáře</div>
+                        <div style={{ fontWeight: 500, color: theme.red }}>Smazat všechny úkoly a komentáře</div>
                         <div style={{ fontSize: 11, color: theme.textMid, marginTop: 2 }}>
                           ⚠️ Nevratné! Všechno smažeme z databáze, ne jen do koše.
                         </div>
@@ -21813,7 +21813,7 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                     background: `${theme.green}15`,
                     border: `1px solid ${theme.green}40`,
                     borderRadius: "6px",
-                    fontSize: "11px", fontWeight: 600,
+                    fontSize: "11px", fontWeight: 500,
                     color: theme.green,
                     display: "flex", alignItems: "center", gap: "4px",
                     animation: "slideUp 0.2s",
@@ -21874,7 +21874,7 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                       style={{
                         ...buttonStyle(), padding: "4px 10px", fontSize: "11px",
                         background: `${theme.purple}12`, color: theme.purple,
-                        border: `1px solid ${theme.purple}25`, fontWeight: 600,
+                        border: `1px solid ${theme.purple}25`, fontWeight: 500,
                       }}>
                       → Otevřít úkol
                     </button>
@@ -21893,7 +21893,7 @@ function UpdatesPanel({ comments, tasks, currentUser, users, open, onToggle, onN
                 width: "100%", padding: "10px",
                 background: theme.inputBg, color: theme.textSub,
                 border: "none", borderTop: `1px solid ${theme.cardBorder}`,
-                fontSize: "12px", fontWeight: 600,
+                fontSize: "12px", fontWeight: 500,
               }}>
               ✓ Označit komentáře jako přečtené
             </button>
@@ -22136,7 +22136,7 @@ function SyncStatusBar({ theme, onRetry }) {
         color: "#fff",
         fontFamily: FONT,
         fontSize: "12px",
-        fontWeight: 600,
+        fontWeight: 500,
         padding: "8px 12px",
         paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
         display: "flex", alignItems: "center", gap: "10px",
@@ -22282,7 +22282,7 @@ function StoryPeopleInput({ people, suggestions, onAdd, onRemove, theme }) {
               key={p}
               style={{
                 fontSize: 12,
-                fontWeight: 600,
+                fontWeight: 500,
                 background: theme.accentSoft,
                 color: theme.accent,
                 border: `1px solid ${theme.accentBorder}`,
@@ -22681,7 +22681,7 @@ function StoryQuickAdd({ open, presetDate, presetText, currentUser, theme, categ
                   onClick={() => { const d = savedStory.date; onClose(); onOpenDay(d); }}
                   style={{
                     ...buttonStyle(), background: "none", border: "none",
-                    color: theme.accent, fontSize: 11, padding: 0, fontWeight: 600,
+                    color: theme.accent, fontSize: 11, padding: 0, fontWeight: 500,
                   }}
                 >
                   Otevřít celý den →
@@ -22736,7 +22736,7 @@ function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden }) {
       onClick={() => { setMenu(false); onClick(); }}
       style={{
         ...buttonStyle(), display: "flex", alignItems: "center", gap: 8,
-        padding: "10px 14px", fontSize: 13, fontWeight: 600,
+        padding: "10px 14px", fontSize: 13, fontWeight: 500,
         background: theme.card, color: theme.text,
         border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
         boxShadow: "0 4px 14px rgba(0,0,0,0.22)", whiteSpace: "nowrap",
@@ -28645,7 +28645,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                   position: "absolute", top: "1px", right: "1px",
                   background: theme.red, color: "#fff",
                   borderRadius: "8px", padding: "1px 4px",
-                  fontSize: "9px", fontWeight: 800,
+                  fontSize: "9px", fontWeight: 700,
                   minWidth: "14px", textAlign: "center",
                   border: "2px solid var(--bg-card, #fff)",
                 }}>{total}</span>
@@ -28657,7 +28657,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             title="Uživatel" aria-label="Uživatel"
             style={{
               flexShrink: 0,   // nikdy se nesmí vytlačit z lišty — je to jediná cesta k nastavení
-              fontSize: "12px", fontWeight: 600, color: theme.text,
+              fontSize: "12px", fontWeight: 500, color: theme.text,
               padding: "5px 10px", background: theme.accentSoft,
               border: `1px solid ${theme.accentBorder}`, borderRadius: "6px",
               cursor: "pointer",
@@ -28985,7 +28985,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                     aria-pressed={isSel}
                     style={{
                       ...buttonStyle(), flex: 1, padding: "6px 0", fontSize: 11.5,
-                      fontWeight: isSel ? 800 : 500,
+                      fontWeight: isSel ? 700 : 500,
                       background: isSel ? theme.accent : theme.inputBg,
                       color: isSel ? "#fff" : theme.textSub,
                       border: `1px solid ${isSel ? theme.accent : theme.inputBorder}`,
@@ -30217,7 +30217,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       style={{
                         flex: 1, height: "35px",
                         background: priActive ? `${priColor}15` : theme.inputBg,
-                        color: priColor, fontSize: "18px", fontWeight: 800,
+                        color: priColor, fontSize: "18px", fontWeight: 700,
                         border: `1.5px solid ${priActive ? priColor : theme.inputBorder}`,
                         borderRadius: "10px",
                         cursor: "pointer", fontFamily: FONT,
@@ -30231,7 +30231,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         flex: 1, height: "35px",
                         background: hasMore ? `${theme.accent}15` : theme.inputBg,
                         color: hasMore ? theme.accent : theme.textMid,
-                        fontSize: "18px", fontWeight: 800,
+                        fontSize: "18px", fontWeight: 700,
                         border: `1.5px solid ${hasMore ? theme.accent : theme.inputBorder}`,
                         borderRadius: "10px", cursor: "pointer", fontFamily: FONT,
                       }}>
@@ -30256,7 +30256,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 maxHeight: "60vh", overflowY: "auto",
               };
               const popHeader = {
-                fontSize: "11px", fontWeight: 800, color: theme.textMid,
+                fontSize: "11px", fontWeight: 700, color: theme.textMid,
                 textTransform: "uppercase", letterSpacing: "0.4px",
                 marginBottom: "10px",
                 paddingBottom: "8px",
@@ -30265,7 +30265,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               const optStyle = (isSel, color = theme.accent) => ({
                 ...buttonStyle(),
                 width: "100%",
-                padding: "10px 12px", fontSize: "13px", fontWeight: 600,
+                padding: "10px 12px", fontSize: "13px", fontWeight: 500,
                 background: isSel ? `${color}20` : "transparent",
                 color: isSel ? color : theme.text,
                 border: "none", textAlign: "left", borderRadius: "8px",
@@ -30471,7 +30471,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         margin: "8px 0 4px",
                         paddingTop: "6px",
                         borderTop: `1px solid ${theme.cardBorder}`,
-                        fontSize: "9px", fontWeight: 800, color: theme.textMid,
+                        fontSize: "9px", fontWeight: 700, color: theme.textMid,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>Vlastní seznamy</div>
                     )}
@@ -30554,7 +30554,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 padding: "6px 8px",
               }}>
                 <div style={{
-                  fontSize: "9px", fontWeight: 800, color: theme.accent,
+                  fontSize: "9px", fontWeight: 700, color: theme.accent,
                   textTransform: "uppercase", letterSpacing: "0.4px",
                   marginBottom: "5px",
                   display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -30580,7 +30580,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       title={`Odebrat: ${c.label}`}
                       style={{
                         ...buttonStyle(),
-                        padding: "4px 8px 4px 10px", fontSize: "11px", fontWeight: 600,
+                        padding: "4px 8px 4px 10px", fontSize: "11px", fontWeight: 500,
                         background: `${c.color}15`, color: c.color,
                         border: `1px solid ${c.color}40`, borderRadius: "12px",
                         display: "inline-flex", alignItems: "center", gap: "4px",
@@ -30634,7 +30634,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           }}>
             <span style={{ fontSize: 22 }}>📂</span>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: theme.accent,
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.accent,
                 textTransform: "uppercase", letterSpacing: "0.5px",
               }}>
                 Archiv
@@ -30666,7 +30666,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           }}>
             <span style={{ fontSize: 22 }}>🗑</span>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: theme.red,
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.red,
                 textTransform: "uppercase", letterSpacing: "0.5px",
               }}>
                 Koš
@@ -30726,7 +30726,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                   marginLeft: "auto",
                   padding: "4px 10px",
                   fontSize: 11,
-                  fontWeight: 600,
+                  fontWeight: 500,
                   background: "transparent",
                   color: theme.red,
                   border: `1px solid ${theme.red}`,
@@ -30779,7 +30779,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             }}>
               <span style={{ fontSize: 14 }}>{icon}</span>
               <span style={{
-                fontSize: 11, fontWeight: 800, color: color,
+                fontSize: 11, fontWeight: 700, color: color,
                 textTransform: "uppercase", letterSpacing: "0.5px", flex: 1,
               }}>{text}</span>
               <span style={{
@@ -30811,7 +30811,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                           border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
                           opacity: 0.85,
                         }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: theme.text, textDecoration: "line-through" }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: theme.text, textDecoration: "line-through" }}>
                             {n.title || <em style={{ opacity: 0.5, fontWeight: 400 }}>(bez názvu)</em>}
                           </div>
                           {preview && (
@@ -30827,7 +30827,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                             }} style={{
                               ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                               background: `${theme.green}15`, color: theme.green,
-                              border: `1px solid ${theme.green}30`, fontWeight: 600,
+                              border: `1px solid ${theme.green}30`, fontWeight: 500,
                             }}>↩ Obnovit</button>
                             <button onClick={async () => {
                               if (!confirm("Smazat natrvalo tuto poznámku?")) return;
@@ -30836,7 +30836,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                             }} style={{
                               ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                               background: "transparent", color: theme.red,
-                              border: `1px solid ${theme.red}40`, fontWeight: 600,
+                              border: `1px solid ${theme.red}40`, fontWeight: 500,
                             }}>🗑 Smazat natrvalo</button>
                           </div>
                         </div>
@@ -30877,7 +30877,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                           }} style={{
                             ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                             background: `${theme.green}15`, color: theme.green,
-                            border: `1px solid ${theme.green}30`, fontWeight: 600,
+                            border: `1px solid ${theme.green}30`, fontWeight: 500,
                           }}>↩ Obnovit</button>
                           <button onClick={() => {
                             if (!confirm("Smazat natrvalo tento zápis?")) return;
@@ -30890,7 +30890,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                           }} style={{
                             ...buttonStyle(), padding: "5px 10px", fontSize: 11,
                             background: "transparent", color: theme.red,
-                            border: `1px solid ${theme.red}40`, fontWeight: 600,
+                            border: `1px solid ${theme.red}40`, fontWeight: 500,
                           }}>🗑 Smazat natrvalo</button>
                         </div>
                       </div>
@@ -30985,7 +30985,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                     }}>
                       <span style={{ fontSize: "14px" }}>{item.icon}</span>
                       <span style={{
-                        fontSize: "11px", color, fontWeight: 800,
+                        fontSize: "11px", color, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>
                         {item.label} ({item.count})
@@ -31007,7 +31007,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       boxShadow: `0 2px 8px ${theme.accent}30`,
                     }}>
                       <span style={{
-                        fontSize: "12px", color: theme.accent, fontWeight: 800,
+                        fontSize: "12px", color: theme.accent, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>
                         🆕 Nové od druhých — přečti ({item.count})
@@ -31033,7 +31033,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.green, fontWeight: 800,
+                        fontSize: "11px", color: theme.green, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.3px",
                       }}>
                         ✨ Právě přidáno ({item.count})
@@ -31058,7 +31058,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: "#ea580c", fontWeight: 800,
+                        fontSize: "11px", color: "#ea580c", fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.3px",
                       }}>
                         🔥 Dlouho rozpracované ({item.count})
@@ -31083,7 +31083,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.accent, fontWeight: 800,
+                        fontSize: "11px", color: theme.accent, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.3px",
                       }}>
                         🎯 Dnes ({item.count})
@@ -31110,7 +31110,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                     }}>
                       <span style={{ fontSize: "13px" }}>{list.emoji || "📁"}</span>
                       <span style={{
-                        fontSize: "11px", fontWeight: 800,
+                        fontSize: "11px", fontWeight: 700,
                         color: list.color,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                         flex: 1,
@@ -31118,7 +31118,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         {list.name}
                       </span>
                       <span style={{
-                        fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                        fontSize: "10px", color: theme.textMid, fontWeight: 500,
                       }}>
                         {item.count} {item.count === 1 ? "úkol" : item.count < 5 ? "úkoly" : "úkolů"}
                       </span>
@@ -31136,7 +31136,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.purple, fontWeight: 800,
+                        fontSize: "11px", color: theme.purple, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.3px",
                       }}>
                         💤 Zapomenuté ({item.count})
@@ -31161,7 +31161,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.textMid, fontWeight: 800,
+                        fontSize: "11px", color: theme.textMid, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.3px",
                       }}>
                         🕰 Starší ({item.count})
@@ -31186,7 +31186,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.green, fontWeight: 800,
+                        fontSize: "11px", color: theme.green, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>
                         ✓ Nedávno splněné ({item.count})
@@ -31211,7 +31211,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.red, fontWeight: 800,
+                        fontSize: "11px", color: theme.red, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>
                         ❌ Odmítnuté ({item.count})
@@ -31236,7 +31236,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       display: "flex", alignItems: "center", gap: "6px",
                     }}>
                       <span style={{
-                        fontSize: "11px", color: theme.textMid, fontWeight: 800,
+                        fontSize: "11px", color: theme.textMid, fontWeight: 700,
                         textTransform: "uppercase", letterSpacing: "0.4px",
                       }}>
                         🗑 Smazané ({item.count})
@@ -31299,7 +31299,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                         display: "flex", alignItems: "center", gap: "6px",
                       }}>
                         <span style={{
-                          fontSize: "11px", color: theme.green, fontWeight: 800,
+                          fontSize: "11px", color: theme.green, fontWeight: 700,
                           textTransform: "uppercase", letterSpacing: "0.3px",
                         }}>
                           🆕 Nové od druhých — přečti
@@ -31313,7 +31313,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                       }}>
                         <span style={{ flex: 1, height: "1px", background: theme.cardBorder }} />
                         <span style={{
-                          fontSize: "10px", color: theme.textMid, fontWeight: 600,
+                          fontSize: "10px", color: theme.textMid, fontWeight: 500,
                           textTransform: "uppercase", letterSpacing: "0.3px",
                         }}>
                           {viewStatus === "today" ? "🎯 Dnes — podle urgency" : "📋 Ostatní"}
@@ -31443,7 +31443,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                   border: "none",
                   borderRadius: 8,
                   fontSize: 13,
-                  fontWeight: 600,
+                  fontWeight: 500,
                   cursor: "pointer",
                 }}
               >
@@ -31481,7 +31481,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           fontFamily: FONT,
           opacity: 0.95,
           userSelect: "none",
-          fontWeight: 600,
+          fontWeight: 500,
         }}>
           © {new Date().getFullYear()} Michal Bělohlav · Rodinné úkoly · v{APP_VERSION} · soubor {FILE_VERSION}
         </div>
@@ -31594,7 +31594,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           >
             ✕
           </button>
-          <div style={{ fontSize: 13, color: theme.text, fontWeight: 600, minWidth: 80 }}>
+          <div style={{ fontSize: 13, color: theme.text, fontWeight: 500, minWidth: 80 }}>
             {bulkSelection.size === 0 ? "Žádný výběr" : `Vybráno ${bulkSelection.size}`}
           </div>
           <div style={{ flex: 1 }} />
@@ -31706,7 +31706,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         }}>
           <div style={{ fontSize: 32, flexShrink: 0 }}>📱</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 14, color: theme.text }}>
+            <div style={{ fontWeight: 500, fontSize: 14, color: theme.text }}>
               Nainstalovat na plochu
             </div>
             <div style={{ fontSize: 12, color: theme.textSub, marginTop: 2 }}>
@@ -31722,7 +31722,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               border: "none",
               borderRadius: 8,
               fontSize: 13,
-              fontWeight: 600,
+              fontWeight: 500,
               cursor: "pointer",
               flexShrink: 0,
             }}
@@ -31843,7 +31843,7 @@ class ErrorBoundary extends Component {
                 border: "none",
                 borderRadius: 8,
                 fontSize: 16,
-                fontWeight: 600,
+                fontWeight: 500,
                 cursor: "pointer",
               }}
             >
@@ -31904,7 +31904,7 @@ User-Agent: ${userAgent}
                 border: "1px solid #fbbf24",
                 borderRadius: 8,
                 fontSize: 13,
-                fontWeight: 600,
+                fontWeight: 500,
                 cursor: "pointer",
               }}
             >
@@ -31951,7 +31951,7 @@ ${componentStack || "(žádný)"}`;
           </div>
 
           <details open style={{ fontSize: 12, color: "#6b7280" }}>
-            <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
+            <summary style={{ cursor: "pointer", fontWeight: 500, marginBottom: 8 }}>
               Technické detaily
             </summary>
             <div style={{
@@ -31971,7 +31971,7 @@ ${componentStack || "(žádný)"}`;
               {stack && <div style={{ marginTop: 8, opacity: 0.75 }}>{stack}</div>}
               {componentStack && (
                 <div style={{ marginTop: 8, opacity: 0.6 }}>
-                  <div style={{ fontWeight: 600 }}>Component stack:</div>
+                  <div style={{ fontWeight: 500 }}>Component stack:</div>
                   {componentStack}
                 </div>
               )}
