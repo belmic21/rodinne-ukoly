@@ -591,7 +591,7 @@ export async function hledejLidi(owner, query = "", limit = 20) {
 // stejné tabulky, takže v Mapě na něj narazíš úplně stejně.
 /* Sloupce člověka. Na jednom místě, aby se po okně nepotulovaly
    tři různé výběry a jedno okno nevědělo o roli, kterou druhé ukládá. */
-const OSOBA = "id, name, aliases, note, met_at, contact, role_tagy, introduced_by";
+const OSOBA = "id, name, aliases, note, met_at, contact, role_tagy, introduced_by, obec_kod";
 
 /* Očistí, co přišlo z formuláře. Prázdné pole = null, ne prázdný řetězec:
    jinak by "bez kontaktu" a "kontakt je prázdný text" byly dvě různé věci. */
@@ -604,6 +604,8 @@ function osobaDoDb(d) {
   if ("name" in d)     telo.name = t(d.name);
   if ("contact" in d)  telo.contact = t(d.contact);
   if ("met_at" in d)   telo.met_at = t(d.met_at);
+  // Kde sedí. Odtud se bere okres pro „Jedu do…".
+  if ("obec_kod" in d) telo.obec_kod = t(d.obec_kod);
   if ("note" in d)     telo.note = t(d.note);
   if ("role_tagy" in d) telo.role_tagy = Array.isArray(d.role_tagy) ? d.role_tagy : [];
   if ("aliases" in d) {
@@ -713,10 +715,21 @@ export async function nactiOsobu(id) {
   try {
     const { data, error } = await supabase
       .from("map_people")
-      .select("id, name, aliases, note, met_at, contact, role_tagy")
+      /* Název obce se přitahuje rovnou — jinak by formulář ukazoval
+         holý kód z číselníku, kterému nikdo nerozumí. Když sloupec
+         obec_kod ještě není (skript s místem neproběhl), vrátí
+         databáze chybu a zkusí se to bez něj. */
+      .select("id, name, aliases, note, met_at, contact, role_tagy, obec_kod, obec:obce(nazev)")
       .eq("id", id).maybeSingle();
-    if (error) throw error;
-    return data;
+    if (error) {
+      const { data: d2, error: e2 } = await supabase
+        .from("map_people")
+        .select("id, name, aliases, note, met_at, contact, role_tagy")
+        .eq("id", id).maybeSingle();
+      if (e2) throw e2;
+      return d2;
+    }
+    return data ? { ...data, obec_nazev: data.obec?.nazev || null } : data;
   } catch (e) {
     selhalo("nactiOsobu", e);
     return null;
@@ -2349,5 +2362,41 @@ export async function uspiZakazku(id, doKdy) {
     return data === "ok" ? { ok: true } : { ok: false, chyba: data };
   } catch (e) {
     return selhalo("uspiZakazku", e);
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════
+   LIDÉ I S MÍSTEM
+
+   Michal: „teď mi napsal kamarád, majitel velké firmy z Brna,
+   a to jsem v Brně byl nedávno a zapomněl jsem na něj."
+
+   Vzdálenosti se nepočítají tady ani v databázi, ale až nad
+   výsledkem — těžiště okresů jsou v mapě (okresy_body.js) a mít
+   je na dvou místech by znamenalo dvě verze téhož čísla.
+   ════════════════════════════════════════════════════════ */
+
+export async function lideSMistem() {
+  try {
+    const { data, error } = await supabase.rpc("lide_s_mistem");
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("lideSMistem", e);
+    return [];
+  }
+}
+
+// Uloží člověku obec. Prázdno znamená „nevím", ne „nikde".
+export async function ulozObecOsoby(id, obecKod) {
+  if (!id) return { ok: false, chyba: "Chybí člověk." };
+  try {
+    const { error } = await supabase
+      .from("map_people").update({ obec_kod: obecKod || null }).eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    return selhalo("ulozObecOsoby", e);
   }
 }

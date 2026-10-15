@@ -15,12 +15,73 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   hledejLidi, nactiLidi, nactiKarty, ulozKartu, smazKartu, zalozOsobu, ulozOsobu,
   nactiCiselniky, nactiOsobu, popis, aktivni,
-  nactiSoukromou, ulozSoukromou,
+  nactiSoukromou, ulozSoukromou, hledejObce,
 } from "./api.js";
 import {
   card, input, btn, btnMain, btnGhost, label,
   penizeKratce, penizePresne, parsePenize,
 } from "./ui.js";
+
+/* Výběr obce u člověka. Píšeš Brno, vybereš z nabídky; uloží se
+   kód obce, z něj plyne okres. Dokud nevybereš, je to prázdno —
+   „nevím", ne „nikde". */
+function ObecOsoby({ theme, kod, nazev, onZmena }) {
+  const [dotaz, setDotaz] = useState("");
+  const [nalezene, setNalezene] = useState([]);
+
+  useEffect(() => {
+    if (dotaz.trim().length < 2) { setNalezene([]); return; }
+    let zrus = false;
+    const id = setTimeout(() => {
+      hledejObce(dotaz, 8).then(r => { if (!zrus) setNalezene(r || []); });
+    }, 160);
+    return () => { zrus = true; clearTimeout(id); };
+  }, [dotaz]);
+
+  if (kod) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "8px 11px", borderRadius: 10,
+        border: `1px solid ${theme.accentBorder}`, background: theme.accentSoft,
+      }}>
+        <span style={{ flex: 1, fontSize: "13px", fontWeight: 500, color: theme.text }}>
+          {nazev || kod}
+        </span>
+        <button onClick={() => { onZmena(null, null); setDotaz(""); }}
+          title="Smazat obec" aria-label="Smazat obec"
+          style={{ ...btn(), padding: "2px 8px", fontSize: "15px",
+                   background: "transparent", color: theme.textSub }}>×</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input value={dotaz} onChange={e => setDotaz(e.target.value)}
+        placeholder="Brno, Mladá Boleslav…" style={input(theme)} />
+      {nalezene.length > 0 && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, top: "100%", zIndex: 5,
+          marginTop: 3, background: theme.card,
+          border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.18)", overflow: "hidden",
+          maxHeight: 220, overflowY: "auto",
+        }}>
+          {nalezene.map(o => (
+            <button key={o.kod} onClick={() => { onZmena(o.kod, o.nazev); setDotaz(""); }}
+              style={{ ...btn(), display: "block", width: "100%", textAlign: "left",
+                       padding: "8px 11px", background: "transparent",
+                       fontSize: "13px", color: theme.text, borderRadius: 0 }}>
+              {o.nazev}
+              <span style={{ color: theme.textSub, fontSize: "11px" }}> · {o.okres}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Site({ theme, owner, ciselniky, onOtevriOsobu }) {
   const [smer, setSmer] = useState("poptavka");   // poptavka | nabidka | lide
@@ -349,6 +410,8 @@ function predvypln(o, zalozniJmeno) {
     name: o?.name || zalozniJmeno || "",
     contact: o?.contact || "",
     met_at: o?.met_at || "",
+    obec_kod: o?.obec_kod || "",
+    obec_nazev: o?.obec_nazev || "",
     note: o?.note || "",
     aliases: Array.isArray(o?.aliases) ? o.aliases.join(", ") : (o?.aliases || ""),
     role_tagy: o?.role_tagy || [],
@@ -508,6 +571,21 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
             onKeyDown={naEnter} placeholder="Peťa, Petr od aut — oddělené čárkou"
             style={input(theme)} />
         </div>
+      </div>
+
+      {/* ══ KDE SEDÍ ══
+          Michal: „napsal mi kamarád, majitel velké firmy z Brna,
+          a to jsem v Brně byl nedávno a zapomněl jsem na něj."
+
+          „Kde jsi ho poznal" je vzpomínka a volný text — hledat
+          se podle toho nedá. Tohle je obec z číselníku, takže
+          z ní vypadne okres a s ním i odpověď na otázku, koho máš
+          cestou. */}
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Kde sedí</span>
+        <ObecOsoby theme={theme}
+          kod={f.obec_kod} nazev={f.obec_nazev}
+          onZmena={(kod, nazev) => { uprav("obec_kod", kod || ""); uprav("obec_nazev", nazev || ""); }} />
       </div>
 
       {/* Role tady, ne až někde jinde. Tohle je ta databáze investorů:
