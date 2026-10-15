@@ -56,6 +56,7 @@ import { nactiZakazky as obchodHledejZakazky, nactiLidi } from "./obchod/api.js"
 import { TerminyPanel } from "./obchod/Terminy.jsx";
 import { CoUvada, slibUvada } from "./obchod/Uvada.jsx";
 import { Uzivatele } from "./obchod/Sdileni.jsx";
+import { CestaSheet } from "./obchod/Cesta.jsx";
 import { input as polePlne } from "./obchod/ui.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -105,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_0810";
+const FILE_VERSION = "261015_1945";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -26122,6 +26123,8 @@ function App() {
   const [showSearchSheet, setShowSearchSheet] = useState(false);
   const [searchDraft, setSearchDraft] = useState("");   // dotaz předaný z „/?“
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
+  // „Jedu do…" — komu se ozvat, když tam stejně budeš.
+  const [cestaOtevrena, setCestaOtevrena] = useState(false);
   // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
   const [showObchodSheet, setShowObchodSheet] = useState(false);
   // Na kterou záložku obchod otevřít. null = Zakázky, "lide" = Lidé.
@@ -29271,6 +29274,13 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         akce: () => otevriObchod(null) },
       prace && { k: "lide", popis: "Lidé", ikona: "lide", napoveda: "Investoři, zprostředkovatelé a kontakty",
         akce: () => otevriObchod("lide") },
+      /* Michal: „když jezdím po republice nebo volám… byl jsem
+         v Brně a zapomněl jsem na kamaráda." Patří to vedle Lidí,
+         protože je to způsob, jak se v nich vyznat — ne další
+         samostatná agenda. */
+      prace && { k: "cesta", popis: "Jedu do", ikona: "lide",
+        napoveda: "Komu se ozvat tam, kam jedeš — a koho máš po cestě",
+        akce: () => setCestaOtevrena(true) },
       /* Jmenovalo se to „Vazby" a Michal měl pravdu, že to nesedí:
          vazby slibují síť vztahů mezi lidmi, tohle jsou zápisky
          o lidech. Název říká, co tam je. */
@@ -30312,6 +30322,20 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onClose={() => setRevizeOtevrena(false)}
             onOtevriUkol={(id) => otevriUkol(id)}
             onUkazProsle={() => setProtridimOtevreno(true)} />
+        )}
+
+        {cestaOtevrena && (
+          <CestaSheet
+            theme={theme}
+            onClose={() => setCestaOtevrena(false)}
+            onOtevriOsobu={(id) => {
+              // Z cesty rovnou na člověka — ať se nemusí hledat podruhé.
+              setCestaOtevrena(false);
+              setObchodDraft(""); setObchodZakazka(null);
+              setObchodOsoba(id);
+              setObchodZalozka("lide");
+              setShowObchodSheet(true);
+            }} />
         )}
 
         {zarazeniOtevreno && (
