@@ -105,7 +105,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_0800";
+const FILE_VERSION = "261015_0810";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -370,6 +370,34 @@ function formatFullDate(iso) {
    ztracený — v ten den se sám ozve a do té doby stojí v Zásobníku.
    Tohle je rozdíl mezi „odložit" a „zahodit", na kterém stojí celá
    důvěra v systém: nic nezmizí bez rozhodnutí. */
+/* ══ OSOBNÍ, NEBO PRACOVNÍ ══
+   Michal: „přepínač osobní a práce by měl fungovat i na úkoly…
+   v režimu práce bych neměl vidět david heryna text."
+
+   Přepínač fungoval, jen se ptal na špatnou otázku: „pracovní"
+   znamenalo „má přiřazenou zakázku". Takže úkol, který k zakázce
+   teprve povede, platil za osobní.
+
+   Zakázka tedy rozhoduje jen tam, kde opravdu je; jinak platí to,
+   co jsi u úkolu řekl ty. Prázdno je třetí stav — „nevím" — a je
+   to poctivější než hádat podle slov v názvu. Špatně zařazený úkol
+   se tiše ztratí v režimu, ve kterém ho nehledáš; u nezařazeného
+   aspoň víš, že se na něj máš podívat. */
+function oblastUkolu(t) {
+  if (!t) return null;
+  if (t.projectId) return "prace";
+  return t.oblast || null;
+}
+
+/* Vidím ten úkol v tomhle režimu? Nezařazené jsou vidět vždycky —
+   jinak by zmizely dřív, než je stihneš zařadit. */
+function vRezimu(t, rezim) {
+  if (!rezim || rezim === "vse") return true;
+  const o = oblastUkolu(t);
+  if (!o) return true;
+  return rezim === "osobni" ? o === "osobni" : o === "prace";
+}
+
 function jeOdlozeny(task) {
   return !!task.showFrom && daysDiff(task.showFrom) > 0;
 }
@@ -2810,7 +2838,7 @@ async function checkDbSchema() {
     "scratch_pad", "parked_reason", "parked_at", "parked_by", "time_spent_min",
     // Sloupce, které aplikace čte nebo zapisuje mimo taskToDb — bez nich
     // kontrola hlásila planý poplach o "extra sloupcích".
-    "shared_with", "rejected_by", "archived_at", "reminder_at",
+    "shared_with", "rejected_by", "archived_at", "reminder_at", "oblast",
   ];
 
   try {
@@ -3148,8 +3176,12 @@ async function apiLoadTasks() {
       const t = dbToTask(row);
       // Granulární sdílení — propagovat z DB sloupce shared_with
       if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
-      // Vazba na zakázku — podle ní se dá oddělit práce od osobních věcí.
       t.projectId = row.project_id || null;
+      /* Osobní, nebo pracovní. Vlastnost úkolu, ne zakázky:
+         „Ondráček volat projekt nemocnice" je práce, i když zakázka
+         ještě neexistuje. Prázdno znamená „zatím nezařazeno" a
+         projde to přes Protřídit. */
+      t.oblast = row.oblast || null;
       // Koho se úkol týká a čí je to teď míč. Viz JAZYK.md — osoba je
       // kontakt z Lidí, ne uživatel aplikace.
       t.osobaId = row.osoba_id || null;
@@ -8737,11 +8769,26 @@ function telefonZTextu(text) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku }) {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku, rezim = "vse", onRezim, onZaradit }) {
   const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny,
-          bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji } = useMemo(() => {
-    const vse = (tasks || []).filter(t =>
-      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
+          bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji, jinde, nezarazeno } = useMemo(() => {
+    /* Michal: „na Dnes v režimu práce bych měl vidět věci spojené
+       s prací, ne david heryna text." Dnes dosud režim vůbec
+       nedostal — filtroval se jen seznam úkolů pod ním. */
+    const zivy = (t) => !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t);
+    const vse = (tasks || []).filter(t => zivy(t) && vRezimu(t, rezim));
+
+    /* Co se schovalo a hoří. Tvrdý filtr umí zamlčet i termín na
+       dnešek — „zaplatit školku" v pracovním režimu. Nic nezmizí
+       potichu: jeden řádek s počtem, bez výpisu. */
+    const jinde = (tasks || []).filter(t =>
+      zivy(t) && !vRezimu(t, rezim) && !jeOdlozeny(t)
+      && t.dueDate && daysDiff(t.dueDate) <= 0).length;
+
+    /* Kolik věcí ještě neví, kam patří. Dokud je to číslo velké,
+       přepínač Osobní / Práce nemá co filtrovat — proto se nabízí
+       přímo tady, ne schované v nastavení. */
+    const nezarazeno = (tasks || []).filter(t => zivy(t) && !oblastUkolu(t)).length;
     /* Odložené se do Dneška nepletou — mají datum návratu a do té
        doby jsou zticha. Počítají se zvlášť, aby bylo vidět, že
        nezmizely, jen čekají. */
@@ -8863,8 +8910,10 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           .filter(r => r.polozky.length > 0);
       })(),
       ted: tedPolozky,
+      jinde,
+      nezarazeno,
     };
-  }, [tasks]);
+  }, [tasks, rezim]);
 
   // Kde jsi skončil. Drží se v prohlížeči, ne v databázi — je to údaj
   // o tomhle zařízení, ne o tobě. Na telefonu tě má zajímat, co jsi
@@ -8887,7 +8936,8 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
 
   const slibuCelkem = sliby.length + slibyUvadaji.length;
   const maCo = ted.length || skupiny.length || bezTerminu.length || slibuCelkem || cekam.length || cekaNaMe
-    || prosle || nepochopeno || odlozeno || posledni || vceraZapsane.length || vceraHotovo;
+    || prosle || nepochopeno || odlozeno || posledni || vceraZapsane.length || vceraHotovo
+    || jinde || nezarazeno;
   // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
   // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
   if (!maCo && !naStav) return null;
@@ -8994,6 +9044,62 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           </div>
         )}
       </div>
+
+      {/* ══ ZAŘAZENÍ ══
+          Nabídne se, až když je co zařadit, a zmizí, jakmile je
+          hotovo. Nestojí to nad protříděním — protřídit je pořád
+          důležitější, zařazení jen rozhoduje, kde se věc ukáže. */}
+      {nezarazeno > 0 && onZaradit && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          padding: "7px 11px", marginBottom: 9,
+          border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
+          background: theme.card,
+        }}>
+          <span style={{ flex: 1, minWidth: 170, fontSize: "11.5px", color: theme.textSub }}>
+            <strong style={{ color: theme.text }}>{nezarazeno}</strong>{" "}
+            {nezarazeno === 1 ? "věc nemá" : nezarazeno < 5 ? "věci nemají" : "věcí nemá"}{" "}
+            osobní/pracovní. Bez toho nemá přepínač co filtrovat.
+          </span>
+          <button onClick={onZaradit}
+            title="Projít je jednu po druhé — jeden klik na věc"
+            aria-label={`Zařadit ${nezarazeno} věcí`}
+            style={{
+              ...buttonStyle(), padding: "5px 11px", fontSize: "11.5px", fontWeight: 500,
+              background: "transparent", color: theme.text,
+              border: `1px solid ${theme.inputBorder}`, borderRadius: 8,
+            }}>Zařadit</button>
+        </div>
+      )}
+
+      {/* ══ CO SE SCHOVALO ══
+          Tvrdý filtr je k ničemu, pokud se mu nedá věřit. Proto
+          jedna tichá věta: co hoří v tom druhém režimu. Žádný
+          výpis — kdyby se vypisovalo, byl by režim na nic. */}
+      {jinde > 0 && rezim && rezim !== "vse" && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          padding: "7px 11px", marginBottom: 9,
+          border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
+          background: theme.card,
+        }}>
+          <span style={{ flex: 1, minWidth: 150, fontSize: "11.5px", color: theme.textSub }}>
+            {rezim === "osobni" ? "V pracovních věcech" : "V osobních věcech"} máš{" "}
+            <strong style={{ color: theme.text }}>{jinde}</strong>{" "}
+            {jinde === 1 ? "věc" : jinde < 5 ? "věci" : "věcí"} na dnešek nebo po termínu.
+          </span>
+          {onRezim && (
+            <button onClick={() => onRezim("vse")}
+              title="Ukázat osobní i pracovní dohromady"
+              aria-label="Přepnout na vše"
+              style={{
+                ...buttonStyle(), padding: "5px 11px", fontSize: "11.5px", fontWeight: 500,
+                background: "transparent", color: theme.text,
+                border: `1px solid ${theme.inputBorder}`, borderRadius: 8,
+              }}>Ukázat vše</button>
+          )}
+        </div>
+      )}
 
       {/* ══ NEŽ ZAČNEŠ: VČEREJŠEK ═══════════════════════════════
           Michal: „večer jsem zavřel PC, uložil nové úkoly a dnes
@@ -9472,9 +9578,9 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
   };
 
   const rezimy = [
-    { k: "",        popis: "Vše",     napoveda: "Práce i soukromí dohromady" },
-    { k: "osobni",  popis: "Osobní",  napoveda: "Jen soukromé — obchod se schová" },
-    { k: "zakazky", popis: "Práce",   napoveda: "Jen to, co visí na zakázkách" },
+    { k: "",       popis: "Vše",    napoveda: "Práce i soukromí dohromady" },
+    { k: "osobni", popis: "Osobní", napoveda: "Jen soukromé — práce se schová" },
+    { k: "prace",  popis: "Práce",  napoveda: "Jen pracovní věci — domácí se schovají" },
   ];
 
   return (
@@ -9724,7 +9830,7 @@ function Kalendar({ hodnota, onVyber, theme, minimum }) {
 }
 
 function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
-  rezim = "protridit" }) {
+  onOblast, rezim = "protridit" }) {
   /* Dva režimy, jedno okno. Mechanika je stejná — jedna věc přes
      celou obrazovku, čtyři možnosti, klávesy 1–4 — mění se jen to,
      co je ve frontě a jak se jmenuje první volba:
@@ -9763,6 +9869,26 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
        uzávěrky nepatří — na to je Protřídit, a míchat obojí by
        znamenalo, že se večer znovu prochází celá hromada
        a nikdo to nedokončí. */
+    /* ══ ZAŘAZENÍ ══
+       Michal: „volba protřídit by měla obsahovat i třídění na
+       ne/pracovní, abych měl vše správně zatříděné."
+
+       Vlastní režim, ne další vlna v protřídění. Napoprvé jsem to
+       zkusil přilepit na začátek fronty a zkouška to vrátila:
+       vtáhlo to do fronty i úkol s dnešním termínem. Ten ale žádný
+       nepořádek není — a kdyby se ve frontě objevil, přestalo by
+       platit, že prázdná fronta znamená „Dnes mluví pravdu".
+
+       Je to jiná práce: tahle se ptá, kam věc patří, protřídění se
+       ptá, kdy ji uděláš. Stejné okno, stejná mechanika, jiná
+       otázka. */
+    if (rezim === "zarazeni") {
+      return ziva
+        .filter(t => !oblastUkolu(t))
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .map(t => ({ t, duvod: "zarazeni" }));
+    }
+
     if (jeUzavrka) {
       return ziva
         .filter(t => t.dueDate && daysDiff(t.dueDate) === 0)
@@ -9781,6 +9907,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
       .filter(t => !t.dueDate && t.priority !== "urgent" && isForgotten(t))
       .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
       .map(t => ({ t, duvod: "zapomenute" }));
+
     return [...prosle, ...akutni, ...zapomenute];
   });
   const [index, setIndex] = useState(0);
@@ -9903,12 +10030,24 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
   useEffect(() => {
     if (!ukol || zadavamDatum || odkladam) return;
     const naKlavesu = (e) => {
+      /* U zařazení nejsou čtyři volby, ale dvě — a klávesy musí
+         dělat to, co je na obrazovce. Bez téhle větve by „1"
+         u nezařazené věci posunulo termín na dnešek, což nikdo
+         nechtěl a nikde to nebylo napsané. */
+      if (duvod === "zarazeni") {
+        if (e.key === "1" || e.key === "2") {
+          e.preventDefault();
+          onOblast?.(ukol.id, e.key === "1" ? "osobni" : "prace");
+          dal();
+        }
+        return;
+      }
       const v = volby.find(x => x.klavesa === e.key);
       if (v) { e.preventDefault(); v.akce(); }
     };
     window.addEventListener("keydown", naKlavesu);
     return () => window.removeEventListener("keydown", naKlavesu);
-  }, [ukol, zadavamDatum, odkladam, volby]);
+  }, [ukol, zadavamDatum, odkladam, volby, duvod, onOblast, dal]);
 
   const hotovo = index >= fronta.length;
   const zbyva = Math.max(0, fronta.length - index);
@@ -9929,10 +10068,12 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text }}>
-              {jeUzavrka ? "Zavřít den" : "Protřídit"}
+              {rezim === "zarazeni" ? "Zařadit" : jeUzavrka ? "Zavřít den" : "Protřídit"}
             </div>
             <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
-              {jeUzavrka
+              {rezim === "zarazeni"
+                ? "Osobní, nebo pracovní? Jeden klik na věc."
+                : jeUzavrka
                 ? "Co mělo být dnes. U každé věci jedno rozhodnutí."
                 : "Jedna věc po druhé. Žádná z nich nezmizí sama."}
             </div>
@@ -9952,7 +10093,9 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
         {hotovo ? (
           <div style={{ textAlign: "center", padding: "28px 8px" }}>
             <div style={{ fontSize: "17px", fontWeight: 700, color: theme.green, marginBottom: 6 }}>
-              {jeUzavrka
+              {rezim === "zarazeni"
+                ? (fronta.length === 0 ? "Všechno je zařazené." : "Zařazeno.")
+                : jeUzavrka
                 ? (fronta.length === 0 ? "Den už je zavřený." : "Den je zavřený.")
                 : (fronta.length === 0 ? "Protřídit není co." : "Hotovo, protříděno.")}
             </div>
@@ -9961,7 +10104,12 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                 A u uzávěrky je to ta věta, kvůli které se dá jít
                 spát — nic nezůstalo nerozhodnuté. */}
             <div style={{ fontSize: "13px", color: theme.textSub, marginBottom: 18, lineHeight: 1.5 }}>
-              {jeUzavrka
+              {rezim === "zarazeni"
+                ? (fronta.length === 0
+                    ? "Každý úkol ví, jestli je osobní, nebo pracovní."
+                    : <>Zařadil jsi {fronta.length} {fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.<br />
+                       Teď má přepínač <strong style={{ color: theme.text }}>Osobní / Práce</strong> co filtrovat.</>)
+                : jeUzavrka
                 ? (fronta.length === 0
                     ? "Na dnešek nezbylo nic nerozhodnutého."
                     : <>Prošel jsi {fronta.length} {fronta.length === 1 ? "věc" : fronta.length < 5 ? "věci" : "věcí"}.<br />
@@ -10012,6 +10160,8 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                       return { text: `${d} ${d === 1 ? "den" : d < 5 ? "dny" : "dní"} po termínu`, barva: theme.red }; })()
                   : duvod === "akutni"
                   ? { text: "Akutní, ale bez termínu", barva: theme.red }
+                  : duvod === "zarazeni"
+                  ? { text: "Nezařazeno — osobní, nebo pracovní?", barva: theme.purple }
                   : (() => { const d = Math.floor((Date.now() - new Date(ukol.createdAt).getTime()) / 86400000);
                       return { text: `Leží tu ${d} dní bez termínu`, barva: theme.textSub }; })();
                 return (
@@ -10108,6 +10258,48 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
               </div>
             ) : (
               <>
+                {/* ══ ZAŘAZENÍ ══
+                    U věci, která čeká jen na zařazení, jsou tyhle dvě
+                    tlačítka celá odpověď. U ostatních je to tichý
+                    řádek nad čtyřmi volbami — zařadit se dá při tom,
+                    kde zrovna jsi, ale nic to nevynucuje. */}
+                {duvod === "zarazeni" ? (
+                  <div role="group" aria-label="Osobní nebo pracovní"
+                    style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                    {[{ k: "osobni", i: "🏠", p: "Osobní", n: "Domácí věc — v režimu Práce ji neuvidíš" },
+                      { k: "prace",  i: "💼", p: "Pracovní", n: "Práce — v režimu Osobní ji neuvidíš" }].map(v => (
+                      <button key={v.k}
+                        onClick={() => { onOblast?.(ukol.id, v.k); dal(); }}
+                        title={v.n} aria-label={`${v.p} — ${v.n}`}
+                        style={{
+                          ...buttonStyle(), flex: "1 1 150px", minHeight: 50,
+                          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                          padding: "13px 14px", fontSize: "14px", fontWeight: 700,
+                          background: theme.accent, color: "#fff",
+                        }}><span>{v.i}</span><span>{v.p}</span></button>
+                    ))}
+                  </div>
+                ) : !oblastUkolu(ukol) && onOblast ? (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap",
+                    marginBottom: 10,
+                  }}>
+                    <span style={{ fontSize: "11.5px", color: theme.textSub }}>nezařazeno:</span>
+                    {[{ k: "osobni", i: "🏠", p: "Osobní" },
+                      { k: "prace",  i: "💼", p: "Pracovní" }].map(v => (
+                      <button key={v.k} onClick={() => onOblast?.(ukol.id, v.k)}
+                        title={`Zařadit jako ${v.p.toLowerCase()}`}
+                        aria-label={`Zařadit jako ${v.p.toLowerCase()}`}
+                        style={{
+                          ...buttonStyle(), padding: "5px 11px", fontSize: "11.5px", fontWeight: 500,
+                          background: "transparent", color: theme.text,
+                          border: `1px solid ${theme.cardBorder}`, borderRadius: 8,
+                        }}>{v.i} {v.p}</button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {duvod !== "zarazeni" && (
                 <div role="group" aria-label="Co s tím" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {volby.map(v => (
                     <button key={v.klavesa}
@@ -10131,10 +10323,11 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                     </button>
                   ))}
                 </div>
+                )}
                 <p style={{ margin: "12px 0 0", fontSize: "11.5px", color: theme.textSub, lineHeight: 1.5 }}>
-                  „Odložit“ není zahodit. Vybereš datum a do té doby je úkol zticha —
-                  v ten den se sám ozve. Mezitím stojí v Zásobníku, takže je vidět,
-                  že existuje. Klávesy 1 až 4 fungují taky.
+                  {duvod === "zarazeni"
+                    ? "Podle tohohle se pak řídí přepínač Osobní / Práce — v jednom režimu uvidíš jen jednu hromádku. Klávesy 1 a 2 fungují taky."
+                    : "„Odložit“ není zahodit. Vybereš datum a do té doby je úkol zticha — v ten den se sám ozve. Mezitím stojí v Zásobníku, takže je vidět, že existuje. Klávesy 1 až 4 fungují taky."}
                 </p>
               </>
             )}
@@ -13449,11 +13642,24 @@ function TaskCard({ task, otevriRovnou = false, currentUser, users, onStatusChan
    QUICK ADD BAR
    ═══════════════════════════════════════════════════════ */
 
-function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], visibleCategories = null, onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange, onRoute }) {
+function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCategoryFilterChange, categoryCounts, priorityFilter, onPriorityFilterChange, scopeFilter, onScopeFilterChange, showDeferred, onShowDeferredChange, tagFilter, onTagFilterChange, tagCounts, allTasks, customLists = [], visibleCategories = null, onCreateList, onEditList, dueDateFilter = "all", onDueDateFilterChange, viewStatus = "active", onTypingChange, onRoute, rezim = "vse" }) {
   // Fallback na CATEGORIES pokud parent neposlal visibleCategories (defensive)
   const categories = visibleCategories || CATEGORIES;
   const [text, setText] = useState("");
   const [showFull, setShowFull] = useState(false);
+  /* ── Osobní, nebo pracovní ──
+     Michal: „u zadání úkolů by byl rychlý přepínač pracovní, abych
+     ho měl na úkolu pro práci."
+
+     Předvyplněné podle režimu, ve kterém zrovna jsi: když pracuješ
+     v režimu Práce, zapisuješ práci. V režimu Vše se nic
+     nepředvyplní — hádat by znamenalo zařazovat špatně a to je
+     horší než nezařadit. Přepsat se to dá jedním klikem. */
+  const [oblast, setOblast] = useState(
+    rezim === "osobni" || rezim === "prace" ? rezim : null);
+  useEffect(() => {
+    setOblast(rezim === "osobni" || rezim === "prace" ? rezim : null);
+  }, [rezim]);
   // Quick add parsování — analyzuje text na tokens (@, +, #, !, ~)
   const parsed = useMemo(() => parseQuickAdd(text, {
     users: users || [],
@@ -13662,6 +13868,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       completedByUser: null,
       checklist: type === "complex" ? initialChecklist : [],
       images: [],
+      oblast,
     };
   };
 
@@ -13672,6 +13879,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     setQuickCategory(null);
     setQuickPriority(null);
     setQuickAssignees([]);
+    setOblast(rezim === "osobni" || rezim === "prace" ? rezim : null);
     inputRef.current?.focus();
   };
 
@@ -13992,6 +14200,33 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             cursor: (showFull && type === "complex") ? "not-allowed" : "text",
           }}
         />
+        {/* ══ OSOBNÍ / PRACOVNÍ ══
+            Jeden přepínač hned u řádku. Dvě ikony, ne rozbalovátko:
+            rozhodnutí je dvouhodnotové a musí jít udělat bez
+            přemýšlení, jinak ho nikdo dělat nebude a úkoly zůstanou
+            nezařazené. */}
+        <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+          {[{ k: "osobni", i: "🏠", t: "Osobní věc" },
+            { k: "prace",  i: "💼", t: "Pracovní věc" }].map(v => {
+            const zap = oblast === v.k;
+            return (
+              <button key={v.k}
+                onClick={() => setOblast(zap ? null : v.k)}
+                title={zap ? `${v.t} — klikni pro zrušení` : v.t}
+                aria-label={v.t}
+                aria-pressed={zap}
+                style={{
+                  ...buttonStyle(), width: 30, height: 30, padding: 0,
+                  fontSize: "14px", lineHeight: 1,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: zap ? theme.accentSoft : "transparent",
+                  border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
+                  opacity: zap ? 1 : 0.45,
+                }}>{v.i}</button>
+            );
+          })}
+        </div>
+
         {/* Confirm button — visible only when text is entered.
             Needed because clicking category/priority/assignee icons
             takes focus away from the input, so Enter no longer submits. */}
@@ -25682,6 +25917,8 @@ function App() {
   // Zavřít den — večerní uzávěrka. Stejné okno jako Protřídit,
   // jen v režimu „uzavrka".
   const [uzavrkaOtevrena, setUzavrkaOtevrena] = useState(false);
+  // Zařazení osobní/pracovní — stejné okno, jiná otázka.
+  const [zarazeniOtevreno, setZarazeniOtevreno] = useState(false);
   // Revize týdne — přehled toho, co se za týden zaseklo.
   const [revizeOtevrena, setRevizeOtevrena] = useState(false);
   /* Od kolika hodin Dnes nabídne uzávěrku. V localStorage, ne
@@ -25871,7 +26108,12 @@ function App() {
   const [zakazkaFiltrId, setZakazkaFiltrId] = useState(null);
 
   const [praceFilter, setPraceFilter] = useState(() => {
-    try { return localStorage.getItem("ft_prace") || "vse"; } catch (e) { return "vse"; }
+    try {
+      const v = localStorage.getItem("ft_prace") || "vse";
+      // Do 15. 10. se pracovnímu režimu říkalo „zakazky". Kdo ho měl
+      // zapnutý, nesmí po aktualizaci skončit v nedefinovaném stavu.
+      return v === "zakazky" ? "prace" : v;
+    } catch (e) { return "vse"; }
   });
   useEffect(() => {
     try { localStorage.setItem("ft_prace", praceFilter); } catch (e) {}
@@ -26860,6 +27102,14 @@ function App() {
 
     setTasks(prev => [filteredTask, ...prev]);
     await apiCreateTask(filteredTask);
+    /* Oblast se zapisuje zvlášť, přímo do sloupce. Převod úkolu na
+       řádek databáze vyjmenovává sloupce po jedné a neznámé zahodí —
+       stejně se zapisuje osoba u úkolu. */
+    if (filteredTask.oblast) {
+      supabase.from("tasks").update({ oblast: filteredTask.oblast })
+        .eq("id", filteredTask.id)
+        .then(({ error }) => { if (error) console.warn("[oblast] nezapsáno:", error.message); });
+    }
     setPendingCount(getOfflineQueue().length);
     // Označ úkol jako "právě přidaný" — bude v sekci ✨ Právě přidáno po 5 minut
     setRecentlyAdded(prev => ({ ...prev, [filteredTask.id]: Date.now() }));
@@ -26869,6 +27119,14 @@ function App() {
       triggerPushNotification(filteredTask);
     }
   }, [blocks]);
+
+  /* Zařazení úkolu do oblasti. Vlastní cesta, ne updateTask: ten
+     posílá úkol přes převod na řádek, který neznámé sloupce zahodí. */
+  const nastavOblast = useCallback((taskId, oblast) => {
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, oblast } : t));
+    supabase.from("tasks").update({ oblast: oblast || null }).eq("id", taskId)
+      .then(({ error }) => { if (error) console.warn("[oblast] nezapsáno:", error.message); });
+  }, []);
 
   const changeStatus = useCallback((taskId, action) => {
     // Find task name for the snackbar message
@@ -27962,8 +28220,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     }
 
     // Osobní / zakázky. Úkol u zakázky má vyplněné projectId.
-    if (praceFilter === "osobni") result = result.filter(t => !t.projectId);
-    else if (praceFilter === "zakazky") result = result.filter(t => !!t.projectId);
+    // Oblast úkolu, ne přítomnost zakázky — viz oblastUkolu().
+    if (praceFilter !== "vse") result = result.filter(t => vRezimu(t, praceFilter));
     // Klik na kód u úkolu — jen tahle zakázka.
     if (zakazkaFiltr) result = result.filter(t => rozlozNazev(t.title).kod === zakazkaFiltr);
 
@@ -28988,10 +29246,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     /* Číslo v pruhu musí sedět s číslem na kartě Dneška i s délkou
        fronty v Protřídit. Tři různé výpočty téhož by se dřív nebo
        později rozešly a člověk by viděl „12" a dostal devět. */
-    const vRezimu = (t) => praceFilter === "osobni" ? !t.projectId
-      : praceFilter === "zakazky" ? !!t.projectId : true;
     const zive = tasks.filter(t =>
-      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t) && vRezimu(t));
+      !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t)
+      && vRezimu(t, praceFilter));
     const prosle = zive.filter(t => !jeOdlozeny(t) && (
       (t.dueDate && daysDiff(t.dueDate) < 0)
       || (!t.dueDate && t.priority === "urgent")
@@ -30040,6 +30297,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         {/* Kalendář — měsíční mřížka + týdenní seznam */}
         {protridimOtevreno && (
           <ProtriditSheet
+            onOblast={nastavOblast}
             tasks={tasks}
             theme={theme}
             onClose={() => setProtridimOtevreno(false)}
@@ -30056,8 +30314,20 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onUkazProsle={() => setProtridimOtevreno(true)} />
         )}
 
+        {zarazeniOtevreno && (
+          <ProtriditSheet
+            onOblast={nastavOblast}
+            rezim="zarazeni"
+            tasks={tasks}
+            theme={theme}
+            onClose={() => setZarazeniOtevreno(false)}
+            onUprav={(id, patch) => updateTask(id, patch)}
+            onSmaz={(id) => deleteTask(id)} />
+        )}
+
         {uzavrkaOtevrena && (
           <ProtriditSheet
+            onOblast={nastavOblast}
             rezim="uzavrka"
             tasks={tasks}
             theme={theme}
@@ -30849,17 +31119,19 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                   )}
                 </span>
               )}
+              {/* Dřív tu stálo „Zakázky" — a to bylo to nedorozumění:
+                  režim nefiltruje zakázky, ale oblast úkolu. */}
               {(jeRail ? [] : [
                 { key: "vse",     icon: "",   label: "Vše" },
                 { key: "osobni",  icon: "🏠", label: "Osobní" },
-                { key: "zakazky", icon: "💼", label: "Zakázky" },
+                { key: "prace",   icon: "💼", label: "Práce" },
               ]).map(v => {
                 const zap = praceFilter === v.key;
                 return (
                   <button key={v.key} onClick={() => setPraceFilter(v.key)}
-                    title={v.key === "osobni" ? "Jen úkoly bez zakázky"
-                      : v.key === "zakazky" ? "Jen úkoly k zakázkám"
-                      : "Osobní i zakázky dohromady"}
+                    title={v.key === "osobni" ? "Jen osobní věci — práce zmizí"
+                      : v.key === "prace" ? "Jen práce — domácí věci zmizí"
+                      : "Všechno dohromady"}
                     style={{
                       ...buttonStyle(),
                       padding: "4px 10px",
@@ -30880,6 +31152,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           )}
 
           <QuickAddBar
+            rezim={praceFilter}
             currentUser={currentUser}
             users={users}
             onAdd={addTask}
@@ -31817,6 +32090,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               theme={theme}
               cekaNaMe={cekaNaMe}
               naStav
+              rezim={praceFilter}
+              onRezim={setPraceFilter}
+              onZaradit={() => setZarazeniOtevreno(true)}
               owner={currentUser?.name}
               onOtevriZakazku={(z) => {
                 setObchodDraft(""); setObchodOsoba(null);
