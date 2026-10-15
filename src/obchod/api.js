@@ -2292,3 +2292,39 @@ export function rozeberVetu(text, ciselniky) {
     .trim() || puvodni;
   return out;
 }
+
+
+/* ════════════════════════════════════════════════════════
+   CO TIŠE UVADÁ
+
+   Úkol neuvadá — má termín, nebo nemá. Ale rozjednaná zakázka
+   a oslovený člověk uvadají tak, že si toho nikdo nevšimne,
+   protože se prostě nic nestane.
+
+   Obě funkce jsou security invoker, takže filtrování podle
+   vlastníka dělá databáze, ne tahle vrstva.
+   ════════════════════════════════════════════════════════ */
+
+// Koho jsi oslovil a od té doby se stav nehnul.
+export async function osloveniTicho(dni = 14) {
+  try {
+    const { data, error } = await supabase.rpc("deal_osloveni_ticho", { p_dni: dni });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("osloveniTicho", e);
+    return [];
+  }
+}
+
+// Živé zakázky bez jediného budoucího termínu.
+export async function zakazkyBezKroku(dni = 7) {
+  try {
+    const { data, error } = await supabase.rpc("deal_bez_kroku", { p_dni: dni });
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("zakazkyBezKroku", e);
+    return [];
+  }
+}
