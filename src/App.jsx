@@ -54,6 +54,7 @@ import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
 import { nactiZakazky as obchodHledejZakazky, nactiLidi } from "./obchod/api.js";
 import { TerminyPanel } from "./obchod/Terminy.jsx";
+import { CoUvada, slibUvada } from "./obchod/Uvada.jsx";
 import { input as polePlne } from "./obchod/ui.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -103,7 +104,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261014_2115";
+const FILE_VERSION = "261015_0615";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8709,8 +8710,9 @@ function telefonZTextu(text) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav }) {
-  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny, bezTerminu } = useMemo(() => {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku }) {
+  const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny,
+          bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji } = useMemo(() => {
     const vse = (tasks || []).filter(t =>
       !isDone(t) && !isDeleted(t) && !isRejected(t) && !isArchived(t));
     /* Odložené se do Dneška nepletou — mají datum návratu a do té
@@ -8730,8 +8732,38 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       .slice(0, 5);
     const poDobe = (t) => -daysDiff(t.slibenoAt || t.createdAt || t.created_at);
     const seradit = (a, b) => poDobe(b) - poDobe(a);
+
+    /* ══ VČEREJŠEK ══
+       Michal ráno: „večer jsem zavřel PC, uložil nové úkoly a dnes
+       nevidím nic… měl bych vidět, na čem jsem pracoval včera
+       minimálně, abych se k tomu vrátil."
+
+       Tohle je ta část druhého mozku, která chyběla: paměť přes
+       noc. Bere se ze záznamů úkolů, ne z prohlížeče — na mobilu
+       pak vidíš totéž co na počítači.
+
+       Počítá se dřív než ostatní bloky, protože ty z něj odečítají:
+       co je nahoře ve včerejšku, se níž neopakuje. */
+    const hotovoDnes = (tasks || []).filter(t =>
+      isDone(t) && t.completedAt && daysDiff(t.completedAt) === 0).length;
+    const vceraZapsane = ziva
+      .filter(t => -daysDiff(t.createdAt || t.created_at) === 1)
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    // Blok mizí, jakmile dnešek začne — pak se nemá co odečítat.
+    const vVcerejsku = new Set(
+      hotovoDnes === 0 ? vceraZapsane.slice(0, 5).map(t => t.id) : []);
+
     return {
-      sliby: sOsobou.filter(t => t.smer === "slibil").sort(seradit),
+      vceraZapsane,
+      hotovoDnes,
+      vceraHotovo: (tasks || []).filter(t =>
+        isDone(t) && t.completedAt && -daysDiff(t.completedAt) === 1).length,
+      /* Sliby se dělí na dvě hromádky: co uvadá, patří nahoru do
+         „Co tiše uvadá"; zbytek je běžný závazek a zůstává ve svém
+         bloku. Dvakrát totéž by znamenalo, že ani jedno místo
+         není to pravé. */
+      sliby: sOsobou.filter(t => t.smer === "slibil" && !slibUvada(t)).sort(seradit),
+      slibyUvadaji: sOsobou.filter(t => t.smer === "slibil" && slibUvada(t)).sort(seradit),
       cekam: sOsobou.filter(t => t.smer === "cekam").sort(seradit),
       // Po termínu = mělo být hotové včera a dřív. Dnešek sem nepatří,
       // ten ještě běží.
@@ -8773,7 +8805,9 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
                   // „Slíbil jsem" a „Čekám na druhé". Ukázat to tady
                   // podruhé by znamenalo, že ani jedno místo není
                   // to pravé — a přesně tomu se tenhle blok vyhýbá.
-                  && !t.smer)
+                  && !t.smer
+                  // A co je nahoře ve včerejšku, se tady neopakuje.
+                  && !vVcerejsku.has(t.id))
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)),
 
       // Kolik dnešních věcí ještě není vyřízených — to je fronta
@@ -8824,8 +8858,9 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
     } catch { return ""; }
   }, []);
 
-  const maCo = ted.length || skupiny.length || bezTerminu.length || sliby.length || cekam.length || cekaNaMe
-    || prosle || nepochopeno || odlozeno || posledni;
+  const slibuCelkem = sliby.length + slibyUvadaji.length;
+  const maCo = ted.length || skupiny.length || bezTerminu.length || slibuCelkem || cekam.length || cekaNaMe
+    || prosle || nepochopeno || odlozeno || posledni || vceraZapsane.length || vceraHotovo;
   // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
   // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
   if (!maCo && !naStav) return null;
@@ -8924,14 +8959,97 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           fontSize: "15px", fontWeight: 500, color: theme.text,
           textTransform: "capitalize", letterSpacing: "-0.01em",
         }}>{datum}</div>
-        {(sliby.length > 0 || cekam.length > 0) && (
+        {(slibuCelkem > 0 || cekam.length > 0) && (
           <div style={{ fontSize: "12px", color: theme.textSub, marginTop: 2 }}>
-            {sliby.length > 0 && <>Slíbil jsi <strong style={{ color: theme.text }}>{sliby.length}</strong> {sliby.length === 1 ? "věc" : sliby.length < 5 ? "věci" : "věcí"}</>}
-            {sliby.length > 0 && cekam.length > 0 && ", "}
+            {slibuCelkem > 0 && <>Slíbil jsi <strong style={{ color: theme.text }}>{slibuCelkem}</strong> {slibuCelkem === 1 ? "věc" : slibuCelkem < 5 ? "věci" : "věcí"}</>}
+            {slibuCelkem > 0 && cekam.length > 0 && ", "}
             {cekam.length > 0 && <>čekáš na <strong style={{ color: theme.text }}>{cekam.length}</strong> {cekam.length === 1 ? "odpověď" : cekam.length < 5 ? "odpovědi" : "odpovědí"}</>}
           </div>
         )}
       </div>
+
+      {/* ══ NEŽ ZAČNEŠ: VČEREJŠEK ═══════════════════════════════
+          Michal: „večer jsem zavřel PC, uložil nové úkoly a dnes
+          nevidím nic… měl bych vidět, na čem jsem pracoval včera
+          minimálně, abych se k tomu vrátil."
+
+          Stojí úplně nahoře, protože ráno je první otázka „kde
+          jsem skončil", ne „co mám dnes". Zmizí ve chvíli, kdy
+          dnešek začne — jakmile něco odškrtneš, je to minulost
+          a místo patří dnešku. */}
+      {hotovoDnes === 0 && (vceraZapsane.length > 0 || vceraHotovo > 0) && (
+        <div role="region" aria-label="Kde jsi včera skončil" style={{
+          border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
+          background: theme.card, padding: "12px 14px", marginBottom: 10,
+        }}>
+          <div style={{
+            fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+            textTransform: "uppercase", color: theme.textSub, marginBottom: 8,
+          }}>Než začneš — kde jsi včera skončil</div>
+
+          {vceraZapsane.length > 0 && (
+            <>
+              <div style={{ fontSize: "12.5px", color: theme.text, marginBottom: 7 }}>
+                Večer sis zapsal <strong>{vceraZapsane.length}</strong>{" "}
+                {vceraZapsane.length === 1 ? "věc" : vceraZapsane.length < 5 ? "věci" : "věcí"}.
+                {" "}Tady {vceraZapsane.length === 1 ? "je" : "jsou"}:
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 4 }}>
+                {vceraZapsane.slice(0, 5).map(t => (
+                  <button key={t.id} onClick={() => onOtevriUkol?.(t.id)}
+                    title={`Otevřít úkol ${t.title}`}
+                    aria-label={`Otevřít úkol ${t.title}`}
+                    style={{
+                      ...buttonStyle(), display: "flex", alignItems: "center", gap: 9,
+                      textAlign: "left", width: "100%", padding: "7px 9px",
+                      background: "transparent", border: "none", borderRadius: 8,
+                    }}>
+                    <span aria-hidden="true" style={{
+                      flex: "0 0 auto", width: 5, height: 5, borderRadius: "50%",
+                      background: theme.accent,
+                    }} />
+                    <span style={{
+                      flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 500, color: theme.text,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>{t.title}</span>
+                    {t.dueDate
+                      ? <span style={{ flex: "0 0 auto", fontSize: "11px", color: theme.textSub }}>
+                          {formatDate(t.dueDate)}
+                        </span>
+                      : <span style={{ flex: "0 0 auto", fontSize: "11px", color: theme.textMid }}>
+                          bez termínu
+                        </span>}
+                  </button>
+                ))}
+              </div>
+              {vceraZapsane.length > 5 && (
+                <div style={{ fontSize: "11px", color: theme.textSub, padding: "2px 9px 4px" }}>
+                  a dalších {vceraZapsane.length - 5} — jsou v Úkolech
+                </div>
+              )}
+            </>
+          )}
+
+          {vceraHotovo > 0 && (
+            <div style={{
+              fontSize: "12px", color: theme.textSub,
+              paddingTop: vceraZapsane.length > 0 ? 7 : 0,
+              borderTop: vceraZapsane.length > 0 ? `1px solid ${theme.cardBorder}` : "none",
+            }}>
+              Včera jsi dokončil <strong style={{ color: theme.green }}>{vceraHotovo}</strong>{" "}
+              {vceraHotovo === 1 ? "věc" : vceraHotovo < 5 ? "věci" : "věcí"}.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══ CO TIŠE UVADÁ ═══════════════════════════════════════
+          Stojí nad protříděním schválně. Protřídit je práce
+          s tím, co máš zapsané; tohle je to, co ti utíká, i když
+          zapsané všechno máš. Komponenta se schová sama, když
+          není co hlásit. */}
+      <CoUvada theme={theme} owner={owner} sliby={slibyUvadaji}
+        onOtevriUkol={onOtevriUkol} onOtevriZakazku={onOtevriZakazku} />
 
       {/* ══ PROTŘÍDIT JAKO DNEŠNÍ ÚKOL ══════════════════════════
           Do 13. 10. stál tenhle odkaz dole v šedé patičce jako
@@ -9185,7 +9303,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           Zůstávají tu, dokud o nich nerozhodneš. Strop pět, aby
           se z toho nestala druhá hromada. */}
       {bezTerminu.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
+        <div role="region" aria-label="Bez termínu" style={{ marginBottom: 12 }}>
           <div style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em",
             textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
@@ -22403,8 +22521,10 @@ function Snackbar({ message, onUndo, visible, theme, canUndo = true, nadListou =
       position: "fixed",
       // Nad spodní lištou, ne přes ni. Na počítači je navigace
       // vlevo, takže tam stačí odsadit od kraje obrazovky.
+      // Na telefonu se staví nad spodní lištu I nad plovoucí
+      // tlačítko zápisku — jinak se po dobu odpočtu nedá zmáčknout.
       bottom: nadListou
-        ? "calc(66px + env(safe-area-inset-bottom, 0px))"
+        ? "calc(56px + 56px + 28px + env(safe-area-inset-bottom, 0px))"
         : "24px",
       left: "50%", transform: "translateX(-50%)",
       background: theme.snackBg, border: `1px solid ${theme.cardBorder}`,
@@ -23254,7 +23374,7 @@ function StoryQuickAdd({ open, presetDate, presetText, currentUser, theme, categ
 }
 
 // Plovoucí tlačítko — po ťuknutí nabídne zápisek nebo hlášku.
-function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden }) {
+function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden, nadListou = false }) {
   const [menu, setMenu] = useState(false);
   useEscapeKey(() => setMenu(false), menu);
   if (hidden) return null;
@@ -23286,8 +23406,17 @@ function StoryFab({ theme, onOpenEntry, onOpenQuote, hidden }) {
           style={{ position: "fixed", inset: 0, zIndex: 139 }}
         />
       )}
+      {/* Michal: „některá tlačítka, jako třeba dole hledat, jsou
+          překrytá na mobilu."
+
+          Bylo. Tohle tlačítko sedělo 18 px nade dnem obrazovky a
+          spodní lišta je vysoká 56 — takže leželo přesně na
+          „Hledat". Na počítači je navigace vlevo, tam nevadí. */}
       <div style={{
-        position: "fixed", right: 18, bottom: 18, zIndex: 140,
+        position: "fixed", right: 18, zIndex: 140,
+        bottom: nadListou
+          ? "calc(18px + 56px + env(safe-area-inset-bottom, 0px))"
+          : "18px",
         display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10,
       }}>
         {menu && (
@@ -30311,6 +30440,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
 
         <StoryFab
           theme={theme}
+          nadListou={!jeRail}
           hidden={showStorySheet || showStorySettings || storyEditorDate !== null || showStoryQuickAdd || showStoryQuickQuote}
           onOpenEntry={() => { setStoryQuickAddDate(null); setShowStoryQuickAdd(true); }}
           onOpenQuote={() => setShowStoryQuickQuote(true)}
@@ -31612,8 +31742,50 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           );
         })()}
 
+        {/* ══ DNES ══
+            Michal, ráno po probuzení: „uložil jsem nové úkoly a
+            dnes nevidím nic… sice vidím červeně Protřídit 36, ale
+            to je v pozadí."
+
+            Měl pravdu a byla to moje chyba v zapojení: panel Dnes
+            visel UVNITŘ větve „seznam není prázdný". Na Dnešku je
+            v seznamu jen to, co má dnešní termín — takže když
+            dnešní termín neměl nikdo, seznam byl prázdný, ukázala
+            se poštovní schránka „Žádné úkoly" a s ní zmizelo
+            i všechno ostatní: protřídění, závazky, zásobník.
+
+            Jinými slovy: čím víc byl nepořádek, tím míň toho Dnes
+            řeklo. Přesně naopak, než má druhý mozek dělat. Proto
+            panel stojí NAD seznamem a na stavu seznamu nezávisí. */}
+          {viewStatus === "today" && (
+            <PanelDnes
+              tasks={tasks}
+              theme={theme}
+              cekaNaMe={cekaNaMe}
+              naStav
+              owner={currentUser?.name}
+              onOtevriZakazku={(z) => {
+                setObchodDraft(""); setObchodOsoba(null);
+                setObchodZakazka(z?.id || null);
+                setShowObchodSheet(true);
+              }}
+              onOtevriZpravy={() => setUpdatesPanelOpen(true)}
+              onUkazProsle={() => setProtridimOtevreno(true)}
+              onUkazZasobnik={() => setZasobnikOtevreno(true)}
+              onZavriDen={() => setUzavrkaOtevrena(true)}
+              onRevize={() => setRevizeOtevrena(true)}
+              hodinaUzavrky={hodinaUzavrky}
+              /* Klik na úkol ho OTEVŘE, nejen ukáže. Dřív se jen
+                 přepnulo na seznam všeho a úkol se podbarvil —
+                 Michal: „otevře se seznam všech úkolů, to je
+                 matoucí." Měl pravdu: klikls na jednu věc,
+                 dostals třicet. */
+              onOtevriUkol={(id) => otevriUkol(id)} />
+          )}
+
         {/* Task list */}
-        {filteredTasks.length === 0 ? (
+        {filteredTasks.length === 0 && viewStatus === "today" ? null
+          : filteredTasks.length === 0 ? (
           <div style={{ textAlign: "center", color: theme.textDim, padding: "50px 20px" }}>
             <div style={{ fontSize: "28px", marginBottom: "8px" }}>
               {searchQuery ? "🔍" : viewStatus === "active" ? "🎉" : "📭"}
@@ -31633,27 +31805,6 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            {/* Dnes = dnešek. Závazky vůči lidem patří nahoru, protože
-                právě ty držíš v hlavě. Když žádné nejsou, blok zmizí. */}
-            {viewStatus === "today" && (
-              <PanelDnes
-                tasks={tasks}
-                theme={theme}
-                cekaNaMe={cekaNaMe}
-                naStav
-                onOtevriZpravy={() => setUpdatesPanelOpen(true)}
-                onUkazProsle={() => setProtridimOtevreno(true)}
-                onUkazZasobnik={() => setZasobnikOtevreno(true)}
-                onZavriDen={() => setUzavrkaOtevrena(true)}
-                onRevize={() => setRevizeOtevrena(true)}
-                hodinaUzavrky={hodinaUzavrky}
-                /* Klik na úkol ho OTEVŘE, nejen ukáže. Dřív se jen
-                   přepnulo na seznam všeho a úkol se podbarvil —
-                   Michal: „otevře se seznam všech úkolů, to je
-                   matoucí." Měl pravdu: klikls na jednu věc,
-                   dostals třicet. */
-                onOtevriUkol={(id) => otevriUkol(id)} />
-            )}
             {(() => {
               // Na Dnešku se seznam nevykresluje. Dnes má vlastní blok
               // „Teď" — kdyby pod ním byl ještě celý seznam, byla by
