@@ -105,7 +105,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_0745";
+const FILE_VERSION = "261015_0800";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1432,6 +1432,32 @@ input[type="checkbox"], input[type="radio"] {
 /* Na dotyku není co rozsvěcet — tam platí plná viditelnost rovnou. */
 @media (hover: none) {
   .akce-radku { opacity: 0.75; }
+}
+
+/* ══ KALENDÁŘ ══
+   Michal: „na PC ten kalendář nevypadá hezky."
+
+   Dva důvody. Na dotyku se po dni nedá přejet, takže mě nenapadlo
+   dát dnům reakci na myš — a na počítači z toho byla mrtvá
+   mřížka čísel, u které člověk neví, jestli je vůbec živá.
+   A pak byl o půlku menší než tlačítka nad ním, takže vypadal
+   jako něco, co k panelu ani nepatří. */
+.kal-den {
+  transition: background 0.1s ease-out, color 0.1s ease-out;
+}
+@media (hover: hover) and (pointer: fine) {
+  .kal-den:not(:disabled):hover {
+    background: ${th.accentSoft} !important;
+    color: ${th.accent} !important;
+  }
+  .kal-sip:hover {
+    background: ${th.inputBg} !important;
+    color: ${th.text} !important;
+  }
+}
+.kal-den:focus-visible, .kal-sip:focus-visible {
+  outline: 2px solid ${th.accent};
+  outline-offset: 1px;
 }
 
 /* Vypnutý prvek vypadá vypnutě, ne rozbitě. */
@@ -9615,45 +9641,56 @@ function Kalendar({ hodnota, onVyber, theme, minimum }) {
   for (let d = 1; d <= pocetDni; d++) bunky.push(new Date(mesic.getFullYear(), mesic.getMonth(), d));
 
   const sip = (smer, popis) => (
-    <button type="button" onClick={() => setMesic(m => new Date(m.getFullYear(), m.getMonth() + smer, 1))}
+    <button type="button" className="kal-sip"
+      onClick={() => setMesic(m => new Date(m.getFullYear(), m.getMonth() + smer, 1))}
       title={popis} aria-label={popis}
       style={{
-        ...buttonStyle(), width: 32, height: 32, padding: 0, fontSize: 16,
+        ...buttonStyle(), flex: "0 0 auto",
+        width: 34, height: 34, padding: 0, fontSize: 17, lineHeight: 1,
+        display: "flex", alignItems: "center", justifyContent: "center",
         background: "transparent", color: theme.textSub,
-        border: `1px solid ${theme.cardBorder}`,
+        border: `1px solid ${theme.cardBorder}`, borderRadius: 9,
       }}>{smer < 0 ? "‹" : "›"}</button>
   );
 
   return (
     <div role="group" aria-label="Kalendář" style={{
-      border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
-      padding: "8px 10px 10px", background: theme.inputBg,
-      maxWidth: 320,
+      border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
+      padding: "10px 12px 12px", background: theme.card,
+      /* Dřív měl napevno 320 px a na širokém panelu vypadal jako
+         ztracený lísteček vedle tlačítek dvojnásobné výšky. Teď se
+         roztáhne po tom, co je k dispozici, a drží se u horní meze,
+         aby z něj na monitoru nebyla plachta. */
+      width: "100%", maxWidth: 380, boxSizing: "border-box",
     }}>
       <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: 6,
+        display: "flex", alignItems: "center", gap: 8, marginBottom: 8,
       }}>
         {sip(-1, "Předchozí měsíc")}
-        <span style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
+        {/* Měsíc doprostřed a s místem kolem sebe — mezi šipkami
+            nalepenými na text se špatně čte i trefuje. */}
+        <span style={{
+          flex: 1, textAlign: "center", fontSize: "13.5px", fontWeight: 700,
+          color: theme.text, textTransform: "capitalize", whiteSpace: "nowrap",
+        }}>
           {MESICE_1[mesic.getMonth()]} {mesic.getFullYear()}
         </span>
         {sip(1, "Další měsíc")}
       </div>
 
       <div style={{
-        display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2,
-        marginBottom: 3,
+        display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3,
+        marginBottom: 4,
       }}>
         {DNY_ZKR.map((d, i) => (
           <div key={d} style={{
-            textAlign: "center", fontSize: "10px", fontWeight: 500,
-            color: i > 4 ? theme.textMid : theme.textSub, padding: "2px 0",
+            textAlign: "center", fontSize: "10.5px", fontWeight: 500,
+            color: i > 4 ? theme.textDim : theme.textMid, padding: "1px 0",
           }}>{d}</div>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
         {bunky.map((d, i) => {
           if (!d) return <div key={`p${i}`} />;
           const iso = isoZData(d);
@@ -9663,18 +9700,20 @@ function Kalendar({ hodnota, onVyber, theme, minimum }) {
           const vikend = d.getDay() === 0 || d.getDay() === 6;
           return (
             <button key={iso} type="button" disabled={brzy}
+              className={brzy ? undefined : "kal-den"}
               onClick={() => onVyber?.(iso)}
               title={`${d.getDate()}. ${MESICE_1[d.getMonth()]} ${d.getFullYear()}`}
               aria-label={`${d.getDate()}. ${MESICE_1[d.getMonth()]} ${d.getFullYear()}`}
               aria-pressed={vybrany}
               style={{
-                ...buttonStyle(), height: 32, padding: 0,
-                fontSize: "12.5px", fontWeight: vybrany || jeDnes ? 700 : 400,
+                ...buttonStyle(), height: 38, padding: 0, borderRadius: 9,
+                fontSize: "13px", fontWeight: vybrany || jeDnes ? 700 : 400,
                 background: vybrany ? theme.accent : "transparent",
                 color: vybrany ? "#fff"
                      : brzy ? theme.textDim
                      : vikend ? theme.textMid : theme.text,
-                border: jeDnes && !vybrany ? `1.5px solid ${theme.accent}` : "1px solid transparent",
+                border: jeDnes && !vybrany
+                  ? `1.5px solid ${theme.accent}` : "1.5px solid transparent",
                 cursor: brzy ? "default" : "pointer",
               }}>{d.getDate()}</button>
           );
@@ -10020,7 +10059,10 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                   nebo vyber v kalendáři
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
-                  <Kalendar theme={theme} hodnota={datum}
+                  {/* Klíč podle úkolu: bez něj si kalendář pamatuje měsíc,
+                      na který jsi dolistoval u předchozí věci, a u další
+                      ti otevře leden 2027 místo dneška. */}
+                  <Kalendar key={ukol.id} theme={theme} hodnota={datum}
                     onVyber={(d) => { setDatum(d); onUprav?.(ukol.id, { showFrom: d, dueDate: d }); dal(); }} />
                   <button onClick={() => setOdkladam(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
@@ -10054,7 +10096,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                   nebo vyber v kalendáři
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
-                  <Kalendar theme={theme} hodnota={datum}
+                  <Kalendar key={ukol.id} theme={theme} hodnota={datum}
                     onVyber={(d) => { setDatum(d); onUprav?.(ukol.id, { dueDate: d }); dal(); }} />
                   <button onClick={() => setZadavamDatum(false)}
                     title="Zpět na volby" aria-label="Zpět na volby" style={{
