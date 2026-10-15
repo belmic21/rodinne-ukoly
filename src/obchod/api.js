@@ -2317,14 +2317,37 @@ export async function osloveniTicho(dni = 14) {
   }
 }
 
-// Živé zakázky bez jediného budoucího termínu.
-export async function zakazkyBezKroku(dni = 7) {
+/* Zakázky, které se nehýbou. Dva důvody a každý stačí sám:
+   nemají budoucí krok, nebo visí ve stejné fázi moc dlouho.
+
+   Michal: „aby se projekty hýbaly nebo daly uspat, pokud se na
+   nich nepracuje." Druhý důvod je přesně tohle — zakázka může mít
+   termín za termínem a v obchodu se neposunout. */
+export async function zakazkyBezKroku(dni = 7, dniFaze = 45) {
   try {
-    const { data, error } = await supabase.rpc("deal_bez_kroku", { p_dni: dni });
+    const { data, error } = await supabase.rpc("deal_bez_kroku", {
+      p_dni: dni, p_dni_faze: dniFaze,
+    });
     if (error) throw error;
     return data || [];
   } catch (e) {
     selhalo("zakazkyBezKroku", e);
     return [];
+  }
+}
+
+/* Uspat zakázku jedním krokem. Fázi si najde databáze podle
+   skupiny v číselníku, ne podle klíče napevno — kdybys ji
+   přejmenoval, funguje to dál. */
+export async function uspiZakazku(id, doKdy) {
+  if (!id || !doKdy) return { ok: false, chyba: "Chybí zakázka nebo datum." };
+  try {
+    const { data, error } = await supabase.rpc("deal_uspi", {
+      p_id: id, p_do: doKdy,
+    });
+    if (error) throw error;
+    return data === "ok" ? { ok: true } : { ok: false, chyba: data };
+  } catch (e) {
+    return selhalo("uspiZakazku", e);
   }
 }
