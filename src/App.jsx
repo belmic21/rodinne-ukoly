@@ -55,6 +55,7 @@ import { KontaktEditor } from "./obchod/Site.jsx";
 import { nactiZakazky as obchodHledejZakazky, nactiLidi } from "./obchod/api.js";
 import { TerminyPanel } from "./obchod/Terminy.jsx";
 import { CoUvada, slibUvada } from "./obchod/Uvada.jsx";
+import { Uzivatele } from "./obchod/Sdileni.jsx";
 import { input as polePlne } from "./obchod/ui.js";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -104,7 +105,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_0615";
+const FILE_VERSION = "261015_0745";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -21757,6 +21758,43 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
         <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{ background: "none", border: "none", color: theme.textSub, cursor: "pointer", fontSize: "18px" }}>×</button>
       </div>
 
+      {/* ══ PŘÍSTUP DO APLIKACE ══
+          Michal: „proč nemohu uživatele přidávat tam, kde bych to
+          hledal, ve správě uživatelů? K čemu to tedy je?"
+
+          Měl pravdu a byla to lenost. Zakládání účtů se přesunulo
+          do Obchodu, protože tam vznikly pozvánky — a tady zůstal
+          rozcestník, který posílal člověka jinam. Obrazovka, která
+          se jmenuje Správa uživatelů a uživatele přidat neumí,
+          není obrazovka, je to cedule.
+
+          Je to tatáž součást jako v Obchodu, ne kopie — jedno místo
+          v kódu, dvoje dveře. */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: theme.text, marginBottom: 2 }}>
+          Přístup do aplikace
+        </div>
+        <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 9, lineHeight: 1.6 }}>
+          Zadáš jméno a e-mail, vznikne pozvánka. Heslo si dotyčný
+          zvolí sám při registraci — systém e-mail neposílá, odkaz
+          mu pošli ty.
+        </div>
+        <Uzivatele theme={theme} owner={currentUser?.name} />
+      </div>
+
+      {/* ══ JMÉNA U STARŠÍCH ÚKOLŮ ══
+          Tohle je zbytek po době, kdy stačilo jméno a PIN. PIN byl
+          zámek jen na obrazovce — data v databázi viděl kdokoli.
+          Jména zůstávají, protože visí na starých úkolech, ale účet
+          to není: kdo je jen tady, se nepřihlásí. */}
+      <div style={{
+        borderTop: `1px solid ${theme.cardBorder}`, paddingTop: 12,
+        fontSize: "12px", fontWeight: 700, color: theme.text,
+      }}>Jména u starších úkolů</div>
+      <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 4, lineHeight: 1.6 }}>
+        Kdo je jen tady a nemá účet, se nepřihlásí.
+      </div>
+
       {/* Reset confirmation message */}
       {resetMessage && (
         <div style={{
@@ -21910,32 +21948,6 @@ function AdminPanel({ users, onAdd, onRemove, onResetPin, onClose, theme, tasks 
         );
       })}
 
-      {/* Zakládání uživatelů se sem už nepatří.
-
-          Dřív stačilo jméno a PIN — PIN byl zámek jen na obrazovce,
-          data v databázi stejně viděl kdokoli. Dnes má každý skutečný
-          účet s mailem a heslem a zakládá se pozvánkou v Obchodu.
-
-          Formulář tady zůstat nemůže: vytvořil by řádek v téhle staré
-          tabulce, ale žádný účet. Uživatel by se nepřihlásil a nešlo
-          by s ním nic sdílet. */}
-      <div style={{
-        marginTop: "14px", padding: "12px 14px",
-        background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
-        borderRadius: "10px", fontSize: "12px", color: theme.textSub,
-        lineHeight: 1.7,
-      }}>
-        <div style={{ fontWeight: 700, color: theme.text, marginBottom: 4 }}>
-          Nového uživatele přidáš v Obchodu
-        </div>
-        Klikni na 💼 v horní liště, pak na ozubené kolo a na záložku
-        Uživatelé. Tam zadáš jméno a e-mail a vznikne pozvánka —
-        heslo si dotyčný zvolí sám při registraci.
-        <div style={{ marginTop: 6, color: theme.textMid }}>
-          Tenhle seznam ukazuje jména používaná u starších úkolů.
-          Kdo tu je bez účtu, se nepřihlásí.
-        </div>
-      </div>
 
       {/* Delete user confirmation dialog */}
       {deletingUser && (() => {
