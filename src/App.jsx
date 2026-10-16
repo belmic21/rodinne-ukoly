@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_1945";
+const FILE_VERSION = "261015_2015";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3150,6 +3150,53 @@ async function apiLoadUsers() {
   }
 }
 
+/* ══ ŘÁDEK DATABÁZE → ÚKOL ══
+   Michal: „roztřídil jsem 15 věcí, ale číslo zůstalo viset stejné."
+
+   Příčina nebyla v počítání. dbToTask převádí jen sloupce, o kterých
+   ví odjakživa — a všechno, co přibylo později (zakázka, osoba, směr,
+   oblast), se dopisovalo RUČNĚ, jen v načítání ze serveru. Realtime
+   si při každé změně postavil úkol znovu samotným dbToTask, takže
+   z něj tahle pole smazal.
+
+   Takže: zařadíš úkol → zápis do databáze → databáze ohlásí změnu
+   zpátky → úkol se přestaví bez oblasti → počet nezařazených je
+   zase stejný. A stejně tiše se tak ztrácela i zakázka a osoba
+   u úkolu, který upravil někdo jiný; jen si toho nikdo nevšiml,
+   protože to spravil první reload.
+
+   Proto jeden převod na jednom místě. Kdo přidá sloupec, přidá ho
+   sem a platí všude. */
+function radekNaUkol(row) {
+  const t = dbToTask(row);
+  // Granulární sdílení — propagovat z DB sloupce shared_with
+  if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
+  t.projectId = row.project_id || null;
+  /* Osobní, nebo pracovní. Vlastnost úkolu, ne zakázky:
+     „Ondráček volat projekt nemocnice" je práce, i když zakázka
+     ještě neexistuje. Prázdno znamená „zatím nezařazeno". */
+  t.oblast = row.oblast || null;
+  // Koho se úkol týká a čí je to teď míč. Viz JAZYK.md — osoba je
+  // kontakt z Lidí, ne uživatel aplikace.
+  t.osobaId = row.osoba_id || null;
+  /* Jméno a kontakt osoby se přitahují jen při načtení ze serveru;
+     realtime posílá holý řádek. Když tam nejsou, nechá se to, co
+     už v úkolu je — přepsat je na null by z Dneška smazalo jména
+     u závazků. */
+  if (row.osoba) {
+    t.osoba = row.osoba.name || null;
+    t.osobaKontakt = row.osoba.contact || null;
+  }
+  t.smer = row.smer || null;          // slibil | cekam | null
+  t.slibenoAt = row.slibeno_at || null;
+  // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
+  if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
+  else t.rejectedBy = [];
+  // archived_at — pro archiv
+  if (row.archived_at) t.archivedAt = row.archived_at;
+  return t;
+}
+
 async function apiLoadTasks() {
   // Server je vždy zdroj pravdy. Cache se používá JEN když jsme offline (catch).
   try {
@@ -3173,30 +3220,7 @@ async function apiLoadTasks() {
       ({ data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false }));
     }
     if (error) throw error;
-    const serverTasks = (data || []).map(row => {
-      const t = dbToTask(row);
-      // Granulární sdílení — propagovat z DB sloupce shared_with
-      if (Array.isArray(row.shared_with)) t.sharedWith = row.shared_with;
-      t.projectId = row.project_id || null;
-      /* Osobní, nebo pracovní. Vlastnost úkolu, ne zakázky:
-         „Ondráček volat projekt nemocnice" je práce, i když zakázka
-         ještě neexistuje. Prázdno znamená „zatím nezařazeno" a
-         projde to přes Protřídit. */
-      t.oblast = row.oblast || null;
-      // Koho se úkol týká a čí je to teď míč. Viz JAZYK.md — osoba je
-      // kontakt z Lidí, ne uživatel aplikace.
-      t.osobaId = row.osoba_id || null;
-      t.osoba = row.osoba?.name || null;
-      t.osobaKontakt = row.osoba?.contact || null;
-      t.smer = row.smer || null;          // slibil | cekam | null
-      t.slibenoAt = row.slibeno_at || null;
-      // rejected_by: JSONB pole [{user, at}] — kdo úkol odmítl a kdy
-      if (Array.isArray(row.rejected_by)) t.rejectedBy = row.rejected_by;
-      else t.rejectedBy = [];
-      // archived_at — pro archiv
-      if (row.archived_at) t.archivedAt = row.archived_at;
-      return t;
-    });
+    const serverTasks = (data || []).map(radekNaUkol);
     cacheSet(CACHE_TASKS, serverTasks);
     reportSyncOk();
     return serverTasks;
@@ -8770,7 +8794,7 @@ function telefonZTextu(text) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku, rezim = "vse", onRezim, onZaradit }) {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku, rezim = "vse", onRezim, onZaradit, ukazPrepinac = false }) {
   const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny,
           bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji, jinde, nezarazeno } = useMemo(() => {
     /* Michal: „na Dnes v režimu práce bych měl vidět věci spojené
@@ -9045,6 +9069,42 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           </div>
         )}
       </div>
+
+      {/* ══ PŘEPÍNAČ OSOBNÍ / PRÁCE ══
+          Michal: „kde najdu na mobilu tlačítko osobní/pracovní?"
+
+          Nikde. Celá řada filtrů se na Dnešku schovává — tam se
+          nefiltruje, tam se dívá —, jenže na telefonu byla ta řada
+          jediné místo, kde přepínač byl. Takže právě na obrazovce,
+          kde na režimu záleží nejvíc, přepnout nešlo.
+
+          Na počítači je v pruhu vlevo, proto se tu ukáže jen na
+          telefonu. */}
+      {ukazPrepinac && onRezim && (
+        <div role="group" aria-label="Osobní nebo pracovní režim"
+          style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+          {[{ k: "vse", i: "", p: "Vše", n: "Všechno dohromady" },
+            { k: "osobni", i: "🏠", p: "Osobní", n: "Jen osobní věci — práce zmizí" },
+            { k: "prace", i: "💼", p: "Práce", n: "Jen práce — domácí věci zmizí" }].map(v => {
+            const zap = (rezim || "vse") === v.k;
+            return (
+              <button key={v.k} onClick={() => onRezim(v.k)}
+                title={v.n} aria-label={v.n} aria-pressed={zap}
+                style={{
+                  ...buttonStyle(), flex: 1, minHeight: 34,
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: "6px 8px", fontSize: "12.5px", fontWeight: zap ? 700 : 500,
+                  background: zap ? theme.accent : "transparent",
+                  color: zap ? "#fff" : theme.textSub,
+                  border: `1px solid ${zap ? theme.accent : theme.cardBorder}`,
+                  borderRadius: 16,
+                }}>
+                {v.i && <span>{v.i}</span>}<span>{v.p}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ══ ZAŘAZENÍ ══
           Nabídne se, až když je co zařadit, a zmizí, jakmile je
@@ -14201,11 +14261,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             cursor: (showFull && type === "complex") ? "not-allowed" : "text",
           }}
         />
-        {/* ══ OSOBNÍ / PRACOVNÍ ══
-            Jeden přepínač hned u řádku. Dvě ikony, ne rozbalovátko:
-            rozhodnutí je dvouhodnotové a musí jít udělat bez
-            přemýšlení, jinak ho nikdo dělat nebude a úkoly zůstanou
-            nezařazené. */}
+        {/* ══ OSOBNÍ / PRACOVNÍ U NOVÉHO ÚKOLU ══
+            Dvě ikony, ne rozbalovátko: rozhodnutí je dvouhodnotové
+            a musí jít udělat bez přemýšlení.
+
+            Ukáže se, až když něco píšeš. Michal ho jinak na telefonu
+            spletl s přepínačem pohledu — a měl proč: dvě stejné
+            ikony, jedna mění, co uvidíš, druhá co zapíšeš. Když
+            stojí jen nad rozepsaným úkolem, je jasné, že patří
+            k němu. */}
+        {(isTypingPersist || text.trim()) && (
         <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
           {[{ k: "osobni", i: "🏠", t: "Osobní věc" },
             { k: "prace",  i: "💼", t: "Pracovní věc" }].map(v => {
@@ -14227,6 +14292,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             );
           })}
         </div>
+        )}
 
         {/* Confirm button — visible only when text is entered.
             Needed because clicking category/priority/assignee icons
@@ -26574,10 +26640,7 @@ function App() {
         try {
           if (payload.eventType === "INSERT") {
             if (!payload.new?.id) return;
-            const newTask = dbToTask(payload.new);
-            if (Array.isArray(payload.new.shared_with)) newTask.sharedWith = payload.new.shared_with;
-            if (Array.isArray(payload.new.rejected_by)) newTask.rejectedBy = payload.new.rejected_by;
-            else newTask.rejectedBy = [];
+            const newTask = radekNaUkol(payload.new);
             setTasks(prev => prev.find(t => t.id === newTask.id) ? prev : [newTask, ...prev]);
           } else if (payload.eventType === "UPDATE") {
             if (!payload.new?.id) return;
@@ -26585,11 +26648,16 @@ function App() {
             // ignoruj realtime UPDATE (může nás vrátit do předchozího stavu).
             const lastEdit = localEditsRef.current[payload.new.id] || 0;
             if (Date.now() - lastEdit < 1500) return;
-            const updatedTask = dbToTask(payload.new);
-            if (Array.isArray(payload.new.shared_with)) updatedTask.sharedWith = payload.new.shared_with;
-            if (Array.isArray(payload.new.rejected_by)) updatedTask.rejectedBy = payload.new.rejected_by;
-            else updatedTask.rejectedBy = [];
-            setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+            const updatedTask = radekNaUkol(payload.new);
+            /* Jméno osoby realtime neposílá — v holém řádku je jen
+               osoba_id. Nechá se to, co už v úkolu je, jinak by
+               z Dneška zmizela jména u závazků. */
+            setTasks(prev => prev.map(t => {
+              if (t.id !== updatedTask.id) return t;
+              return updatedTask.osobaId === t.osobaId
+                ? { ...updatedTask, osoba: t.osoba, osobaKontakt: t.osobaKontakt }
+                : updatedTask;
+            }));
           } else if (payload.eventType === "DELETE") {
             if (!payload.old?.id) return;
             setTasks(prev => prev.filter(t => t.id !== payload.old.id));
@@ -27109,9 +27177,13 @@ function App() {
        řádek databáze vyjmenovává sloupce po jedné a neznámé zahodí —
        stejně se zapisuje osoba u úkolu. */
     if (filteredTask.oblast) {
+      localEditsRef.current[filteredTask.id] = Date.now();
       supabase.from("tasks").update({ oblast: filteredTask.oblast })
         .eq("id", filteredTask.id)
-        .then(({ error }) => { if (error) console.warn("[oblast] nezapsáno:", error.message); });
+        .then(({ error }) => {
+          localEditsRef.current[filteredTask.id] = Date.now();
+          if (error) console.warn("[oblast] nezapsáno:", error.message);
+        });
     }
     setPendingCount(getOfflineQueue().length);
     // Označ úkol jako "právě přidaný" — bude v sekci ✨ Právě přidáno po 5 minut
@@ -27126,9 +27198,16 @@ function App() {
   /* Zařazení úkolu do oblasti. Vlastní cesta, ne updateTask: ten
      posílá úkol přes převod na řádek, který neznámé sloupce zahodí. */
   const nastavOblast = useCallback((taskId, oblast) => {
+    /* Ozvěna z realtime by se vrátila dřív, než se zápis dokončí,
+       a přepsala by stav zpátky. Stejná pojistka jako u ostatních
+       zápisů — bez ní zůstal počet nezařazených viset. */
+    localEditsRef.current[taskId] = Date.now();
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, oblast } : t));
     supabase.from("tasks").update({ oblast: oblast || null }).eq("id", taskId)
-      .then(({ error }) => { if (error) console.warn("[oblast] nezapsáno:", error.message); });
+      .then(({ error }) => {
+        localEditsRef.current[taskId] = Date.now();
+        if (error) console.warn("[oblast] nezapsáno:", error.message);
+      });
   }, []);
 
   const changeStatus = useCallback((taskId, action) => {
@@ -32116,6 +32195,7 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               naStav
               rezim={praceFilter}
               onRezim={setPraceFilter}
+              ukazPrepinac={!jeRail}
               onZaradit={() => setZarazeniOtevreno(true)}
               owner={currentUser?.name}
               onOtevriZakazku={(z) => {
