@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261016_2100";
+const FILE_VERSION = "261016_2320";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -10271,6 +10271,10 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
           e.preventDefault();
           onOblast?.(ukol.id, e.key === "1" ? "osobni" : "prace");
           dal();
+        } else if (e.key === "3") {
+          e.preventDefault();
+          onSmaz?.(ukol.id);
+          dal();
         }
         return;
       }
@@ -10279,7 +10283,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
     };
     window.addEventListener("keydown", naKlavesu);
     return () => window.removeEventListener("keydown", naKlavesu);
-  }, [ukol, zadavamDatum, odkladam, volby, duvod, onOblast, dal]);
+  }, [ukol, zadavamDatum, odkladam, volby, duvod, onOblast, onSmaz, dal]);
 
   const hotovo = index >= fronta.length;
   const zbyva = Math.max(0, fronta.length - index);
@@ -10496,8 +10500,9 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                     řádek nad čtyřmi volbami — zařadit se dá při tom,
                     kde zrovna jsi, ale nic to nevynucuje. */}
                 {duvod === "zarazeni" ? (
+                  <>
                   <div role="group" aria-label="Osobní nebo pracovní"
-                    style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                    style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
                     {[{ k: "osobni", i: "🏠", p: "Osobní", n: "Domácí věc — v režimu Práce ji neuvidíš" },
                       { k: "prace",  i: "💼", p: "Pracovní", n: "Práce — v režimu Osobní ji neuvidíš" }].map(v => (
                       <button key={v.k}
@@ -10511,6 +10516,32 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                         }}><span>{v.i}</span><span>{v.p}</span></button>
                     ))}
                   </div>
+                  {/* Michal: „v tomto okně bych měl rád volbu smazat
+                      úkol, pokud se jedná o starý, který řadit do
+                      kategorie nechci."
+
+                      Má pravdu: nutit člověka zařadit věc, kterou
+                      chce zahodit, znamená vyrobit uklizený nepořádek.
+                      Tlačítko je ale schválně tišší než ty dvě nad
+                      ním — zařazení je ta častá odpověď, smazání ta
+                      nevratnější. */}
+                  <button onClick={() => { onSmaz?.(ukol.id); dal(); }}
+                    title="Pošle úkol do koše. Vrátit se dá pod jménem → Koš"
+                    aria-label="Smazat do koše"
+                    style={{
+                      ...buttonStyle(), width: "100%", minHeight: 42,
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                      padding: "10px 14px", fontSize: "13px", fontWeight: 500,
+                      background: "transparent", color: theme.red,
+                      border: `1px solid ${theme.red}55`, marginBottom: 10,
+                    }}>
+                    {/* Žádný odznáček s klávesou: číslo v rámečku vedle
+                        „Smazat" se dá přečíst jako počet mazaných věcí.
+                        U nevratné akce to riziko nestojí za to — klávesu
+                        zmiňuje nápověda pod tlačítky. */}
+                    <span>Smazat do koše</span>
+                  </button>
+                  </>
                 ) : !oblastUkolu(ukol) && onOblast ? (
                   <div style={{
                     display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap",
@@ -10558,7 +10589,7 @@ function ProtriditSheet({ tasks, theme, onClose, onUprav, onSmaz, onHotovo,
                 )}
                 <p style={{ margin: "12px 0 0", fontSize: "11.5px", color: theme.textSub, lineHeight: 1.5 }}>
                   {duvod === "zarazeni"
-                    ? "Podle tohohle se pak řídí přepínač Osobní / Práce — v jednom režimu uvidíš jen jednu hromádku. Klávesy 1 a 2 fungují taky."
+                    ? "Podle tohohle se pak řídí přepínač Osobní / Práce — v jednom režimu uvidíš jen jednu hromádku. Klávesy 1, 2 a 3 fungují taky."
                     : "„Odložit“ není zahodit. Vybereš datum a do té doby je úkol zticha — v ten den se sám ozve. Mezitím stojí v Zásobníku, takže je vidět, že existuje. Klávesy 1 až 4 fungují taky."}
                 </p>
               </>
@@ -10638,8 +10669,12 @@ function ZasobnikSheet({ tasks, theme, onClose, onOtevriUkol, onUprav }) {
                   borderRadius: "10px", padding: "11px 13px",
                   display: "flex", flexWrap: "wrap", gap: 9, alignItems: "center",
                 }}>
-                  <button onClick={() => { onOtevriUkol?.(t.id); onClose?.(); }}
-                    title="Otevřít úkol" aria-label={`Otevřít úkol ${t.title}`}
+                  {/* Zásobník má tutéž vadu jako revize: otevřel úkol
+                      a sám se zavřel. Jenže sem člověk jde projít
+                      odložené věci, ne jednu. Okno úkolu je nad ním. */}
+                  <button onClick={() => onOtevriUkol?.(t.id)}
+                    title="Otevřít úkol — zásobník zůstane pod ním"
+                    aria-label={`Otevřít úkol ${t.title}`}
                     style={{
                       ...buttonStyle(), flex: 1, minWidth: 150, textAlign: "left",
                       background: "transparent", padding: 0,
@@ -10787,9 +10822,20 @@ function RevizeSheet({ tasks, theme, onClose, onOtevriUkol, onUkazProsle }) {
             <div style={{ fontSize: "11.5px", fontWeight: 400, color: theme.textSub, marginBottom: 7 }}>{s.proc}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               {s.polozky.slice(0, 8).map(({ t, popis }) => (
+                /* Michal: „po každé dokončené nebo odložené se okno
+                   zavře a musím znovu otevírat, to zdržuje. Zavřít
+                   mohu sám ručně, ale toto má být na to, abych
+                   vyřídil resty."
+
+                   Měl pravdu. Revize se zavírala, protože úkol se
+                   otevíral „místo ní" — jenže pátek u restů není
+                   jeden úkol, je to seance. Okno úkolu se teď
+                   otevře NAD revizí; po zavření jsi zpátky tady
+                   a vyřízená věc ze seznamu zmizela sama. */
                 <button key={t.id}
-                  onClick={() => { onOtevriUkol?.(t.id); onClose?.(); }}
-                  title="Otevřít úkol" aria-label={`Otevřít úkol ${t.title}`}
+                  onClick={() => onOtevriUkol?.(t.id)}
+                  title="Otevřít úkol — revize zůstane pod ním"
+                  aria-label={`Otevřít úkol ${t.title}`}
                   style={{
                     ...buttonStyle(), textAlign: "left", width: "100%",
                     background: theme.card, border: `1px solid ${theme.cardBorder}`,
@@ -10899,7 +10945,9 @@ function UkolOkno({
 
   return (
     <div onClick={onZavri} style={{
-      position: "fixed", inset: 0, zIndex: 1000,
+      /* Nad ostatními listy, ne na stejné úrovni: úkol se otevírá
+         Z revize i ze zásobníku a ty pod ním musí zůstat stát. */
+      position: "fixed", inset: 0, zIndex: 1100,
       background: "rgba(15,23,42,0.55)", display: "flex",
       alignItems: "flex-start", justifyContent: "center",
       padding: "18px 12px", overflowY: "auto",
