@@ -192,6 +192,8 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
     return () => { zrus = true; };
   }, [owner, zalozka, obnov]);
 
+  const uzko = useUzko();
+
   const zmenFiltr = useCallback((k, v) => {
     setKolik(KROK);
     setFiltr(f => ({ ...f, [k]: v }));
@@ -291,18 +293,31 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
           <>
             {/* ══ Hlavička a panel ══ */}
             <div style={{
-              position: "sticky", top: 0, zIndex: 3, background: theme.bg,
+              /* Na telefonu NEpřilepeno: hlavička je tu vysoká přes
+                 půl obrazovky a přilepená by nedovolila vidět seznam
+                 vůbec. Na monitoru je to pás přes vršek a tam dává
+                 smysl, aby zůstal. */
+              position: uzko ? "static" : "sticky",
+              top: 0, zIndex: 3, background: theme.bg,
               padding: "14px 16px", borderBottom: `1px solid ${theme.cardBorder}`,
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <span style={{ fontSize: "16px" }}>💼</span>
-                <div style={{ display: "flex", gap: 4, flex: 1 }}>
+              {/* Řádek jedna: jen to, co musí být vidět vždycky.
+                  Záložky se vodorovně posouvají místo zalamování —
+                  „Sdíleno se mnou" lámalo řádek na tři a vytlačilo
+                  „+ zakázku" úplně z obrazovky. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: "16px", flexShrink: 0 }}>💼</span>
+                <div style={{
+                  display: "flex", gap: 4, flex: 1, minWidth: 0,
+                  overflowX: "auto", scrollbarWidth: "none",
+                  WebkitOverflowScrolling: "touch",
+                }}>
                   {[
                     { k: "zakazky", t: "Zakázky" },
                     { k: "lide",    t: "Lidé" },
                     { k: "sit",     t: "Karty" },
                     { k: "terminy", t: "Termíny" },
-                    { k: "sdilene", t: "Sdíleno se mnou" },
+                    { k: "sdilene", t: uzko ? "Sdílené" : "Sdíleno se mnou" },
                   ].map(z => {
                     const zap = zalozka === z.k;
                     return (
@@ -312,7 +327,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                         border: `1px solid ${zap ? theme.accentBorder : "transparent"}`,
                         color: zap ? theme.accent : theme.textSub,
                         fontSize: "13px", fontWeight: 700, padding: "4px 11px",
-                        borderRadius: 8,
+                        borderRadius: 8, whiteSpace: "nowrap", flexShrink: 0,
                       }}>{z.t}</button>
                     );
                   })}
@@ -320,14 +335,16 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                 {currentUser?.admin && (
                   <button onClick={() => setNastaveni("uzivatele")} title="Nastavení" aria-label="Nastavení" style={{
                     ...btn(), background: "transparent", color: theme.textSub,
-                    fontSize: "14px", padding: "2px 6px",
+                    fontSize: "14px", padding: "2px 6px", flexShrink: 0,
                   }}>⚙</button>
                 )}
-                <span title={`modul obchod ${OBCHOD_VERZE}`} style={{
-                  fontSize: "9.5px", color: theme.textDim,
-                  fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
-                }}>{OBCHOD_VERZE}</span>
-                {zalozka === "zakazky" && (
+                {!uzko && (
+                  <span title={`modul obchod ${OBCHOD_VERZE}`} style={{
+                    fontSize: "9.5px", color: theme.textDim,
+                    fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                  }}>{OBCHOD_VERZE}</span>
+                )}
+                {zalozka === "zakazky" && !uzko && (
                   <button onClick={() => setNova({ nazev: "" })} style={btnMain(theme)}>
                     + zakázka
                   </button>
@@ -335,8 +352,19 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                 <button title="Zavřít" aria-label="Zavřít" onClick={onClose} style={{
                   background: "none", border: "none", fontSize: "20px",
                   cursor: "pointer", color: theme.textSub, padding: "0 4px",
+                  flexShrink: 0,
                 }}>×</button>
               </div>
+
+              {/* Na telefonu má hlavní akce vlastní řádek. Schovaná
+                  za okrajem obrazovky není akce, ale hádanka. */}
+              {zalozka === "zakazky" && uzko && (
+                <button onClick={() => setNova({ nazev: "" })}
+                  style={{ ...btnMain(theme), width: "100%", marginTop: 8 }}>
+                  + zakázka
+                </button>
+              )}
+              <div style={{ height: 10 }} />
 
               {zalozka === "zakazky" && (
                 <>
@@ -383,7 +411,10 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                   </div>
 
                   {/* Kdy byla zakázka zadaná. Nejčastější filtr vůbec,
-                      proto je na ráně a ne schovaný pod „filtry". */}
+                      proto je na monitoru na ráně. Na telefonu je pod
+                      „filtry" — pět period a osm fází je tam přes dvě
+                      řady a seznam by začínal až pod ohybem. */}
+                  {(!uzko || vicFiltru) && (
                   <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>
                     {OBDOBI.map(o => {
                       const zap = filtr.obdobi === o.k;
@@ -399,18 +430,25 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
                       );
                     })}
                   </div>
+                  )}
 
                   {/* Pás s fázemi. Odpověď na „na čem se dělá“ bez
                       otevírání čehokoli — a klik je rovnou filtr.
                       Archiv je na konci, oddělený a sbalený: hotové
                       a padlé zakázky nemají tříštit pozornost. */}
-                  <PasFazi theme={theme} faze={faze} filtr={filtr} zmen={zmenFiltr} />
+                  {(!uzko || vicFiltru) && (
+                    <PasFazi theme={theme} faze={faze} filtr={filtr} zmen={zmenFiltr} />
+                  )}
 
-                  {/* Rychlý tip. Je přímo tady, ne za tlačítkem
-                      „+ ZAKÁZKA" — tipů bude desítky a každý klik
-                      navíc je důvod ho nezapsat. */}
-                  <RychlyTip theme={theme} owner={owner} ciselniky={ciselniky}
-                    onZalozeno={() => setObnov(k => k + 1)} />
+                  {/* Rychlý tip. Na monitoru je přímo tady, ne za
+                      tlačítkem „+ ZAKÁZKA" — tipů bude desítky a každý
+                      klik navíc je důvod ho nezapsat. Na telefonu je
+                      pod „filtry": tam je to velké pole, které stojí
+                      v cestě k seznamu, kvůli kterému sem jdeš. */}
+                  {(!uzko || vicFiltru) && (
+                    <RychlyTip theme={theme} owner={owner} ciselniky={ciselniky}
+                      onZalozeno={() => setObnov(k => k + 1)} />
+                  )}
 
                   {mapa && (
                     <MapaZakazek theme={theme} owner={owner} ciselniky={ciselniky}
@@ -491,6 +529,42 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
 
 /* ── Panel: co čeká na mě ──────────────────────────── */
 
+/* ══ ÚZKÁ OBRAZOVKA ══
+   Michal: „tato obrazovka vypadá hrozně a zároveň je skrytý
+   posuvník a část není vidět vůbec, jako např. zadání nové
+   zakázky."
+
+   Příčina: celá hlavička — pět dlaždic, řádek hledání se čtyřmi
+   tlačítky, období, pás fází a pole pro tip — byla přilepená
+   nahoře. Na monitoru je to pás přes vršek, na telefonu je to
+   CELÁ OBRAZOVKA. Seznam zakázek, kvůli kterému tam člověk jde,
+   začínal až pod ohybem, a „+ zakázka" se do té tlačenice ani
+   nevešla.
+
+   Na telefonu proto platí jiné pravidlo: nahoře zůstane jen to,
+   čím se přepíná a hledá; ostatní je buď pod tlačítkem „filtry",
+   nebo odroluje s obsahem. */
+function useUzko(mez = 700) {
+  const [uzko, setUzko] = useState(() => {
+    try { return window.matchMedia(`(max-width: ${mez}px)`).matches; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    let m;
+    try { m = window.matchMedia(`(max-width: ${mez}px)`); } catch { return; }
+    const zmena = (e) => setUzko(e.matches);
+    setUzko(m.matches);
+    // Safari pod 14 umí jen addListener.
+    if (m.addEventListener) m.addEventListener("change", zmena);
+    else m.addListener(zmena);
+    return () => {
+      if (m.removeEventListener) m.removeEventListener("change", zmena);
+      else m.removeListener(zmena);
+    };
+  }, [mez]);
+  return uzko;
+}
+
 function Panel({ theme, panel, onTerminy }) {
   const polozky = [
     { k: "zakazek_aktivnich", t: "aktivních", barva: theme.text },
@@ -499,15 +573,21 @@ function Panel({ theme, panel, onTerminy }) {
     { k: "terminy_tyden",     t: "do týdne",   barva: theme.yellow, kam: "terminy" },
     { k: "bez_odezvy_14dni",  t: "ticho 14 dní", barva: theme.textSub },
   ];
+  /* Pět dlaždic vedle sebe na telefonu znamená 70 px na jednu
+     a popisek zalomený na dva řádky. Mřížka je přesype do dvou
+     řad a každá zůstane čitelná. */
   return (
-    <div style={{ display: "flex", gap: 6 }}>
+    <div style={{
+      display: "grid", gap: 6,
+      gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
+    }}>
       {polozky.map(p => {
         const n = panel ? Number(panel[p.k] || 0) : 0;
         return (
           <div key={p.k}
             onClick={() => { if (p.kam === "terminy") onTerminy?.(); }}
             style={{
-            ...card(theme), flex: 1, padding: "7px 10px", textAlign: "center",
+            ...card(theme), padding: "7px 10px", textAlign: "center",
             cursor: p.kam ? "pointer" : "default",
             borderColor: p.kam && n > 0 ? `${p.barva}55` : theme.cardBorder,
           }}>
