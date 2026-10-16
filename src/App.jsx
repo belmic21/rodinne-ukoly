@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261016_0900";
+const FILE_VERSION = "261016_1200";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -8794,9 +8794,10 @@ function telefonZTextu(text) {
 
    Ukazuje se nad seznamem úkolů, když je zapnutý pohled Dnes.
    Když nic takového není, nezabírá ani řádek. */
-function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku, rezim = "vse", onRezim, onZaradit, ukazPrepinac = false }) {
+function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, onUkazProsle, onUkazZasobnik, onZavriDen, onRevize, hodinaUzavrky = 20, naStav, owner, onOtevriZakazku, rezim = "vse", onRezim, onZaradit, ukazPrepinac = false, reminders = [], onOtevriPripominky }) {
   const { sliby, cekam, prosle, ted, nepochopeno, odlozeno, nejblizsiNavrat, dnesekZbyva, skupiny,
-          bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji, jinde, nezarazeno } = useMemo(() => {
+          bezTerminu, vceraZapsane, vceraHotovo, hotovoDnes, slibyUvadaji, jinde, nezarazeno,
+          vraceneZeZasobniku, ozilo } = useMemo(() => {
     /* Michal: „na Dnes v režimu práce bych měl vidět věci spojené
        s prací, ne david heryna text." Dnes dosud režim vůbec
        nedostal — filtroval se jen seznam úkolů pod ním. */
@@ -8814,12 +8815,25 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
        přepínač Osobní / Práce nemá co filtrovat — proto se nabízí
        přímo tady, ne schované v nastavení. */
     const nezarazeno = (tasks || []).filter(t => zivy(t) && !oblastUkolu(t)).length;
+
     /* Odložené se do Dneška nepletou — mají datum návratu a do té
        doby jsou zticha. Počítají se zvlášť, aby bylo vidět, že
        nezmizely, jen čekají. */
     const odlozene = vse.filter(jeOdlozeny);
     const ziva = vse.filter(t => !jeOdlozeny(t));
     const sOsobou = ziva.filter(t => t.osobaId);
+    /* ══ CO SE POHNULO BEZ TEBE ══
+       Poslední chybějící pás ranního shrnutí. Včerejšek říká, co
+       jsi dělal TY; tohle říká, co se stalo, zatímco jsi spal —
+       a to je jediná část dne, kterou jsi nemohl nijak ovlivnit.
+
+       Tři věci, všechny ze současných dat. Žádná z nich se jinak
+       neohlásí: připomínka dozraje potichu, odložená věc se vrátí
+       potichu a opakovaný úkol taky. */
+    const vraceneZeZasobniku = ziva.filter(t =>
+      t.showFrom && daysDiff(t.showFrom) <= 0 && daysDiff(t.showFrom) >= -2);
+    const ozilo = ziva.filter(t =>
+      (t.recDays || 0) > 0 && t.dueDate && daysDiff(t.dueDate) === 0);
 
     /* „Teď" je to, co má dnes termín, plus to, co se vleče přes
        týden. Nejvýš pět položek — šestá by z toho zase udělala
@@ -8937,8 +8951,17 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
       ted: tedPolozky,
       jinde,
       nezarazeno,
+      vraceneZeZasobniku,
+      ozilo,
     };
   }, [tasks, rezim]);
+
+  /* Připomínka, které nastal čas a nikdo ji nezavřel. Server ji
+     pošle do telefonu, ale v aplikaci se ráno nikde neukáže —
+     a právě ráno je ta otázka „co mi mezitím dozrálo". */
+  const dozrale = useMemo(() => (reminders || []).filter(r =>
+    !r.dismissedAt && r.remindAt && new Date(r.remindAt).getTime() <= Date.now()
+  ), [reminders]);
 
   // Kde jsi skončil. Drží se v prohlížeči, ne v databázi — je to údaj
   // o tomhle zařízení, ne o tobě. Na telefonu tě má zajímat, co jsi
@@ -8962,7 +8985,8 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
   const slibuCelkem = sliby.length + slibyUvadaji.length;
   const maCo = ted.length || skupiny.length || bezTerminu.length || slibuCelkem || cekam.length || cekaNaMe
     || prosle || nepochopeno || odlozeno || posledni || vceraZapsane.length || vceraHotovo
-    || jinde || nezarazeno;
+    || jinde || nezarazeno
+    || dozrale.length || vraceneZeZasobniku.length || ozilo.length;
   // Jako samostatná obrazovka musí něco říct i prázdná. Jako panel
   // nad seznamem naopak nesmí zabrat ani řádek, když nic nemá.
   if (!maCo && !naStav) return null;
@@ -9171,7 +9195,8 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           jsem skončil", ne „co mám dnes". Zmizí ve chvíli, kdy
           dnešek začne — jakmile něco odškrtneš, je to minulost
           a místo patří dnešku. */}
-      {hotovoDnes === 0 && (vceraZapsane.length > 0 || vceraHotovo > 0) && (
+      {hotovoDnes === 0 && (vceraZapsane.length > 0 || vceraHotovo > 0
+        || dozrale.length > 0 || vraceneZeZasobniku.length > 0 || ozilo.length > 0) && (
         <div role="region" aria-label="Kde jsi včera skončil" style={{
           border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
           background: theme.card, padding: "12px 14px", marginBottom: 10,
@@ -9179,7 +9204,7 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
           <div style={{
             fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
             textTransform: "uppercase", color: theme.textSub, marginBottom: 8,
-          }}>Než začneš — kde jsi včera skončil</div>
+          }}>Než začneš{vceraZapsane.length > 0 || vceraHotovo > 0 ? " — kde jsi včera skončil" : ""}</div>
 
           {vceraZapsane.length > 0 && (
             <>
@@ -9232,6 +9257,70 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
             }}>
               Včera jsi dokončil <strong style={{ color: theme.green }}>{vceraHotovo}</strong>{" "}
               {vceraHotovo === 1 ? "věc" : vceraHotovo < 5 ? "věci" : "věcí"}.
+            </div>
+          )}
+
+          {/* ══ MEZITÍM SE POHNULO ══
+              Druhá půlka téže karty, ne další blok. Obojí je o jedné
+              věci — co bylo přes noc —, jen první půlka je o tom, co
+              jsi dělal ty, a tahle o tom, co se stalo bez tebe.
+              Samostatný blok by znamenal další kartu na obrazovce,
+              které už tak přibývá. */}
+          {(dozrale.length > 0 || vraceneZeZasobniku.length > 0 || ozilo.length > 0) && (
+            <div style={{
+              marginTop: 9, paddingTop: 8,
+              borderTop: `1px solid ${theme.cardBorder}`,
+            }}>
+              <div style={{
+                fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+                textTransform: "uppercase", color: theme.textSub, marginBottom: 6,
+              }}>Mezitím se pohnulo</div>
+
+              {dozrale.length > 0 && (
+                <button onClick={() => onOtevriPripominky?.()}
+                  title="Otevřít připomínky"
+                  aria-label={`${dozrale.length} dozrálých připomínek`}
+                  style={{
+                    ...buttonStyle(), display: "flex", alignItems: "center", gap: 9,
+                    width: "100%", textAlign: "left", padding: "7px 9px",
+                    background: "transparent",
+                  }}>
+                  <span aria-hidden="true" style={{ flex: "0 0 auto", fontSize: "13px" }}>🔔</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: "12.5px", color: theme.text }}>
+                    <strong>{dozrale.length}</strong>{" "}
+                    {dozrale.length === 1 ? "připomínka dozrála" : dozrale.length < 5 ? "připomínky dozrály" : "připomínek dozrálo"}
+                    {dozrale.length === 1 && dozrale[0].text ? ` — ${dozrale[0].text}` : ""}
+                  </span>
+                </button>
+              )}
+
+              {/* Odložená věc se vrátí v tichosti. Když se to neřekne,
+                  vypadá to, že se objevila odnikud. */}
+              {vraceneZeZasobniku.map(t => (
+                <button key={t.id} onClick={() => onOtevriUkol?.(t.id)}
+                  title={`Otevřít úkol ${t.title}`} aria-label={`Otevřít úkol ${t.title}`}
+                  style={{
+                    ...buttonStyle(), display: "flex", alignItems: "center", gap: 9,
+                    width: "100%", textAlign: "left", padding: "7px 9px",
+                    background: "transparent",
+                  }}>
+                  <span aria-hidden="true" style={{ flex: "0 0 auto", fontSize: "13px" }}>📦</span>
+                  <span style={{
+                    flex: 1, minWidth: 0, fontSize: "12.5px", color: theme.text,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {t.title} <span style={{ color: theme.textSub }}>— vrátilo se ze zásobníku</span>
+                  </span>
+                </button>
+              ))}
+
+              {ozilo.length > 0 && (
+                <div style={{ fontSize: "12px", color: theme.textSub, padding: "5px 9px" }}>
+                  🔁 <strong style={{ color: theme.text }}>{ozilo.length}</strong>{" "}
+                  {ozilo.length === 1 ? "opakovaná věc je" : ozilo.length < 5 ? "opakované věci jsou" : "opakovaných věcí je"}{" "}
+                  zase na dnešek.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -32296,6 +32385,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               onRezim={setPraceFilter}
               ukazPrepinac={!jeRail}
               onZaradit={() => setZarazeniOtevreno(true)}
+              reminders={reminders}
+              onOtevriPripominky={() => setShowReminderSheet(true)}
               owner={currentUser?.name}
               onOtevriZakazku={(z) => {
                 setObchodDraft(""); setObchodOsoba(null);
