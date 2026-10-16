@@ -627,6 +627,33 @@ function jmenoSedi(n) {
 /* Druhý parametr bere jméno jako text (staré volání) i celý
    formulář jako objekt. Díky tomu jde člověka založit i s rolemi
    rovnou z výběru u zakázky, ne až dodatečně v Síti. */
+/* ══ SLOUPEC, KTERÝ V DATABÁZI JEŠTĚ NENÍ ══
+   16. 10.: formulář člověka začal posílat obec_kod dřív, než byl
+   v databázi sloupec — a databáze kvůli jednomu neznámému poli
+   odmítla CELÝ zápis. Výsledek: u člověka nešlo uložit vůbec nic,
+   ani jméno, i když s obcí nikdo nepracoval.
+
+   Načítání úkolů má na tuhle situaci pojistku odjakživa; zápis
+   osoby ji neměl. Tohle je ona: když databáze hlásí neznámý
+   sloupec, pole se vyhodí a zkusí se to znovu. Tím se ztratí
+   obec — ale jméno a telefon se uloží, a to je to, co člověk
+   zrovna psal.
+
+   Rozpozná se to podle kódu PGRST204 („schema cache"), případně
+   podle 42703 z Postgresu. Nehádá se podle textu hlášky. */
+function chybiSloupec(e) {
+  const kod = String(e?.code || "");
+  return kod === "PGRST204" || kod === "42703";
+}
+
+const NEPOVINNA_POLE = ["obec_kod"];
+
+function bezNepovinnych(telo) {
+  const out = { ...telo };
+  for (const k of NEPOVINNA_POLE) delete out[k];
+  return out;
+}
+
 export async function zalozOsobu(owner, jmenoNeboData, kontakt = "") {
   const d = typeof jmenoNeboData === "string"
     ? { name: jmenoNeboData, contact: kontakt }
@@ -636,11 +663,18 @@ export async function zalozOsobu(owner, jmenoNeboData, kontakt = "") {
   const spatne = jmenoSedi(telo.name);
   if (spatne) return { ok: false, chyba: spatne };
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("map_people")
       .insert({ ...telo, owner })
       .select(OSOBA)
       .single();
+    if (error && chybiSloupec(error)) {
+      ({ data, error } = await supabase
+        .from("map_people")
+        .insert({ ...bezNepovinnych(telo), owner })
+        .select("id, name, aliases, note, met_at, contact, role_tagy")
+        .single());
+    }
     if (error) throw error;
     return { ok: true, osoba: data };
   } catch (e) {
@@ -662,8 +696,13 @@ export async function ulozOsobu(id, data) {
   }
   if (Object.keys(telo).length === 0) return { ok: false, chyba: "Není co uložit." };
   try {
-    const { data: row, error } = await supabase
+    let { data: row, error } = await supabase
       .from("map_people").update(telo).eq("id", id).select(OSOBA);
+    if (error && chybiSloupec(error)) {
+      ({ data: row, error } = await supabase
+        .from("map_people").update(bezNepovinnych(telo)).eq("id", id)
+        .select("id, name, aliases, note, met_at, contact, role_tagy"));
+    }
     if (error) throw error;
     if (!row || row.length === 0) {
       return { ok: false, chyba: "Osobu se nepodařilo uložit — není tvoje." };
