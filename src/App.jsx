@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261015_2015";
+const FILE_VERSION = "261016_0900";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -9569,6 +9569,9 @@ function PanelDnes({ tasks, theme, onOtevriUkol, cekaNaMe = 0, onOtevriZpravy, o
    zařízení kreslí jinak, nesedí na účaří a vedle sebe vypadají
    jako sešit samolepek. Viz JAZYK.md, oddíl 7. */
 const IKONY_PRUHU = {
+  // Tři tečky — „a další". Na telefonu se za nimi skrývá zbytek
+  // aplikace, který se do pěti míst ve spodní liště nevejde.
+  vic:       "M5 12h.01M12 12h.01M19 12h.01",
   dnes:      "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
   ukoly:     "M4 7h16M4 12h16M4 17h10",
   zakazky:   "M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2",
@@ -9709,6 +9712,85 @@ function BocniPruh({ theme, jmeno, rezim, onRezim, cile, spodni, aktivniKlic }) 
 
    Pět je strop. Šestá záložka by z toho udělala řádek ikon, přesně
    to, čeho se zbavujeme. Zbytek zůstává v nabídce pod jménem. */
+/* ══ VÍC ══
+   Michal: „na hlavní obrazovce nevidím Lidé."
+
+   Spodní lišta má pět míst a aplikace jedenáct cílů. Šest jich
+   tedy na telefonu neexistovalo — Lidé, Jedu do, Co vím, Zásobník,
+   Revize, Kalendář. Ne schovaných: nedosažitelných.
+
+   Tohle je tentýž seznam jako pruh na monitoru, jen rozložený na
+   výšku. Jeden zdroj cílů, dvě podoby — kdyby to byly dva seznamy,
+   za týden by se lišily. */
+function VicSheet({ theme, cile, onClose }) {
+  useEscapeKey(onClose, true);
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(15,23,42,0.55)", display: "flex",
+      alignItems: "flex-end", justifyContent: "center",
+    }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Víc"
+        style={{
+          width: "100%", maxWidth: 560, maxHeight: "85vh", overflowY: "auto",
+          background: theme.card, borderTopLeftRadius: 16, borderTopRightRadius: 16,
+          border: `1px solid ${theme.cardBorder}`, borderBottom: "none",
+          paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
+        }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "14px 16px 10px", borderBottom: `1px solid ${theme.cardBorder}`,
+          position: "sticky", top: 0, background: theme.card, zIndex: 1,
+        }}>
+          <span style={{ flex: 1, fontSize: "16px", fontWeight: 700, color: theme.text }}>Víc</span>
+          <button onClick={onClose} title="Zavřít" aria-label="Zavřít"
+            style={{
+              ...buttonStyle(), width: 34, height: 34, padding: 0, fontSize: 20,
+              background: "transparent", color: theme.textSub,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>×</button>
+        </div>
+        <div style={{ padding: "6px 8px 10px" }}>
+          {cile.map(c => (
+            <button key={c.k} onClick={() => { onClose(); c.akce?.(); }}
+              title={c.napoveda || c.popis} aria-label={c.napoveda || c.popis}
+              style={{
+                ...buttonStyle(), display: "flex", alignItems: "center", gap: 12,
+                width: "100%", textAlign: "left", padding: "12px 10px",
+                background: "transparent", borderRadius: 10,
+              }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                   stroke={theme.textSub} strokeWidth="1.9" strokeLinecap="round"
+                   strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+                <path d={IKONY_PRUHU[c.ikona] || IKONY_PRUHU.ukoly} />
+              </svg>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{
+                  display: "block", fontSize: "14px", fontWeight: 500, color: theme.text,
+                }}>{c.popis}</span>
+                {c.napoveda && (
+                  <span style={{
+                    display: "block", fontSize: "11px", color: theme.textSub,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{c.napoveda}</span>
+                )}
+              </span>
+              {c.pocet > 0 && (
+                <span style={{
+                  flex: "0 0 auto", fontSize: "11.5px", fontWeight: 700,
+                  color: c.hori ? "#fff" : theme.textSub,
+                  background: c.hori ? theme.red : "transparent",
+                  borderRadius: 10, padding: c.hori ? "2px 8px" : 0,
+                }}>{c.pocet}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SpodniLista({ theme, cile, aktivniKlic }) {
   return (
     <nav aria-label="Hlavní nabídka" style={{
@@ -26191,6 +26273,8 @@ function App() {
   const [showMapaSheet, setShowMapaSheet] = useState(false);  // 🗺️ Mapa — co mi kdo řekl
   // „Jedu do…" — komu se ozvat, když tam stejně budeš.
   const [cestaOtevrena, setCestaOtevrena] = useState(false);
+  // Zbytek nabídky na telefonu — co se nevejde do spodní lišty.
+  const [vicOtevreno, setVicOtevreno] = useState(false);
   // 💼 Obchod — zakázky, investoři, párování. Modul v src/obchod/.
   const [showObchodSheet, setShowObchodSheet] = useState(false);
   // Na kterou záložku obchod otevřít. null = Zakázky, "lide" = Lidé.
@@ -29388,6 +29472,9 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
      telefon vytahuje: co je dnes, co hoří, co je za úkoly, zakázky
      a hledání. V režimu Osobní vypadnou zakázky a doplní se
      poznámky — doma se hledá spíš poznámka než zakázka. */
+  /* Spodní lišta má pět míst, aplikace jedenáct cílů. Čtyři
+     nejčastější zůstanou dole, zbytek je za „Víc" — dřív prostě
+     na telefonu nebyl. Michal: „na hlavní obrazovce nevidím Lidé." */
   const mobilCile = useMemo(() => {
     const prace = praceFilter !== "osobni";
     return [
@@ -29395,8 +29482,8 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       prace
         ? pruhCile.find(c => c.k === "zakazky")
         : pruhCile.find(c => c.k === "poznamky"),
-      { k: "hledat", popis: "Hledat", ikona: "hledat", napoveda: "Hledat napříč vším",
-        akce: () => { setSearchDraft(""); setShowSearchSheet(true); } },
+      { k: "vic", popis: "Víc", ikona: "vic", napoveda: "Lidé, poznámky, zásobník a další",
+        akce: () => setVicOtevreno(true) },
     ].filter(Boolean);
   }, [pruhCile, praceFilter]);
 
@@ -29412,6 +29499,13 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     { k: "nastaveni", popis: "Nastavení", ikona: "nastaveni", napoveda: "Nastavení aplikace",
       akce: () => setShowUserMenu(s => !s) },
   ], []);
+
+  /* Co se do spodní lišty nevešlo. Tentýž seznam jako pruh na
+     monitoru — jeden zdroj, dvě podoby. */
+  const vicCile = useMemo(() => {
+    const dole = new Set(mobilCile.map(c => c.k));
+    return [...pruhCile.filter(c => !dole.has(c.k)), ...pruhSpodni];
+  }, [mobilCile, pruhCile, pruhSpodni]);
 
   if (authState === "zjistuji") {
     return (
@@ -30401,6 +30495,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             onClose={() => setRevizeOtevrena(false)}
             onOtevriUkol={(id) => otevriUkol(id)}
             onUkazProsle={() => setProtridimOtevreno(true)} />
+        )}
+
+        {vicOtevreno && !jeRail && (
+          <VicSheet theme={theme} cile={vicCile}
+            onClose={() => setVicOtevreno(false)} />
         )}
 
         {cestaOtevrena && (
