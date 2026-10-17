@@ -22,61 +22,136 @@ import {
   penizeKratce, penizePresne, parsePenize,
 } from "./ui.js";
 
-/* Výběr obce u člověka. Píšeš Brno, vybereš z nabídky; uloží se
-   kód obce, z něj plyne okres. Dokud nevybereš, je to prázdno —
-   „nevím", ne „nikde". */
-function ObecOsoby({ theme, kod, nazev, onZmena }) {
+/* ══ KDE ČLOVĚK SEDÍ ═══════════════════════════════════════
+   Michal: „u kontaktů potřebuji mít napárován alespoň okres,
+   kraj nebo město z našeho katalogu, protože jinak nemůže
+   fungovat moje cesta někam."
+
+   Dřív tu byl výběr jedné obce — a kdo neměl obec, neměl nic.
+   Jenže u člověka často víš jen „někde na Karlovarsku". Tenhle
+   našeptávač bere všechny tři úrovně naráz a ukládá je stejně,
+   jako je má zakázka: kraj, okres, mesto, mesto_kod.
+
+   Hrubší úroveň se vždycky doplní sama:
+     vybereš město → doplní se okres i kraj
+     vybereš okres → doplní se kraj
+   Opačně to nejde a nemá — z kraje se město neuhodne.
+
+   Pro „Jedu do…" stačí okres. Kraj sám o sobě řekne aspoň to,
+   že ten člověk je někde po cestě, a to je pořád lepší než
+   vypadnout ze seznamu úplně. */
+
+function bezDiakritiky(x) {
+  return (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+export function MistoOsoby({ theme, ciselniky, misto, onZmena }) {
   const [dotaz, setDotaz] = useState("");
-  const [nalezene, setNalezene] = useState([]);
+  const [obce, setObce] = useState([]);
+  const m = misto || {};
+  const mam = !!(m.kraj || m.okres || m.mesto);
 
   useEffect(() => {
-    if (dotaz.trim().length < 2) { setNalezene([]); return; }
+    if (dotaz.trim().length < 2) { setObce([]); return; }
     let zrus = false;
     const id = setTimeout(() => {
-      hledejObce(dotaz, 8).then(r => { if (!zrus) setNalezene(r || []); });
+      hledejObce(dotaz, 6).then(r => { if (!zrus) setObce(r || []); });
     }, 160);
     return () => { zrus = true; clearTimeout(id); };
   }, [dotaz]);
 
-  if (kod) {
+  /* Okresy a kraje se nehledají v databázi — jsou v číselnících,
+     které formulář stejně načítá kvůli rolím. Jeden dotaz míň. */
+  const hrube = useMemo(() => {
+    const q = bezDiakritiky(dotaz.trim());
+    if (q.length < 2) return { okresy: [], kraje: [] };
+    const sedi = (x) => bezDiakritiky(x.label).includes(q);
+    return {
+      okresy: aktivni(ciselniky, "okres").filter(sedi).slice(0, 4),
+      kraje: aktivni(ciselniky, "kraj").filter(sedi).slice(0, 3),
+    };
+  }, [dotaz, ciselniky]);
+
+  const vyber = (volba) => { onZmena(volba); setDotaz(""); setObce([]); };
+
+  if (mam) {
+    /* Co je vybrané, se napíše celou větou — ne kódem. „CZ0412"
+       nikomu nic neřekne a tichá záměna okresu by se tak nedala
+       poznat. Pod tím stojí, co z toho plyne pro cestování. */
+    const hlavni = m.mesto
+      || (m.okres ? `okres ${popis(ciselniky, "okres", m.okres)}` : "")
+      || popis(ciselniky, "kraj", m.kraj);
+    const pod = m.mesto
+      ? [m.okres ? `okres ${popis(ciselniky, "okres", m.okres)}` : "",
+         popis(ciselniky, "kraj", m.kraj)].filter(Boolean).join(" · ")
+      : (m.okres ? popis(ciselniky, "kraj", m.kraj) : "Kraj — pro cestu stačí, přesnější je okres");
     return (
       <div style={{
         display: "flex", alignItems: "center", gap: 8,
         padding: "8px 11px", borderRadius: 10,
         border: `1px solid ${theme.accentBorder}`, background: theme.accentSoft,
       }}>
-        <span style={{ flex: 1, fontSize: "13px", fontWeight: 500, color: theme.text }}>
-          {nazev || kod}
-        </span>
-        <button onClick={() => { onZmena(null, null); setDotaz(""); }}
-          title="Smazat obec" aria-label="Smazat obec"
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>{hlavni}</div>
+          {pod && <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 1 }}>{pod}</div>}
+        </div>
+        <button onClick={() => { onZmena(null); setDotaz(""); }}
+          title="Smazat místo" aria-label="Smazat místo"
           style={{ ...btn(), padding: "2px 8px", fontSize: "15px",
                    background: "transparent", color: theme.textSub }}>×</button>
       </div>
     );
   }
 
+  const nic = obce.length === 0 && hrube.okresy.length === 0 && hrube.kraje.length === 0;
+  const radek = (klic, hlavni, vedlejsi, znacka, volba) => (
+    <button key={klic} onClick={() => vyber(volba)}
+      style={{ ...btn(), display: "flex", alignItems: "center", gap: 7, width: "100%",
+               textAlign: "left", padding: "8px 11px", background: "transparent",
+               fontSize: "13px", color: theme.text, borderRadius: 0 }}>
+      <span style={{
+        fontSize: "9.5px", fontWeight: 700, letterSpacing: "0.04em",
+        textTransform: "uppercase", color: theme.textSub,
+        border: `1px solid ${theme.cardBorder}`, borderRadius: 4,
+        padding: "1px 5px", flexShrink: 0, minWidth: 42, textAlign: "center",
+      }}>{znacka}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {hlavni}
+        {vedlejsi && <span style={{ color: theme.textSub, fontSize: "11px" }}> · {vedlejsi}</span>}
+      </span>
+    </button>
+  );
+
   return (
     <div style={{ position: "relative" }}>
       <input value={dotaz} onChange={e => setDotaz(e.target.value)}
-        placeholder="Brno, Mladá Boleslav…" style={input(theme)} />
-      {nalezene.length > 0 && (
+        placeholder="Karlovy Vary, Karlovarský, Brno-město…" style={input(theme)} />
+      {dotaz.trim().length >= 2 && (
         <div style={{
           position: "absolute", left: 0, right: 0, top: "100%", zIndex: 5,
           marginTop: 3, background: theme.card,
           border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
           boxShadow: "0 8px 24px rgba(0,0,0,0.18)", overflow: "hidden",
-          maxHeight: 220, overflowY: "auto",
+          maxHeight: 260, overflowY: "auto",
         }}>
-          {nalezene.map(o => (
-            <button key={o.kod} onClick={() => { onZmena(o.kod, o.nazev); setDotaz(""); }}
-              style={{ ...btn(), display: "block", width: "100%", textAlign: "left",
-                       padding: "8px 11px", background: "transparent",
-                       fontSize: "13px", color: theme.text, borderRadius: 0 }}>
-              {o.nazev}
-              <span style={{ color: theme.textSub, fontSize: "11px" }}> · {o.okres}</span>
-            </button>
-          ))}
+          {/* Města první: jsou nejpřesnější a hledají se nejčastěji. */}
+          {obce.map(o => radek(`m-${o.kod}`, o.nazev,
+            [o.okres ? `okres ${popis(ciselniky, "okres", o.okres)}` : "",
+             popis(ciselniky, "kraj", o.kraj)].filter(Boolean).join(" · "),
+            "Město",
+            { kraj: o.kraj || "", okres: o.okres || "", mesto: o.nazev, mesto_kod: o.kod }))}
+          {hrube.okresy.map(o => radek(`o-${o.key}`, `okres ${o.label}`,
+            popis(ciselniky, "kraj", o.skupina), "Okres",
+            { kraj: o.skupina || "", okres: o.key, mesto: "", mesto_kod: "" }))}
+          {hrube.kraje.map(k => radek(`k-${k.key}`, k.label,
+            "", "Kraj",
+            { kraj: k.key, okres: "", mesto: "", mesto_kod: "" }))}
+          {nic && (
+            <div style={{ padding: "9px 11px", fontSize: "12px", color: theme.textSub }}>
+              Nic takového v katalogu není. Zkus kratší kus názvu —
+              nebo vyber aspoň okres či kraj.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -410,12 +485,27 @@ function predvypln(o, zalozniJmeno) {
     name: o?.name || zalozniJmeno || "",
     contact: o?.contact || "",
     met_at: o?.met_at || "",
-    obec_kod: o?.obec_kod || "",
-    obec_nazev: o?.obec_nazev || "",
+    firma: o?.firma || "",
+    kraj: o?.kraj || "",
+    okres: o?.okres || "",
+    mesto: o?.mesto || "",
+    mesto_kod: o?.mesto_kod || "",
     note: o?.note || "",
     aliases: Array.isArray(o?.aliases) ? o.aliases.join(", ") : (o?.aliases || ""),
     role_tagy: o?.role_tagy || [],
   };
+}
+
+/* Tenký nadpis skupiny polí. Není to ozdoba: bez něj formulář
+   vypadá jako osm řádků bez ladu, což byla přesně ta stížnost. */
+function Skupina({ theme, children }) {
+  return (
+    <div style={{
+      fontSize: "10px", fontWeight: 700, letterSpacing: "0.07em",
+      textTransform: "uppercase", color: theme.textSub,
+      marginTop: 11, marginBottom: 5,
+    }}>{children}</div>
+  );
 }
 
 export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = null,
@@ -459,7 +549,19 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
   /* Soukromá poznámka se drží zvlášť, protože je i v databázi
      zvlášť — vlastní tabulka s vlastním zámkem. */
   const [soukroma, setSoukroma] = useState("");
+  /* Karty člověka jen ke čtení — „co hledá" se spravuje jinde,
+     tady je na to jenom vidět. Nový kontakt ještě žádné mít
+     nemůže, tak se pro něj ani neptáme. */
+  const [karty, setKarty] = useState([]);
   const ref = useRef(null);
+
+  useEffect(() => {
+    const id = plna?.id || osoba?.id;
+    if (!owner || !id) { setKarty([]); return; }
+    let zrus = false;
+    nactiKarty(owner, { personId: id }, 12).then(k => { if (!zrus) setKarty(k || []); });
+    return () => { zrus = true; };
+  }, [owner, plna?.id, osoba?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (autoFocus) setTimeout(() => ref.current?.focus(), 60);
@@ -539,9 +641,25 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
         {extra}
       </div>
 
+      {/* ══ POŘADÍ POLÍ ═══════════════════════════════════════
+          Michal: „u zadání jsou nyní 2 řádky, ale nevyznám se
+          v tom logicky… u kontaktu je pro mě zásadní kdo je, kde
+          a jakou má pozici — zprostředkovatel, investor — a
+          případně co hledá nebo v čem pracuje."
+
+          Tohle je přesně to pořadí, jeho větou. Dřív stálo hned
+          pod jménem „Kde jsi ho poznal" a teprve o kus níž „Kde
+          sedí" — dvě pole, obě začínají na „kde", a to první je
+          vzpomínka, podle které se hledat nedá. Není divu, že se
+          město psalo do jména.
+
+          Nadpisy skupin tu jsou proto, aby bylo na první pohled
+          vidět, na kterou otázku které pole odpovídá. */}
+
+      <Skupina theme={theme}>Kdo to je</Skupina>
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-        gap: 7, marginBottom: 7, marginTop: 9,
+        gap: 7, marginBottom: 7,
       }}>
         <div>
           <span style={label(theme)}>Jméno</span>
@@ -549,49 +667,35 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
             onKeyDown={naEnter} placeholder="Jméno a příjmení"
             style={{ ...input(theme), fontWeight: 700 }} />
         </div>
+        {/* Firma a pozice mají vlastní pole, ne roh pole „Kontakt".
+            „Majitel stavební firmy" je to, co si o člověku pamatuješ
+            dřív než jeho telefon — a teď se podle toho dá i hledat. */}
         <div>
-          <span style={label(theme)}>Kontakt</span>
-          <input value={f.contact} onChange={e => uprav("contact", e.target.value)}
-            onKeyDown={naEnter} placeholder="Telefon, mail, firma" style={input(theme)} />
-        </div>
-      </div>
-
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-        gap: 7, marginBottom: 8,
-      }}>
-        <div>
-          <span style={label(theme)}>Kde jsi ho poznal</span>
-          <input value={f.met_at} onChange={e => uprav("met_at", e.target.value)}
-            onKeyDown={naEnter} placeholder="Golf v Berouně, konference" style={input(theme)} />
-        </div>
-        <div>
-          <span style={label(theme)}>Přezdívky</span>
-          <input value={f.aliases} onChange={e => uprav("aliases", e.target.value)}
-            onKeyDown={naEnter} placeholder="Peťa, Petr od aut — oddělené čárkou"
+          <span style={label(theme)}>Firma a pozice</span>
+          <input value={f.firma} onChange={e => uprav("firma", e.target.value)}
+            onKeyDown={naEnter} placeholder="Majitel stavební firmy, jednatel"
             style={input(theme)} />
         </div>
       </div>
 
-      {/* ══ KDE SEDÍ ══
-          Michal: „napsal mi kamarád, majitel velké firmy z Brna,
-          a to jsem v Brně byl nedávno a zapomněl jsem na něj."
-
-          „Kde jsi ho poznal" je vzpomínka a volný text — hledat
-          se podle toho nedá. Tohle je obec z číselníku, takže
-          z ní vypadne okres a s ním i odpověď na otázku, koho máš
-          cestou. */}
-      <div style={{ marginBottom: 8 }}>
-        <span style={label(theme)}>Kde sedí</span>
-        <ObecOsoby theme={theme}
-          kod={f.obec_kod} nazev={f.obec_nazev}
-          onZmena={(kod, nazev) => { uprav("obec_kod", kod || ""); uprav("obec_nazev", nazev || ""); }} />
+      <Skupina theme={theme}>Kde sedí</Skupina>
+      <div style={{ marginBottom: 4 }}>
+        <MistoOsoby theme={theme} ciselniky={ciselniky}
+          misto={{ kraj: f.kraj, okres: f.okres, mesto: f.mesto, mesto_kod: f.mesto_kod }}
+          onZmena={(v) => setF(p => ({
+            ...p,
+            kraj: v?.kraj || "", okres: v?.okres || "",
+            mesto: v?.mesto || "", mesto_kod: v?.mesto_kod || "",
+          }))} />
+        <div style={{ fontSize: "10.5px", color: theme.textSub, marginTop: 4, marginBottom: 8 }}>
+          Z katalogu, ne volným textem — jinak tenhle člověk nevyskočí,
+          až pojedeš kolem. Stačí i samotný okres nebo kraj.
+        </div>
       </div>
-
       {/* Role tady, ne až někde jinde. Tohle je ta databáze investorů:
           označíš "investor" a máš ho v Síti pod filtrem. */}
+      <Skupina theme={theme}>Čím ti je</Skupina>
       <div style={{ marginBottom: 8 }}>
-        <span style={label(theme)}>Čím ti je</span>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
           {aktivni(ciselniky, "role").map(r => {
             const zap = f.role_tagy.includes(r.key);
@@ -612,6 +716,68 @@ export function KontaktEditor({ theme, owner, ciselniky: ciselnikyProp, osoba = 
             </span>
           )}
         </div>
+      </div>
+
+      {/* ══ CO HLEDÁ ═════════════════════════════════════════
+          Tohle pole tu schválně NENÍ. „Co hledá" už aplikace umí
+          pořádně — karta v Síti má směr, typy, kraje, cenu i tiket
+          a dá se podle ní filtrovat. Volný řádek vedle by byl druhá
+          verze téže věci a za půl roku by nebylo jasné, které věřit.
+
+          Proto je tu jen vidět, co ten člověk má, a odkaz, kde se
+          to spravuje. U nového kontaktu nic — karta potřebuje
+          člověka, který už existuje. */}
+      {!novy && karty.length > 0 && (
+        <>
+          <Skupina theme={theme}>Co hledá</Skupina>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 4 }}>
+            {karty.map(k => (
+              <span key={k.id} style={{
+                fontSize: "11.5px", padding: "4px 9px", borderRadius: 14,
+                border: `1px solid ${theme.cardBorder}`, color: theme.textSub,
+                opacity: k.aktivni ? 1 : 0.55,
+              }}>
+                {k.smer === "nabidka" ? "nabízí" : "hledá"}
+                {k.nazev ? ` — ${k.nazev}` : ""}
+                {k.aktivni ? "" : " (neaktivní)"}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: "10.5px", color: theme.textSub, marginBottom: 8 }}>
+            Karty se zakládají a mění na kartě člověka — tam mají typy,
+            kraje i cenu, podle kterých se dá hledat.
+          </div>
+        </>
+      )}
+
+      <Skupina theme={theme}>Jak ho zastihnu</Skupina>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        gap: 7, marginBottom: 7,
+      }}>
+        <div>
+          {/* Nápověda už neříká „firma" — ta má vlastní pole nahoře. */}
+          <span style={label(theme)}>Telefon, mail</span>
+          <input value={f.contact} onChange={e => uprav("contact", e.target.value)}
+            onKeyDown={naEnter} placeholder="606 123 456, jan@firma.cz" style={input(theme)} />
+        </div>
+        <div>
+          <span style={label(theme)}>Přezdívky</span>
+          <input value={f.aliases} onChange={e => uprav("aliases", e.target.value)}
+            onKeyDown={naEnter} placeholder="Peťa, Petr od aut — oddělené čárkou"
+            style={input(theme)} />
+        </div>
+      </div>
+
+      {/* Vzpomínka, ne adresa — a ne způsob, jak ho zastihnout.
+          Proto vlastní nadpis: každé pole má sedět pod otázkou,
+          na kterou odpovídá. Schválně daleko od „Kde sedí", dřív
+          stála hned nad ním a pletly se. */}
+      <Skupina theme={theme}>Odkud ho znám</Skupina>
+      <div style={{ marginBottom: 8 }}>
+        <span style={label(theme)}>Kde jsi ho poznal</span>
+        <input value={f.met_at} onChange={e => uprav("met_at", e.target.value)}
+          onKeyDown={naEnter} placeholder="Golf v Berouně, konference" style={input(theme)} />
       </div>
 
       {/* ══ DVĚ POZNÁMKY, SCHVÁLNĚ ODDĚLENÉ ═══════════════════

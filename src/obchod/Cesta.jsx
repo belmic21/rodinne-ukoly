@@ -20,7 +20,8 @@
      · Neplánuje trasu. Měří se přímka mezi těžišti okresů,
        ne silnice. Na „koho mám zhruba cestou" to stačí, na
        navigaci ne.
-     · Neví o lidech, kteří nemají vyplněnou obec. Těm ji musíš
+     · Neví o lidech, kteří nemají vyplněné ani město, ani okres,
+       ani kraj. Těm ho musíš
        dát — proto je dole vidět, kolika lidem chybí.
    ════════════════════════════════════════════════════════ */
 
@@ -155,7 +156,10 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
     } catch { /* soukromé okno, nevadí */ }
   }, [odkud]);
 
-  const bezObce = useMemo(() => lide.filter(p => !p.okres).length, [lide]);
+  /* Kdo nemá ani kraj, ten o sobě neřekl vůbec nic a do „Jedu
+     do…" se dostat nemůže. Lidé, kteří mají jen kraj, se sem
+     dostanou — jen bez kilometrů, viz vKraji níž. */
+  const bezMista = useMemo(() => lide.filter(p => !p.kraj && !p.okres).length, [lide]);
 
   const nalezeni = useMemo(() => {
     if (!kam) return [];
@@ -179,6 +183,27 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
          kamaráda z Brna zapomene. */
       .sort((a, b) => (b.ticho ?? 99999) - (a.ticho ?? 99999));
   }, [lide, kam, odkud, sirka]);
+
+  /* ══ JEN KRAJ, BEZ OKRESU ══
+     U spousty lidí víš jen „někde na Karlovarsku". Kilometry se
+     z kraje spočítat nedají — kraj je velký a těžiště okresu je
+     to jediné, co mapa zná. Vyhodit je ale nejde: právě na ně se
+     zapomíná. Tak stojí v samostatném, kratším bloku: ne „je 12 km
+     po cestě", ale „je někde v kraji, kterým pojedeš". */
+  const vKraji = useMemo(() => {
+    if (!kam?.kraj) return [];
+    const kraje = new Set([kam.kraj, odkud?.kraj].filter(Boolean));
+    return lide
+      .filter(p => !p.okres && p.kraj && kraje.has(p.kraj))
+      .map(p => ({
+        ...p,
+        ticho: p.posledni_dotyk
+          ? Math.floor((Date.now() - new Date(p.posledni_dotyk).getTime()) / 86400000)
+          : null,
+      }))
+      .sort((a, b) => (b.ticho ?? 99999) - (a.ticho ?? 99999))
+      .slice(0, 8);
+  }, [lide, kam, odkud]);
 
   return (
     <div onClick={onClose} style={{
@@ -261,7 +286,7 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
               {odkud
                 ? `Na trase ${odkud.nazev} → ${kam.nazev} nikoho nemáš — aspoň ne do ${sirka} km od ní.`
                 : `Do ${sirka} km od cíle ${kam.nazev} nikoho nemáš.`}
-              {bezObce > 0 && <><br />Ale {bezObce} {bezObce === 1 ? "člověk nemá" : bezObce < 5 ? "lidé nemají" : "lidí nemá"} vyplněnou obec — ti se sem dostat nemůžou.</>}
+              {bezMista > 0 && <><br />Ale {bezMista} {bezMista === 1 ? "člověk nemá" : bezMista < 5 ? "lidé nemají" : "lidí nemá"} vyplněné místo — ti se sem dostat nemůžou.</>}
             </div>
           ) : (
             <>
@@ -290,7 +315,7 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
                         display: "block", fontSize: "11px", color: theme.textSub,
                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                       }}>
-                        {p.obec}
+                        {p.mesto}
                         {p.contact ? ` · ${p.contact}` : ""}
                       </span>
                     </span>
@@ -313,6 +338,62 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
             </>
           )}
 
+          {/* ══ JEN KRAJ ══
+              Lidé, u kterých víš jen kraj. Nemají kilometry a mít
+              je nemůžou — kraj je velký. Ale zapomenout se na ně
+              smí ještě míň než na ostatní, protože u nich ani
+              nevíš, kudy přesně jedeš kolem. */}
+          {vKraji.length > 0 && (
+            <>
+              <div style={{
+                fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+                textTransform: "uppercase", color: theme.textSub,
+                marginTop: 14, marginBottom: 5,
+              }}>Někde v kraji, kterým pojedeš</div>
+              <div style={{
+                border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
+                overflow: "hidden",
+              }}>
+                {vKraji.map(p => (
+                  <button key={p.person_id}
+                    onClick={() => onOtevriOsobu?.(p.person_id)}
+                    title={`Otevřít ${p.name}`}
+                    aria-label={`Otevřít ${p.name}`}
+                    style={{
+                      ...btn(), display: "flex", alignItems: "center", gap: 10,
+                      width: "100%", textAlign: "left", padding: "9px 10px",
+                      background: "transparent",
+                    }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{
+                        display: "block", fontSize: "13.5px", fontWeight: 500, color: theme.text,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{p.name}</span>
+                      <span style={{
+                        display: "block", fontSize: "11px", color: theme.textSub,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>
+                        {p.firma || p.contact || "bez bližšího místa"}
+                      </span>
+                    </span>
+                    <span style={{
+                      flex: "0 0 auto", fontSize: "11.5px", fontWeight: 500,
+                      color: p.ticho === null ? theme.textMid
+                           : p.ticho >= 90 ? theme.red
+                           : p.ticho >= 30 ? theme.yellow : theme.textSub,
+                    }}>
+                      {p.ticho === null ? "nikdy nic" : `${dnu(p.ticho)} ticha`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: "10.5px", color: theme.textMid, marginTop: 5 }}>
+                U nich znáš jen kraj, takže kilometry nejsou. Doplň jim
+                okres nebo město a příště vyskočí mezi ostatními.
+              </div>
+            </>
+          )}
+
           {/* Dvě věty, které tahle obrazovka dluží každému, kdo jí
               má věřit: odkud se čísla berou a koho v nich nenajde. */}
           <div style={{
@@ -320,8 +401,8 @@ export function CestaSheet({ theme, onClose, onOtevriOsobu }) {
             fontSize: "11px", color: theme.textMid, lineHeight: 1.6,
           }}>
             Kilometry jsou vzdušnou čarou mezi okresy, ne po silnici — ber je jako „zhruba".
-            {bezObce > 0 && nalezeni.length > 0 && (
-              <> Dalších {bezObce} {bezObce === 1 ? "člověk nemá" : bezObce < 5 ? "lidé nemají" : "lidí nemá"} vyplněnou obec, takže se sem nedostanou.</>
+            {bezMista > 0 && nalezeni.length > 0 && (
+              <> Dalších {bezMista} {bezMista === 1 ? "člověk nemá" : bezMista < 5 ? "lidé nemají" : "lidí nemá"} vyplněné místo, takže se sem nedostanou.</>
             )}
           </div>
         </div>

@@ -591,7 +591,7 @@ export async function hledejLidi(owner, query = "", limit = 20) {
 // stejné tabulky, takže v Mapě na něj narazíš úplně stejně.
 /* Sloupce člověka. Na jednom místě, aby se po okně nepotulovaly
    tři různé výběry a jedno okno nevědělo o roli, kterou druhé ukládá. */
-const OSOBA = "id, name, aliases, note, met_at, contact, role_tagy, introduced_by, obec_kod";
+const OSOBA = "id, name, aliases, note, met_at, contact, role_tagy, introduced_by, firma, kraj, okres, mesto, mesto_kod";
 
 /* Očistí, co přišlo z formuláře. Prázdné pole = null, ne prázdný řetězec:
    jinak by "bez kontaktu" a "kontakt je prázdný text" byly dvě různé věci. */
@@ -604,8 +604,17 @@ function osobaDoDb(d) {
   if ("name" in d)     telo.name = t(d.name);
   if ("contact" in d)  telo.contact = t(d.contact);
   if ("met_at" in d)   telo.met_at = t(d.met_at);
-  // Kde sedí. Odtud se bere okres pro „Jedu do…".
-  if ("obec_kod" in d) telo.obec_kod = t(d.obec_kod);
+  /* Kde sedí. Stejná čtyři pole jako u zakázky — schválně, aby
+     existovala jedna slovní zásoba pro místo. Vyplněná může být
+     kterákoli úroveň: město → okres → kraj. Kraj je vyplněný
+     vždycky, když je vyplněno cokoli pod ním. */
+  if ("kraj" in d)      telo.kraj = t(d.kraj);
+  if ("okres" in d)     telo.okres = t(d.okres);
+  if ("mesto" in d)     telo.mesto = t(d.mesto);
+  if ("mesto_kod" in d) telo.mesto_kod = t(d.mesto_kod);
+  // Firma a pozice. Dřív se psaly do „Kontakt" vedle telefonu,
+  // takže se podle nich nedalo hledat.
+  if ("firma" in d)     telo.firma = t(d.firma);
   if ("note" in d)     telo.note = t(d.note);
   if ("role_tagy" in d) telo.role_tagy = Array.isArray(d.role_tagy) ? d.role_tagy : [];
   if ("aliases" in d) {
@@ -628,7 +637,7 @@ function jmenoSedi(n) {
    formulář jako objekt. Díky tomu jde člověka založit i s rolemi
    rovnou z výběru u zakázky, ne až dodatečně v Síti. */
 /* ══ SLOUPEC, KTERÝ V DATABÁZI JEŠTĚ NENÍ ══
-   16. 10.: formulář člověka začal posílat obec_kod dřív, než byl
+   16. 10.: formulář člověka začal posílat místo dřív, než byl
    v databázi sloupec — a databáze kvůli jednomu neznámému poli
    odmítla CELÝ zápis. Výsledek: u člověka nešlo uložit vůbec nic,
    ani jméno, i když s obcí nikdo nepracoval.
@@ -636,8 +645,9 @@ function jmenoSedi(n) {
    Načítání úkolů má na tuhle situaci pojistku odjakživa; zápis
    osoby ji neměl. Tohle je ona: když databáze hlásí neznámý
    sloupec, pole se vyhodí a zkusí se to znovu. Tím se ztratí
-   obec — ale jméno a telefon se uloží, a to je to, co člověk
-   zrovna psal.
+   místo — ale jméno a telefon se uloží, a to je to, co člověk
+   zrovna psal. Pole se vypisují níž ručně; odvozovat je z hlášky
+   databáze nejde, ta jmenuje jen to první, o které zakopla.
 
    Rozpozná se to podle kódu PGRST204 („schema cache"), případně
    podle 42703 z Postgresu. Nehádá se podle textu hlášky. */
@@ -646,7 +656,7 @@ function chybiSloupec(e) {
   return kod === "PGRST204" || kod === "42703";
 }
 
-const NEPOVINNA_POLE = ["obec_kod"];
+const NEPOVINNA_POLE = ["kraj", "okres", "mesto", "mesto_kod", "firma"];
 
 function bezNepovinnych(telo) {
   const out = { ...telo };
@@ -754,11 +764,11 @@ export async function nactiOsobu(id) {
   try {
     const { data, error } = await supabase
       .from("map_people")
-      /* Název obce se přitahuje rovnou — jinak by formulář ukazoval
-         holý kód z číselníku, kterému nikdo nerozumí. Když sloupec
-         obec_kod ještě není (skript s místem neproběhl), vrátí
-         databáze chybu a zkusí se to bez něj. */
-      .select("id, name, aliases, note, met_at, contact, role_tagy, obec_kod, obec:obce(nazev)")
+      /* Místo se ukládá rozepsané (město, okres, kraj), takže se
+         nikam nepřipojuje — formulář i výpis mají rovnou názvy,
+         ne holé kódy. Když sloupce ještě nejsou (skript s místem
+         neproběhl), vrátí databáze chybu a zkusí se to bez nich. */
+      .select("id, name, aliases, note, met_at, contact, role_tagy, firma, kraj, okres, mesto, mesto_kod")
       .eq("id", id).maybeSingle();
     if (error) {
       const { data: d2, error: e2 } = await supabase
@@ -768,7 +778,7 @@ export async function nactiOsobu(id) {
       if (e2) throw e2;
       return d2;
     }
-    return data ? { ...data, obec_nazev: data.obec?.nazev || null } : data;
+    return data;
   } catch (e) {
     selhalo("nactiOsobu", e);
     return null;
@@ -2427,15 +2437,39 @@ export async function lideSMistem() {
   }
 }
 
-// Uloží člověku obec. Prázdno znamená „nevím", ne „nikde".
-export async function ulozObecOsoby(id, obecKod) {
+/* Uloží člověku místo. Všechna čtyři pole najednou — kdyby se
+   ukládala po jednom, dalo by se dojet do stavu „město Karlovy
+   Vary, kraj Jihomoravský". Prázdno znamená „nevím", ne „nikde".
+
+   `misto` je to, co vrátí našeptávač: { kraj, okres, mesto,
+   mesto_kod }. Null nebo prázdný objekt místo smaže. */
+export async function ulozMistoOsoby(id, misto) {
   if (!id) return { ok: false, chyba: "Chybí člověk." };
+  const m = misto || {};
   try {
     const { error } = await supabase
-      .from("map_people").update({ obec_kod: obecKod || null }).eq("id", id);
+      .from("map_people").update({
+        kraj: m.kraj || null,
+        okres: m.okres || null,
+        mesto: m.mesto || null,
+        mesto_kod: m.mesto_kod || null,
+      }).eq("id", id);
     if (error) throw error;
     return { ok: true };
   } catch (e) {
-    return selhalo("ulozObecOsoby", e);
+    return selhalo("ulozMistoOsoby", e);
+  }
+}
+
+/* Kolik lidí nemá ani kraj. Jedno číslo místo stahování všech
+   lidí do prohlížeče — pruh na úvodní obrazovce se ptá pokaždé. */
+export async function lideBezMista() {
+  try {
+    const { data, error } = await supabase.rpc("lide_bez_mista");
+    if (error) throw error;
+    return data || 0;
+  } catch (e) {
+    selhalo("lideBezMista", e);
+    return 0;
   }
 }
