@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261017_0830";
+const FILE_VERSION = "261017_1020";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -1153,6 +1153,45 @@ function sanitizeCompletedChecklists(tasks, users) {
 /* ═══════════════════════════════════════════════════════
    THEMES
    ═══════════════════════════════════════════════════════ */
+
+/* ══ JAK POZNÁŠ, V JAKÉM JSI REŽIMU ═══════════════════════════
+   Michal 17. 10.: „nebylo by tedy dobré mít barevné rozlišení?
+   Např. pracovní má červené podsvícení obrazovky a soukromé
+   modré?"
+
+   Nápad ano, ty dvě barvy ne. Červená v téhle aplikaci znamená
+   „po termínu / akutní / smazat" na 139 místech a modrá je hlavní
+   akční barva na 423. Červeně podbarvená pracovní obrazovka by
+   říkala dvě věci naráz — že jsi v práci a že hoří — a skutečné
+   červené termíny by v tom zanikly. Navíc jsi v práci většinu dne;
+   výchozí stav nemůže vypadat jako poplach.
+
+   Proto se režim pozná TEPLOTOU, ne signální barvou: práce
+   chladnější, osobní teplejší. Odstíny nejsou odhadnuté od oka,
+   jsou změřené v ΔE2000 — od základu 3,4 a 6,7 ve světlém,
+   4,1 a 7,8 v tmavém, mezi režimy navzájem 9,6 a 11,7. To je nad
+   prahem rozlišitelnosti, ale hluboko pod sytostí čehokoli, co
+   něco znamená. První pokus měl v tmavém režimu ΔE 0,8, což je
+   neviditelné — proto se to měří a nehádá.
+
+   Nahoře k tomu pruh u okraje: ten je jednoznačný i pro oko, které
+   rozdíl v pozadí nezachytí, a hlavně pro kohokoli, kdo barvy
+   rozlišuje hůř.
+
+   V režimu „Vše" není ani pruh, ani podbarvení. Prázdno tu samo
+   o sobě něco říká: nic není schované. */
+const REZIM_VZHLED = {
+  light: {
+    vse:    { bg: "#f5f7fa", pruh: null,      popis: "Vše",      ikona: "◻" },
+    prace:  { bg: "#e9eef7", pruh: "#475569", popis: "Pracovní", ikona: "💼" },
+    osobni: { bg: "#fcf6ec", pruh: "#a1785c", popis: "Osobní",   ikona: "🏠" },
+  },
+  dark: {
+    vse:    { bg: "#0c1017", pruh: null,      popis: "Vše",      ikona: "◻" },
+    prace:  { bg: "#0b1320", pruh: "#64748b", popis: "Pracovní", ikona: "💼" },
+    osobni: { bg: "#15110a", pruh: "#b08968", popis: "Osobní",   ikona: "🏠" },
+  },
+};
 
 const THEMES = {
   dark: {
@@ -19008,7 +19047,10 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {results.tasks.map(t => (
                       <button key={`task-${t.id}`}
-                        onClick={() => { onNavigate(t.id); onClose(); }}
+                        /* Nezavírá se. Úkol se otevře NAD výsledky,
+                           takže se dá projít víc nálezů po sobě. */
+                        title="Otevřít úkol — výsledky zůstanou pod ním"
+                        onClick={() => onNavigate(t.id)}
                         style={{
                           ...buttonStyle(),
                           textAlign: "left", padding: "10px 12px",
@@ -26393,6 +26435,14 @@ function App() {
       : jeOdlozeny(u) ? "all"
       : zaHorizontem ? "planned"
       : "active");
+    /* Pohled nestačí. Seznam zužuje i režim Osobní / Práce a filtr
+       jedné zakázky — a kdyby zůstaly zapnuté, skok by skončil
+       v prázdnu přesně tak, jako to Michal 17. 10. zažil
+       u „Švábová koje". Když už někam skáču, ať tam ten úkol
+       opravdu je. */
+    setPraceFilter("vse");
+    setZakazkaFiltr(null);
+    setZakazkaFiltrId(null);
     setOtevritPoSkoku(otevrit);
     setHighlightedTaskId(String(id));
   }, [tasks, activeHorizonDays]);
@@ -26489,6 +26539,11 @@ function App() {
   const sync = useSyncStatus();
 
   const theme = THEMES[themeName];
+  /* Vzhled režimu. Nesahá se na theme — stavové barvy musí zůstat
+     přesně takové, jaké jsou, jinak by se rozdíl mezi „po termínu"
+     a „v pořádku" posunul pokaždé, když přepneš režim. */
+  const vzhledRezimu = (REZIM_VZHLED[themeName] || REZIM_VZHLED.light)[praceFilter]
+    || (REZIM_VZHLED[themeName] || REZIM_VZHLED.light).vse;
 
   // Online/offline detection + flush queue when back online
   useEffect(() => {
@@ -29376,6 +29431,24 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     }).length;
   }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, praceFilter, zakazkaFiltr, searchQuery, customLists]);
 
+  /* Kolik živých úkolů schovává právě režim Osobní / Práce.
+     Počítá se stejnou funkcí, jakou zužuje seznam i počítadla
+     u čipů — projdeZuzenim(). Kdyby to byla kopie, rozešlo by se
+     to jako posledně. */
+  const skryteRezimem = useMemo(() => {
+    if (!currentUser || praceFilter === "vse") return 0;
+    return tasks.filter(t => {
+      if (isDone(t) || isDeleted(t) || isArchived(t)) return false;
+      if (!currentUser.admin) {
+        const prideleno = Array.isArray(t.assignedTo) ? t.assignedTo : [];
+        const sdileno = Array.isArray(t.sharedWith)
+          && (t.sharedWith.includes("*") || t.sharedWith.includes(currentUser.name));
+        if (t.createdBy !== currentUser.name && !prideleno.includes(currentUser.name) && !sdileno) return false;
+      }
+      return !projdeZuzenim(t, { praceFilter });
+    }).length;
+  }, [tasks, currentUser, praceFilter]);
+
   const stats = useMemo(() => {
     if (!currentUser) return {};
     const isOwnPersonal = (t) => {
@@ -29731,7 +29804,11 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       // Layout: flex column = top část (header+input+filter) FIXED, bottom část scrollable.
       // Tím dosáhneme, že se scrolují jen úkoly, zbytek zůstává nehnutý.
       // Safe area inset pro iPhone notch je v body padding (GLOBAL_CSS).
-      height: "100vh", background: theme.bg, fontFamily: FONT,
+      // Podbarvení podle režimu — viz REZIM_VZHLED. V režimu „Vše"
+      // je to přesně theme.bg, takže kdo režimy nepoužívá, nepozná
+      // žádný rozdíl.
+      height: "100vh", background: vzhledRezimu.bg, fontFamily: FONT,
+      transition: "background 180ms ease",
       color: theme.text, WebkitFontSmoothing: "antialiased",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
@@ -29746,6 +29823,16 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       boxSizing: "border-box",
     }}>
       <style>{globalCss(theme)}</style>
+
+      {/* Pruh přes celou šířku, nad bočním pruhem i hlavičkou.
+          Ukotvený napevno, aby nezmizel při rolování — tohle je
+          údaj o stavu, ne ozdoba v záhlaví. */}
+      {vzhledRezimu.pruh && (
+        <div aria-hidden="true" style={{
+          position: "fixed", top: 0, left: 0, right: 0, height: 4,
+          background: vzhledRezimu.pruh, zIndex: 40, pointerEvents: "none",
+        }} />
+      )}
 
       {!jeRail && (
         <SpodniLista
@@ -29792,6 +29879,29 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             🎯{!jeRail && windowWidth >= 720 && <span> Fokus</span>}
           </button>
           <SyncPill theme={theme} online={online} onRetry={retrySync} />
+          {/* Michal se ptal: „kde najdu na mobilu tlačítko osobní /
+              pracovní?" Nikde — byl schovaný v menu Víc, zatímco
+              rozhodoval o tom, co je v seznamu vidět. Teď stojí
+              v hlavičce na obou rozvrženích a je na něm napsané,
+              co je zapnuté. Klik přepíná dokola. */}
+          <button onClick={() => setPraceFilter(
+              praceFilter === "vse" ? "prace" : praceFilter === "prace" ? "osobni" : "vse")}
+            title={`Režim: ${vzhledRezimu.popis}. Klikem přepneš na další — Vše, Pracovní, Osobní.`}
+            aria-label={`Režim ${vzhledRezimu.popis}, přepnout`}
+            style={{
+              background: praceFilter === "vse" ? "transparent" : `${vzhledRezimu.pruh}1a`,
+              border: `1px solid ${praceFilter === "vse" ? theme.cardBorder : vzhledRezimu.pruh + "55"}`,
+              borderRadius: "6px",
+              padding: windowWidth < 720 ? "3px 7px" : "3px 9px",
+              color: praceFilter === "vse" ? theme.textSub : theme.text,
+              cursor: "pointer", fontFamily: FONT,
+              fontSize: windowWidth < 720 ? "13px" : "12px",
+              fontWeight: praceFilter === "vse" ? 500 : 700,
+              display: "inline-flex", alignItems: "center", gap: "4px",
+            }}>
+            <span aria-hidden="true">{vzhledRezimu.ikona}</span>
+            {windowWidth >= 480 && <span>{vzhledRezimu.popis}</span>}
+          </button>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           {/* Search ikona. Na telefonu ji nese spodní lišta, tady by
@@ -31252,31 +31362,30 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               setObchodZakazka(z?.id || null);
               setShowObchodSheet(true);
             }}
+            /* ══ KLIK VE VYHLEDÁVÁNÍ ÚKOL OTEVŘE ══
+               Michal 17. 10.: „nemohu najít 1 úkol, ve vyhledávání
+               ho najdu, ale když na něj kliknu, nezobrazí se…
+               mám obavu, aby podobně ukrytých nebylo více."
+
+               Měl pravdu a byla to past, ne výjimka. Tohle místo
+               se dřív snažilo úkol NAJÍT V SEZNAMU: přepnulo
+               pohled, uhádlo komu, zrušilo pár filtrů a doufalo,
+               že se řádek objeví. Jenže zapomínalo na dvě věci,
+               které seznam zužují úplně stejně — režim Osobní /
+               Práce a filtr jedné zakázky. Osobní úkol v pracovním
+               režimu tak zůstal schovaný a klik skončil v prázdnu.
+               Ještě hůř: setFilter("my") znamená „co jsem si
+               zadal sám sobě", takže úkol sdílený s někým dalším
+               se tím schoval taky.
+
+               Hádání, kam se schovat, se nedá dohádat do konce —
+               filtrů je deset a stačí jeden. Proto se úkol nehledá
+               v seznamu, ale OTEVŘE se nad ním. Žádný filtr ho
+               nemůže schovat, protože už není v žádném seznamu.
+               Vyhledávání zůstane otevřené pod ním, ať se dá projít
+               víc výsledků za sebou — stejně jako revize. */
             onNavigate={(taskId) => {
-              // Pokud je úkol v jiném view než aktuální, přepneme
-              const t = tasks.find(x => x.id === taskId);
-              if (t) {
-                if (isDeleted(t)) setViewStatus("trash");
-                else if (t.status === "done") setViewStatus("done");
-                else if (t.showFrom && daysDiff(t.showFrom) > 0) setViewStatus("planned");
-                else setViewStatus("active");
-                // Inteligentně nastavit scope
-                const isMine = t.assignedTo?.includes(currentUser.name) || t.createdBy === currentUser.name;
-                if (isMine) {
-                  setFilter("my");
-                } else if (currentUser.admin) {
-                  setFilter("all");
-                }
-                setCategoryFilter("all");
-                setPriorityFilter("all");
-                setTagFilter("all");
-                setCreatedWhenFilter("all");
-                setCreatedByFilter("all");
-                setDueDateFilter("all");
-              }
-              setScrollToTaskId(taskId);
-              setHighlightedTaskId(taskId);
-              setOtevritPoSkoku(true);
+              setUkolNaCeleObrazovce(String(taskId));
             }}
           />
         )}
@@ -31554,6 +31663,41 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                 );
               })}
             </div>
+          )}
+
+          {/* ══ CO PRÁVĚ NEVIDÍŠ ══════════════════════════════════
+              Michal 17. 10.: „mám obavu, aby podobně ukrytých
+              nebylo více."
+
+              Oprávněná obava. Režim Osobní / Práce zužuje seznam
+              stejně tvrdě jako kterýkoli filtr, jenže na rozdíl od
+              nich se tváří jako nastavení, ne jako filtr — a tak
+              se na něj zapomene. Dokud aplikace mlčela, vypadal
+              zúžený seznam úplně stejně jako hotová práce.
+
+              Tenhle řádek je ta chybějící věta. Je vidět jen tehdy,
+              když režim opravdu něco schovává, říká kolik, a jedním
+              klikem to ukáže. */}
+          {!isTypingMode && !["trash", "archive"].includes(viewStatus) && skryteRezimem > 0 && (
+            <button onClick={() => setPraceFilter("vse")}
+              title="Přepnout na Vše — uvidíš osobní i pracovní pohromadě"
+              style={{
+                ...buttonStyle(), width: "100%", textAlign: "left",
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "6px 10px", marginBottom: 6,
+                background: `${theme.yellow}12`,
+                border: `1px solid ${theme.yellow}44`,
+                borderRadius: 8, fontSize: "11.5px", color: theme.text,
+                fontFamily: FONT,
+              }}>
+              <span aria-hidden="true">👁</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                Režim {praceFilter === "prace" ? "Práce" : "Osobní"} teď schovává{" "}
+                <strong>{skryteRezimem}</strong>{" "}
+                {skryteRezimem === 1 ? "živý úkol" : skryteRezimem < 5 ? "živé úkoly" : "živých úkolů"}.
+              </span>
+              <span style={{ flexShrink: 0, fontWeight: 700, color: theme.accent }}>Ukázat vše</span>
+            </button>
           )}
 
           <QuickAddBar
