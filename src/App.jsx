@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261016_2320";
+const FILE_VERSION = "261017_0830";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3980,6 +3980,21 @@ const CACHE_NOTES = "ft_cache_notes";
    zmizet — jinak by každý řádek začínal stejným balastem.
    Prefix si určuje uživatel v nastavení, proto obecný tvar. */
 const KOD_ZAKAZKY = /^([A-Z]{1,4}-\d{3,7})\s+(.*)$/;
+
+/* Tři filtry, které seznam úkolů zužují bez ohledu na stav úkolu:
+   režim Osobní/Práce, filtr jedné zakázky a hledání.
+
+   Žijí tady, protože je potřebují DVĚ místa — seznam (filteredTasks)
+   i počítadla u čipů (countTasks). Dokud byly opsané jen v seznamu,
+   čísla u čipů počítala přes všechno a Michal viděl „Dnes 21" nad
+   seznamem, kde tolik položek nebylo. Jedna funkce pro obě místa
+   znamená, že se znovu rozejít nemůžou. */
+function projdeZuzenim(t, { praceFilter, zakazkaFiltr, searchQuery, customLists }) {
+  if (praceFilter && praceFilter !== "vse" && !vRezimu(t, praceFilter)) return false;
+  if (zakazkaFiltr && rozlozNazev(t.title).kod !== zakazkaFiltr) return false;
+  if (searchQuery && !searchMatch(t, searchQuery, customLists)) return false;
+  return true;
+}
 
 function rozlozNazev(title) {
   const m = KOD_ZAKAZKY.exec((title || "").trim());
@@ -28522,11 +28537,12 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       });
     }
 
-    // Osobní / zakázky. Úkol u zakázky má vyplněné projectId.
-    // Oblast úkolu, ne přítomnost zakázky — viz oblastUkolu().
-    if (praceFilter !== "vse") result = result.filter(t => vRezimu(t, praceFilter));
-    // Klik na kód u úkolu — jen tahle zakázka.
-    if (zakazkaFiltr) result = result.filter(t => rozlozNazev(t.title).kod === zakazkaFiltr);
+    // Režim Osobní/Práce + filtr zakázky. Stejná funkce, jakou
+    // používají počítadla u čipů — viz projdeZuzenim().
+    // (Hledání se přidává níž, až po seřazení sekcí.)
+    if (praceFilter !== "vse" || zakazkaFiltr) {
+      result = result.filter(t => projdeZuzenim(t, { praceFilter, zakazkaFiltr }));
+    }
 
     // Status filter
     const recentCutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
@@ -29227,10 +29243,16 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     return tasks.filter(t => {
       if (!predicate(t)) return false;
       // ═══ VISIBILITY FILTER (per-user privacy) ═══
+      // Stejné pravidlo jako ve filteredTasks — včetně sdílených.
+      // Dokud tu sharedWith chybělo, číslo u čipu bylo menší než
+      // seznam pod ním.
       if (!currentUser.admin) {
-        const isVisible = t.createdBy === currentUser.name ||
+        let videt = t.createdBy === currentUser.name ||
           (t.assignedTo && t.assignedTo.includes(currentUser.name));
-        if (!isVisible) return false;
+        if (!videt && Array.isArray(t.sharedWith)) {
+          videt = t.sharedWith.includes("*") || t.sharedWith.includes(currentUser.name);
+        }
+        if (!videt) return false;
       }
       // Status filter (viewStatus) — skip if counting statuses
       if (!skip.includes("status")) {
@@ -29341,9 +29363,18 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
       if (!skip.includes("createdBy") && createdByFilter !== "all") {
         if (t.createdBy !== createdByFilter) return false;
       }
+      /* Michal: „číslo 21 neodpovídá."
+
+         Měl pravdu a nebyla to chyba jednoho čipu: počítadlo
+         neznalo přepínač Osobní / Práce, filtr zakázky ani
+         hledání, zatímco seznam pod ním je používá všechny.
+         V pracovním režimu tak čipy počítaly i domácí věci.
+         Číslo u čipu musí slíbit přesně to, co se po kliknutí
+         objeví — jinak je to ciferník, který ukazuje cizí čas. */
+      if (!projdeZuzenim(t, { praceFilter, zakazkaFiltr, searchQuery, customLists })) return false;
       return true;
     }).length;
-  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter]);
+  }, [tasks, currentUser, viewStatus, filter, categoryFilter, priorityFilter, tagFilter, showDeferred, createdWhenFilter, createdByFilter, dueDateFilter, praceFilter, zakazkaFiltr, searchQuery, customLists]);
 
   const stats = useMemo(() => {
     if (!currentUser) return {};
@@ -29418,10 +29449,25 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
         }
         return false;
       }, ["status"]),
+      /* Čip „Dnes" v pásu filtrů je FILTR seznamu, ne vstup na
+         obrazovku Dnes — ta má své tlačítko v liště. Počítá se
+         proto přesně to, co se po kliknutí objeví: nesplněné
+         úkoly s termínem dnes. Žádné dnes odškrtnuté: ty by
+         číslo nafoukly nad počet řádků, které jsou k udělání. */
+      dnesVSeznamu: countTasks(t => {
+        if (isDone(t) || isDeleted(t) || isRejected(t) || isArchived(t)) return false;
+        // Odložené na později seznam v režimu Aktivní neukazuje.
+        if (t.showFrom && daysDiff(t.showFrom) > 0 && !showDeferred) return false;
+        if (!t.dueDate) return false;
+        const zacatek = new Date(); zacatek.setHours(0, 0, 0, 0);
+        const konec = new Date(); konec.setHours(23, 59, 59, 999);
+        const due = new Date(t.dueDate);
+        return due >= zacatek && due <= konec;
+      }, ["status", "dueDate"]),
       // "all" count — všechny úkoly bez status filtru
       all: countTasks(() => true, ["status"]),
     };
-  }, [currentUser, countTasks]);
+  }, [currentUser, countTasks, showDeferred]);
 
   const categoryCounts = useMemo(() => {
     const counts = {};
@@ -31385,17 +31431,37 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               marginBottom: "4px",
             }}>
               {[
-                // Dnes je v bočním pruhu; v pásu by byl podruhé a dvě
-                // ovládání téhož se vylučují (JAZYK.md, oddíl 7).
-                ...(jeRail ? [] : [{ key: "today", icon: "📅", label: "Dnes", count: stats.today }]),
-                { key: "active", icon: "📋", label: "Aktivní", count: stats.active },
+                /* Michal: „tlačítko dnes… mělo by ukázat dnešní úkoly,
+                   ale přesměruje mě na akce dnes, na které mám
+                   samotné tlačítko vlevo dole."
+
+                   Přesně tak to bylo: čip stál v řadě filtrů, ale
+                   místo filtrování otevřel obrazovku Dnes — tu samou,
+                   kterou má lišta. Dvě ovládání téhož, a navíc pás
+                   filtrů zmizel, takže nebylo kudy zpátky.
+
+                   Teď dělá to, co čip ve filtrech dělat má: zúží
+                   seznam na úkoly s termínem dnes. Obrazovka Dnes
+                   zůstává lištová. Druhý klik filtr sundá. */
+                { key: "dnes_filtr", icon: "📅", label: "Dnes", count: stats.dnesVSeznamu,
+                  aktivni: viewStatus === "active" && dueDateFilter === "today",
+                  akce: () => {
+                    const zapnuto = viewStatus === "active" && dueDateFilter === "today";
+                    setDueDateFilter(zapnuto ? "all" : "today");
+                    if (!zapnuto) setViewStatus("active");
+                  },
+                  titulek: "Jen úkoly s termínem dnes. Obrazovku Dnes najdeš v liště." },
+                { key: "active", icon: "📋", label: "Aktivní", count: stats.active,
+                  aktivni: viewStatus === "active" && dueDateFilter !== "today",
+                  akce: () => { setViewStatus("active"); if (dueDateFilter === "today") setDueDateFilter("all"); } },
                 { key: "in_progress", icon: "⚙", label: "Rozpracované", count: stats.in_progress },
                 { key: "planned", icon: "⏰", label: "Plánované", count: stats.planned },
                 { key: "all", icon: "🌐", label: "Vše", count: null },
               ].map(v => {
-                const isActive = viewStatus === v.key;
+                const isActive = v.aktivni !== undefined ? v.aktivni : viewStatus === v.key;
                 return (
-                  <button key={v.key} onClick={() => setViewStatus(v.key)} style={{
+                  <button key={v.key} title={v.titulek}
+                    onClick={() => (v.akce ? v.akce() : setViewStatus(v.key))} style={{
                     ...buttonStyle(),
                     padding: "4px 10px",
                     fontSize: "12px", fontWeight: isActive ? 700 : 500,
