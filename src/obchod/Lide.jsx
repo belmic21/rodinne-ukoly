@@ -20,7 +20,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   prehledLidi, zanedbani, popis, aktivni,
   rozeberOsobu, rozeberKontakty, oznacDuplicity, naimportujLidi,
-  zalozOsobu, prehledStavuLidi,
+  zalozOsobu, prehledStavuLidi, hledejObce,
 } from "./api.js";
 import { KontaktEditor } from "./Site.jsx";
 import { card, input, btn, btnMain, btnGhost, label, zvyrazni, pocet } from "./ui.js";
@@ -58,6 +58,32 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
     () => (text.trim() ? rozeberOsobu(text, ciselniky) : null),
     [text, ciselniky]);
 
+  /* ══ MÍSTO ZA ČÁRKOU ══
+     Co zůstalo za čárkou a není telefon, mail, role ani „od koho",
+     se zkusí najít v číselníku obcí. Najde-li se, uloží se rovnou
+     jako město i s okresem a krajem — ten člověk pak vyskočí
+     v „Jedu do…". Nenajde-li se, nic se nehádá: zůstane vidět,
+     že se to nepovedlo, a jméno se tím nezašpiní. */
+  const [misto, setMisto] = useState(null);
+  const [hledamMisto, setHledamMisto] = useState(false);
+  useEffect(() => {
+    const dotaz = rozbor?.mistoText;
+    if (!dotaz || dotaz.length < 2) { setMisto(null); setHledamMisto(false); return; }
+    let zrus = false;
+    setHledamMisto(true);
+    const id = setTimeout(() => {
+      hledejObce(dotaz, 5).then(n => {
+        if (zrus) return;
+        const bez = (x) => (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        // Jen přesná shoda názvu. „Čistá" se nesmí tiše stát „Čistou u Horek".
+        const presne = (n || []).find(o => bez(o.nazev) === bez(dotaz));
+        setMisto(presne || null);
+        setHledamMisto(false);
+      });
+    }, 200);
+    return () => { zrus = true; clearTimeout(id); };
+  }, [rozbor?.mistoText]);
+
   const uloz = async () => {
     if (!rozbor?.name) return;
     setUklada(true); setChyba(null);
@@ -65,12 +91,25 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
       name: rozbor.name,
       contact: rozbor.contact || null,
       role_tagy: rozbor.role || [],
+      // Místo jen když se opravdu našlo v číselníku. Nenašlo-li se,
+      // radši prázdno než vymyšlená obec — viz MistoOsoby v Síti.
+      kraj: misto?.kraj || null,
+      okres: misto?.okres || null,
+      mesto: misto?.nazev || null,
+      mesto_kod: misto?.kod || null,
       // Od koho to vím patří k člověku stejně jako u tipu —
       // za půl roku je to jediné, co o něm ještě budeš vědět.
       note: rozbor.odKoho ? `Seznámil nás: ${rozbor.odKoho}` : null,
     });
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba || "Nepovedlo se uložit."); return; }
+    /* Člověk se uložil, ale místo ne — v databázi na něj ještě není
+       sloupec. Mlčet by znamenalo nechat Michala v domnění, že ho
+       „Jedu do…" najde. */
+    if (res.vynechano && misto) {
+      setChyba(`${rozbor.name} je uložený, ale místo „${misto.nazev}" ne — v databázi chybí sloupce. `
+             + "Pusť skript misto_261017_0800.sql a místo pak doplň u člověka.");
+    }
     setHlaska(rozbor.name);
     setText("");
     onHotovo?.();
@@ -126,8 +165,8 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
           value={text}
           onChange={e => { setText(e.target.value); setChyba(null); }}
           onKeyDown={e => { if (e.key === "Enter" && rozbor?.name && !uklada) uloz(); }}
-          placeholder="Ondřej Fer, 603 123 456, investor, od Davida"
-          title="Napiš člověka jednou větou. Co z toho aplikace pochopí, uvidíš pod polem."
+          placeholder="Ondřej Fer, 603 123 456, investor, Brno, od Davida"
+          title="Nový člověk jednou větou: jméno, pak za čárkami telefon, mail, role, město, od koho. Co z toho pochopím, uvidíš hned pod polem."
           aria-label="Rychlé zadání člověka jednou větou"
           style={{ ...input(theme), flex: "1 1 240px" }} />
         <button onClick={uloz} disabled={!rozbor?.name || uklada}
@@ -154,6 +193,16 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
           {rozbor.role?.length > 0 && znacka("role",
             rozbor.role.map(r => popis(ciselniky, "role", r)).join(", "))}
           {rozbor.odKoho && znacka("od", rozbor.odKoho)}
+          {misto && znacka("místo", `${misto.nazev}${misto.okres ? ` · okres ${popis(ciselniky, "okres", misto.okres)}` : ""}`)}
+          {rozbor.mistoText && !misto && !hledamMisto && (
+            <span style={{
+              fontSize: 11.5, color: theme.yellow,
+              background: `${theme.yellow}12`, border: `1px solid ${theme.yellow}44`,
+              borderRadius: 7, padding: "3px 8px",
+            }}>
+              „{rozbor.mistoText}" není v číselníku obcí — doplň místo u člověka ručně
+            </span>
+          )}
         </div>
       )}
 
@@ -384,10 +433,37 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
       <RychlyClovek theme={theme} owner={owner} ciselniky={ciselniky}
         stavajici={radky} onHotovo={() => setObnov(k => k + 1)} />
 
+      {/* ══ HLEDÁNÍ, NE ZADÁVÁNÍ ═════════════════════════════
+          Michal 17. 10.: „tady jsou 2 zadávací řádky, ale na první
+          dobrou není vidět, že spodní řádek je na vyhledávání."
+
+          Měl pravdu — dvě stejně vypadající pole pod sebou, obě
+          přes celou šířku, obě bílá. Jediný rozdíl byl v nápovědě
+          uvnitř, a tu nikdo nečte dřív, než začne psát.
+
+          Teď je mezi nimi čára a nad spodním stojí, co dělá. Lupa
+          uvnitř pole to potvrzuje i beze slov. Horní pole zakládá,
+          spodní hledá — a je to vidět dřív, než se klikne. */}
+      <div style={{
+        borderTop: `1px solid ${theme.cardBorder}`,
+        marginTop: 12, paddingTop: 10,
+      }}>
+        <div style={{
+          fontSize: "10px", fontWeight: 700, letterSpacing: "0.07em",
+          textTransform: "uppercase", color: theme.textSub, marginBottom: 5,
+        }}>Hledat mezi lidmi, které už máš</div>
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        <input value={hledat} onChange={e => setHledat(e.target.value)}
-          placeholder="Jméno, telefon nebo slovo z poznámky…"
-          style={{ ...input(theme), flex: "1 1 200px" }} />
+        <div style={{ position: "relative", flex: "1 1 200px", display: "flex" }}>
+          <span aria-hidden="true" style={{
+            position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)",
+            fontSize: "13px", opacity: 0.65, pointerEvents: "none",
+          }}>🔍</span>
+          <input value={hledat} onChange={e => setHledat(e.target.value)}
+            placeholder="Jméno, telefon nebo slovo z poznámky…"
+            aria-label="Hledat mezi lidmi, které už máš"
+            style={{ ...input(theme), width: "100%", paddingLeft: 32,
+                     background: "transparent" }} />
+        </div>
         <select value={role} onChange={e => setRole(e.target.value)}
           style={{ ...input(theme), flex: "0 1 160px", cursor: "pointer" }}>
           <option value="">všechny role</option>
@@ -395,6 +471,7 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
             <option key={r.key} value={r.key}>{r.label}</option>
           ))}
         </select>
+      </div>
       </div>
 
       {/* ── CHYTRÉ SEZNAMY ──

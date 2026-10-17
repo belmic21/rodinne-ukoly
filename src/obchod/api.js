@@ -65,10 +65,24 @@ export async function osobaPrehled(owner, personId) {
     // !inner znamená "bez projektu řádek nevracej". Teprve s ním jde
     // filtrovat na projekt.deleted_at — jinak PostgREST filtr zahodí.
     const projektInner = "projekt:deal_projects!inner (id, kod, nazev, typ, kraj, mesto, cena, stav, faze, created_at, deleted_at)";
+    /* Karta člověka ukazuje i firmu a místo — bez nich by u nově
+       založeného kontaktu nebylo vidět vůbec nic. Sloupce ale
+       nemusí existovat (skript s místem neproběhl), a kdyby se
+       tenhle dotaz utopil v Promise.all, zmizel by celý člověk
+       a karta by hlásila „nenašel se". Proto vlastní pojistka. */
+    const osobaDotaz = (async () => {
+      let r = await supabase.from("map_people")
+        .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by, firma, kraj, okres, mesto, mesto_kod")
+        .eq("id", personId).maybeSingle();
+      if (r.error && chybiSloupec(r.error)) {
+        r = await supabase.from("map_people")
+          .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
+          .eq("id", personId).maybeSingle();
+      }
+      return r;
+    })();
     const [osoba, ucast, osloveni, karty, zaznamy] = await Promise.all([
-      supabase.from("map_people")
-        .select("id, name, aliases, note, met_at, contact, role_tagy, introduced_by")
-        .eq("id", personId).maybeSingle(),
+      osobaDotaz,
       // Bez filtru na vlastníka: u zakázky ve spolupráci patří k člověku
       // i to, co zapsal partner. Co vidět nemáš, ti databáze nevydá.
       // !inner a filtr na deleted_at: bez nich zůstane u člověka viset
@@ -678,7 +692,12 @@ export async function zalozOsobu(owner, jmenoNeboData, kontakt = "") {
       .insert({ ...telo, owner })
       .select(OSOBA)
       .single();
+    let vynechano = false;
     if (error && chybiSloupec(error)) {
+      /* Zápis prošel, ale bez místa a firmy — ty sloupce v databázi
+         ještě nejsou. Volající to MUSÍ vědět: náhled nad polem
+         slíbil „místo: Čistá" a bez téhle zprávy by to byla lež. */
+      vynechano = true;
       ({ data, error } = await supabase
         .from("map_people")
         .insert({ ...bezNepovinnych(telo), owner })
@@ -686,7 +705,7 @@ export async function zalozOsobu(owner, jmenoNeboData, kontakt = "") {
         .single());
     }
     if (error) throw error;
-    return { ok: true, osoba: data };
+    return { ok: true, osoba: data, vynechano };
   } catch (e) {
     if (String(e?.code) === "23505") {
       return { ok: false, chyba: "Někdo s tímhle jménem už v Mapě je — najdi ho v seznamu." };
@@ -2199,8 +2218,27 @@ export function rozeberOsobu(text, ciselniky) {
     }
   }
 
-  // Co zbylo, je jméno. Čárky a středníky byly oddělovače.
-  out.name = zbytek.replace(/[,;]+/g, " ").replace(/\s+/g, " ").trim();
+  /* ══ CO ZBYLO: JMÉNO, A CO JE ZA ČÁRKOU ══
+     Michal 17. 10.: „zadal jsem Michal Trnka, Čistá a podívej se,
+     jak se kontakt přidal." Přidal se jako jeden člověk jménem
+     „Michal Trnka Čistá", protože tenhle řádek všechny čárky
+     zahodil a co zbylo, prohlásil za jméno. Stejně dopadl
+     „Zdeněk Mudra, Karlovy Vary".
+
+     Jenže čárka něco znamená. Lidé ji píšou mezi údaje, ne uvnitř
+     jména — jméno je skoro vždycky první. Co zůstane za čárkou
+     a není telefon, mail, role ani „od koho", je skoro jistě
+     místo. Nesmí se to ale hádat: text se jen oddělí a nabídne
+     k dohledání v číselníku obcí (viz mistoText). Když se nenajde,
+     neztratí se — zůstane vidět a člověk si ho zařadí sám.
+
+     Bez čárky se nic nedělí. „Jan Novák Dvořák" je jméno, ne
+     člověk z Dvořáku. */
+  const useky = zbytek.split(/[,;]/).map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+  out.name = (useky[0] || "").trim();
+  out.mistoText = useky.slice(1).join(" ").trim() || null;
+  // Bez čárky zůstává všechno jménem — tak, jak to bylo dřív.
+  if (useky.length <= 1) out.mistoText = null;
 
   /* Kontakt je jedno volné pole — tam, kde je uložený, se nedělí
      na telefon a mail. Skládá se zpátky v pořadí telefon, mail. */

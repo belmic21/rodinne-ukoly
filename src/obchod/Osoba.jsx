@@ -36,7 +36,13 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
             {jmeno?.name || "Člověk"}
           </div>
           <div style={{ fontSize: "11.5px", color: theme.textSub, marginTop: 1 }}>
-            {[jmeno?.contact, jmeno?.met_at].filter(Boolean).join(" · ") || "bez kontaktu"}
+            {/* Firma a místo patří do hlavičky stejně jako telefon —
+                „majitel stavební firmy, Karlovy Vary" je to, podle
+                čeho si člověka vybavíš dřív než podle čísla. */}
+            {[jmeno?.firma, jmeno?.contact,
+              jmeno?.mesto || (jmeno?.okres ? `okres ${popis(ciselniky, "okres", jmeno.okres)}` : null)
+                           || (jmeno?.kraj ? popis(ciselniky, "kraj", jmeno.kraj) : null),
+              jmeno?.met_at].filter(Boolean).join(" · ") || "bez kontaktu"}
           </div>
         </div>
       </div>
@@ -160,10 +166,46 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
         fontSize: "12px", color: theme.text, lineHeight: 1.7,
       }}>
         {ucast.length === 0 && osloveni.length === 0 && d.karty.length === 0 ? (
-          <span style={{ color: theme.textSub }}>
-            Zatím s ním nic obchodního neběží. V Mapě na něj
-            {d.zaznamy.length > 0 ? ` je ${d.zaznamy.length} poznámek.` : " zatím nic není."}
-          </span>
+          /* ══ NOVĚ ZALOŽENÝ ČLOVĚK ══════════════════════════
+             Michal 17. 10.: „když jsem potom klik na jeho jméno
+             a chtěl upravit, vidím prázdnou kartu."
+
+             Prázdná byla právem — nic s ním neběželo. Jenže tahle
+             karta mu tehdy řekla jen to, co tu NENÍ, a tužka na
+             úpravu byla malá a šedá na druhém konci řádku. Člověk
+             tak koukal na prázdno a nevěděl, co s tím.
+
+             Teď je na ní napsané, co už o něm aplikace ví, co
+             chybí a proč na tom záleží — a tlačítko, které to
+             rovnou otevře. */
+          <div>
+            <div style={{ color: theme.textSub, marginBottom: 8 }}>
+              Zatím s ním nic obchodního neběží.
+              {d.zaznamy.length > 0 && ` V Mapě na něj je ${d.zaznamy.length} poznámek.`}
+            </div>
+            {(() => {
+              const chybi = [];
+              if (!o.contact) chybi.push("telefon nebo mail");
+              if (!o.kraj && !o.okres && !o.mesto) chybi.push("místo z katalogu — bez něj ho nenajde „Jedu do…\u201C");
+              if ((o.role_tagy || []).length === 0) chybi.push("čím ti je — investor, prostředník…");
+              chybi.push("co hledá — to se vede jako karta níž");
+              return (
+                <>
+                  <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 4 }}>
+                    Co mu ještě chybí:
+                  </div>
+                  <ul style={{ margin: "0 0 10px", paddingLeft: 18, fontSize: "12px", lineHeight: 1.7 }}>
+                    {chybi.map((x, i) => <li key={i} style={{ color: theme.textSub }}>{x}</li>)}
+                  </ul>
+                </>
+              );
+            })()}
+            <button onClick={() => setUpravuji(true)}
+              title="Otevřít kontakt a doplnit jméno, firmu, místo a role"
+              style={{ ...btnMain(theme), minHeight: 36, padding: "0 14px" }}>
+              Doplnit kontakt
+            </button>
+          </div>
         ) : (
           <>
             {ucast.length > 0 && (
