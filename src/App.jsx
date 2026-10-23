@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261023_1700";
+const FILE_VERSION = "261023_1800";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -18815,7 +18815,7 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
   );
 }
 
-function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa, onOpenZakazka, initialQuery = "" }) {
+function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser, customLists = [], theme, onClose, onNavigate, onOpenReminder, onOpenNote, onOpenMapa, onOpenOsoba, onOpenZakazka, initialQuery = "" }) {
   useEscapeKey(onClose);
   const [query, setQuery] = useState(initialQuery);
   const inputRef = useRef(null);
@@ -19107,11 +19107,27 @@ function SearchSheet({ tasks, comments, reminders = [], notes = [], currentUser,
               {/* ── Mapa: lidé ── */}
               {mapPeople.length > 0 && (
                 <>
-                  {sectionLabel("🗺️", "Mapa — lidé", mapPeople.length, theme.purple)}
+                  {sectionLabel("👤", "Lidé", mapPeople.length, theme.purple)}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     {mapPeople.map(p => (
                       <button key={`mp-${p.id}`}
-                        onClick={() => { onOpenMapa?.({ person: p }); onClose(); }}
+                        /* ══ KLIK NA ČLOVĚKA OTEVŘE JEHO KARTU ══
+                           Michal 23. 10.: „je to takové divné…
+                           když kliknu na člověka, chci vidět jeho
+                           poznámky, historii, kontakt, projekty."
+
+                           Dřív to otevřelo Mapu — jinou obrazovku
+                           než ta, na kterou se dostaneš přes
+                           Zakázky → Lidé. Stejné jméno tak podle
+                           místa kliknutí vedlo na dvě různá místa.
+                           Karta je ta úplnější, tak vede všechno
+                           na ni. */
+                        title={`Otevřít kartu — ${p.name}`}
+                        onClick={() => {
+                          if (onOpenOsoba) onOpenOsoba(p);
+                          else onOpenMapa?.({ person: p });
+                          onClose();
+                        }}
                         style={{
                           ...buttonStyle(), textAlign: "left", padding: "10px 12px",
                           background: theme.card, border: `1px solid ${theme.cardBorder}`,
@@ -31550,6 +31566,14 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
                nemůže schovat, protože už není v žádném seznamu.
                Vyhledávání zůstane otevřené pod ním, ať se dá projít
                víc výsledků za sebou — stejně jako revize. */
+            onOpenOsoba={(p) => {
+              /* Jedno kliknutí z hledání rovnou na kartu člověka —
+                 tatáž cesta, jakou používá „Jedu do…". */
+              setObchodDraft(""); setObchodZakazka(null);
+              setObchodOsoba(p?.id || null);
+              setObchodZalozka("lide");
+              setShowObchodSheet(true);
+            }}
             onNavigate={(taskId) => {
               setUkolNaCeleObrazovce(String(taskId));
             }}
