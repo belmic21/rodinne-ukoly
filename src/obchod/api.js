@@ -104,13 +104,23 @@ export async function osobaPrehled(owner, personId) {
       supabase.from("deal_cards")
         .select("id, smer, nazev, typy, kraje, cena_od, cena_do, velikost_od, jednotka, aktivni, poznamka")
         .eq("owner", owner).eq("person_id", personId),
-      supabase.from("map_facts")
-        // deleted_at se tahá schválně: záznam o člověku platí dál,
-        // i když zakázka zmizela — jen se u něj nesmí svítit její kód
-        // jako odkaz na něco živého.
-        .select("id, owner, content, context, happened_at, projekt:deal_projects (kod, nazev, deleted_at)")
-        .eq("person_id", personId)
-        .order("happened_at", { ascending: false }).limit(60),
+      /* Štítky a příznak trvalosti se tahají taky — karta člověka
+         je dělí na „co o něm vím" a „co kdy zaznělo". Když sloupec
+         trvale ještě není, dotaz se zopakuje bez něj a karta se
+         chová jako dřív: všechno je osa. */
+      (async () => {
+        const pole = "id, owner, content, context, happened_at, tags, trvale, projekt:deal_projects (kod, nazev, deleted_at)";
+        let r = await supabase.from("map_facts").select(pole)
+          .eq("person_id", personId)
+          .order("happened_at", { ascending: false }).limit(60);
+        if (r.error && chybiSloupec(r.error)) {
+          r = await supabase.from("map_facts")
+            .select("id, owner, content, context, happened_at, projekt:deal_projects (kod, nazev, deleted_at)")
+            .eq("person_id", personId)
+            .order("happened_at", { ascending: false }).limit(60);
+        }
+        return r;
+      })(),
     ]);
     return {
       osoba: osoba.data || null,
@@ -122,6 +132,164 @@ export async function osobaPrehled(owner, personId) {
   } catch (e) {
     selhalo("osobaPrehled", e);
     return prazdne;
+  }
+}
+
+/* ── Témata k probrání ───────────────────────────────────
+   Michal: „chtěl bych evidovat témata v hovoru, která jsme
+   nedokončili, abych je mohl odškrtávat pro budoucí hovory."
+
+   Stálá agenda k jednomu člověku. Otevřeš ji před hovorem,
+   odškrtáváš během něj — a odškrtnuté nemizí, jen se přesune
+   mezi vyřízená. To je ten rozdíl proti úkolu, který zmizí,
+   a proti časové ose, ze které se nic neodškrtává.
+
+   Tři stavy: otevrene → vyrizene (probráno) nebo predane
+   (stal se z toho úkol s termínem). Datum vyřízení nastavuje
+   trigger v databázi, ne tohle — jedno místo, které by na to
+   zapomnělo, by stačilo. */
+
+/* Tabulka ještě nemusí existovat — skript temata_261023_0900.sql
+   nemusel proběhnout. Mlčet by znamenalo nechat člověka klikat do
+   prázdna; tohle mu rovnou řekne, co spustit. */
+function chybiTabulka(e) {
+  const kod = String(e?.code || "");
+  return kod === "42P01" || kod === "PGRST205" || kod === "PGRST204";
+}
+
+const TEMA = `
+  id, person_id, project_id, text, tema, poznamka, stav, task_id,
+  poradi, created_at, updated_at, vyrizeno_at,
+  zakazka:deal_projects (id, kod, nazev)
+`;
+
+export async function nactiTemata(owner, personId) {
+  if (!owner || !personId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("map_temata").select(TEMA)
+      .eq("owner", owner).eq("person_id", personId)
+      /* Otevřená první, pak ruční pořadí, pak nejstarší nahoře.
+         Nejdéle ležící téma má přednost — na to se zapomíná. */
+      .order("poradi", { ascending: true })
+      .order("created_at", { ascending: true })
+      .limit(300);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiTemata", e);
+    return [];
+  }
+}
+
+export async function pridejTema(owner, d = {}) {
+  if (!owner) return { ok: false, chyba: "Chybí přihlášení." };
+  if (!d.personId) return { ok: false, chyba: "Téma musí patřit člověku." };
+  const text = (d.text || "").trim();
+  if (!text) return { ok: false, chyba: "Napiš, o co jde." };
+  try {
+    const { data, error } = await supabase
+      .from("map_temata")
+      .insert({
+        owner,
+        person_id: d.personId,
+        project_id: d.projectId || null,
+        text,
+        tema: d.tema || null,
+        poznamka: prazdnoNaNull(d.poznamka),
+        // Nové téma nahoru: nejčerstvější věc je ta, kterou si
+        // právě vybavil, a ta se nemá hledat na konci seznamu.
+        poradi: Number.isFinite(d.poradi) ? d.poradi : -Date.now() / 1000 | 0,
+      })
+      .select(TEMA).single();
+    if (error) throw error;
+    return { ok: true, tema: data };
+  } catch (e) {
+    if (chybiTabulka(e)) {
+      return { ok: false, chyba: "Témata zatím nemají v databázi tabulku. Pusť skript temata_261023_0900.sql." };
+    }
+    return selhalo("pridejTema", e);
+  }
+}
+
+export async function upravTema(id, d = {}) {
+  if (!id) return { ok: false, chyba: "Chybí téma." };
+  const telo = {};
+  if ("text" in d) {
+    const t = (d.text || "").trim();
+    if (!t) return { ok: false, chyba: "Téma nemůže být prázdné." };
+    telo.text = t;
+  }
+  if ("tema" in d)      telo.tema = d.tema || null;
+  if ("poznamka" in d)  telo.poznamka = prazdnoNaNull(d.poznamka);
+  if ("projectId" in d) telo.project_id = d.projectId || null;
+  if ("poradi" in d)    telo.poradi = d.poradi;
+  if (Object.keys(telo).length === 0) return { ok: false, chyba: "Není co uložit." };
+  try {
+    const { data, error } = await supabase
+      .from("map_temata").update(telo).eq("id", id).select(TEMA);
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return { ok: false, chyba: "Téma se nepodařilo uložit — není tvoje." };
+    }
+    return { ok: true, tema: data[0] };
+  } catch (e) {
+    return selhalo("upravTema", e);
+  }
+}
+
+/* Odškrtnutí a vrácení zpět. `taskId` se předává jen při povýšení
+   na úkol — ukládá se jako text schválně, viz komentář u tabulky:
+   téma musí přežít smazání úkolu. */
+export async function stavTematu(id, stav, taskId = null) {
+  if (!id) return { ok: false, chyba: "Chybí téma." };
+  if (!["otevrene", "vyrizene", "predane"].includes(stav)) {
+    return { ok: false, chyba: "Neznámý stav tématu." };
+  }
+  const telo = { stav };
+  // Vrácení mezi otevřená odpojí i úkol — jinak by u otevřeného
+  // tématu visel odkaz na úkol, který ho už nehlídá.
+  if (stav === "predane") telo.task_id = taskId ? String(taskId) : null;
+  else if (stav === "otevrene") telo.task_id = null;
+  try {
+    const { data, error } = await supabase
+      .from("map_temata").update(telo).eq("id", id).select(TEMA);
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return { ok: false, chyba: "Téma se nepodařilo změnit — není tvoje." };
+    }
+    return { ok: true, tema: data[0] };
+  } catch (e) {
+    return selhalo("stavTematu", e);
+  }
+}
+
+export async function smazTema(id) {
+  if (!id) return { ok: false, chyba: "Chybí téma." };
+  try {
+    const { error } = await supabase.from("map_temata").delete().eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazTema", e);
+  }
+}
+
+/* Kolik otevřených témat má kdo. Pro odznáček u lidí — aby bylo
+   vidět, s kým máš co probrat, ještě než ho otevřeš. */
+export async function otevrenaTemataPoLidech(owner) {
+  if (!owner) return {};
+  try {
+    const { data, error } = await supabase
+      .from("map_temata").select("person_id")
+      .eq("owner", owner).eq("stav", "otevrene").limit(2000);
+    if (error) throw error;
+    const out = {};
+    for (const r of data || []) out[r.person_id] = (out[r.person_id] || 0) + 1;
+    return out;
+  } catch (e) {
+    selhalo("otevrenaTemataPoLidech", e);
+    return {};
   }
 }
 

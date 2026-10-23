@@ -67,6 +67,10 @@ function odKdy(obdobi) {
 
 export default function ObchodSheet({ currentUser, theme, initialDraft = "",
   initialOsoba = null, initialZakazka = null, initialZalozka = null,
+  /* Založení úkolu patří hlavní aplikaci, ne obchodu — ta zná
+     uživatele, přiřazení i frontu pro offline. Sem se jen
+     protáhne, aby šlo z tématu udělat úkol. */
+  onNovyUkol = null,
   onClose, onDataZmena }) {
   useEscapeKey(onClose);
   const owner = currentUser?.name;
@@ -518,6 +522,7 @@ export default function ObchodSheet({ currentUser, theme, initialDraft = "",
             boxShadow: "0 8px 24px rgba(0,0,0,0.25)", fontFamily: FONT,
           }}>
             <Osoba theme={theme} owner={owner} personId={osobaId} ciselniky={ciselniky}
+              onNovyUkol={onNovyUkol}
               onZpet={() => setOsobaId(null)}
               onOtevriZakazku={(p) => { setOsobaId(null); otevriZakazku(p); }} />
           </div>

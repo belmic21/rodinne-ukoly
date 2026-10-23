@@ -21,8 +21,9 @@ import {
   penizeKratce, datumKratce, jakDavno, kdyZadano,
 } from "./ui.js";
 import { Odznaky } from "./Prilepene.jsx";
+import Temata from "./Temata.jsx";
 
-export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOtevriZakazku }) {
+export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOtevriZakazku, onNovyUkol = null }) {
   const [jmeno, setJmeno] = useState(null);
   return (
     <div style={{ padding: "12px 16px 18px" }}>
@@ -46,6 +47,12 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
           </div>
         </div>
       </div>
+      {/* Témata nahoře, nad obchodní částí. Tohle je to, co
+          otevřeš minutu před hovorem — zakázky a oslovení si
+          dohledáš, až na ně přijde řeč. */}
+      <Temata theme={theme} owner={owner} personId={personId}
+        osobaJmeno={jmeno?.name} ciselniky={ciselniky}
+        onNovyUkol={onNovyUkol} />
       <ObchodUOsoby theme={theme} owner={owner} personId={personId}
         ciselniky={ciselniky} onOtevriZakazku={onOtevriZakazku}
         onNacteno={setJmeno} />
@@ -124,6 +131,17 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
   const osloveni = d.osloveni.filter(x => x.projekt);
   const zive = osloveni.filter(x => !["odmitl", "ticho", "dohodnuto"].includes(x.stav));
   const posledni = d.zaznamy[0];
+  /* ══ CO O NĚM VÍM vs. CO KDY ZAZNĚLO ══
+     Michal 23. 10.: „vím, že Jonáš má personální agenturu
+     a obchoduje s lístky, aby se to párovalo k tomu, co o něm vím
+     i k tomu, co jsme mluvili."
+
+     Měl pravdu, že to jsou dvě různé věci. Časová osa řadí podle
+     data, takže trvalá vlastnost člověka v ní po půl roce sjede
+     pod dvacet drobností. Tohle je to rozdělení — ne nová tabulka,
+     jen jiná police pro tentýž záznam. */
+  const trvale = d.zaznamy.filter(z => z.trvale);
+  const osa = d.zaznamy.filter(z => !z.trvale);
 
   if (upravuji) {
     return (
@@ -337,9 +355,36 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
         </Sekce>
       )}
 
-      {sOsou && d.zaznamy.length > 0 && (
-        <Sekce theme={theme} nadpis={`Časová osa (${d.zaznamy.length})`}>
-          {d.zaznamy.map(z => (
+      {/* Trvalé nahoru, nad osu. Tohle je to, co chceš vidět
+          první — kdo ten člověk je, ne co říkal v úterý. */}
+      {trvale.length > 0 && (
+        <Sekce theme={theme} nadpis={`Co o něm vím (${trvale.length})`}>
+          {trvale.map(z => (
+            <div key={z.id} style={{
+              display: "flex", gap: 9, padding: "6px 2px",
+              borderBottom: `1px solid ${theme.cardBorder}55`,
+            }}>
+              <span aria-hidden="true" style={{ fontSize: "11px", paddingTop: 1 }}>📌</span>
+              <span style={{ flex: 1, fontSize: "12.5px", color: theme.text, lineHeight: 1.6 }}>
+                {z.content}
+                {(z.tags || []).length > 0 && (
+                  <span style={{ color: theme.accent, fontSize: "11px" }}>
+                    {" "}{z.tags.map(t => `#${t}`).join(" ")}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+          <div style={{ fontSize: "10.5px", color: theme.textMid, paddingTop: 5 }}>
+            Připíná se v Mapě. Štítky jdou prohledávat — „kdo dělá
+            s personalistikou?" je pak otázka na jedno hledání.
+          </div>
+        </Sekce>
+      )}
+
+      {sOsou && osa.length > 0 && (
+        <Sekce theme={theme} nadpis={`Časová osa (${osa.length})`}>
+          {osa.map(z => (
             <div key={z.id} style={{
               display: "flex", gap: 9, padding: "6px 2px",
               borderBottom: `1px solid ${theme.cardBorder}55`,

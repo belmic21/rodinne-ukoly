@@ -26,6 +26,7 @@ const SEZNAMY = [
   { kind: "stav_zakazky",  t: "Stavy zakázky",    popis: "Kde je celý případ." },
   { kind: "stav_osloveni", t: "Stavy oslovení",   popis: "Žebřík jednání s jedním investorem. Odmítl a bez odezvy patří na konec." },
   { kind: "role",          t: "Role",             popis: "Čím ti člověk je — obecně i v konkrétní zakázce." },
+  { kind: "tema",          t: "Témata hovorů",    popis: "Kategorie u témat, která jsi s někým nedořešil. Podle nich se dá seznam filtrovat." },
   { kind: "forma_dohody",  t: "Formy dohody",     popis: "Jak pevně je domluvená provize." },
   { kind: "jednotka",      t: "Jednotky velikosti", popis: "Bytů, domů, m², lůžek." },
   { kind: "kraj",          t: "Kraje",            popis: "Skupina slouží jako zkratka — Čechy, Morava." },
