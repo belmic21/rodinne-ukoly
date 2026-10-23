@@ -135,6 +135,76 @@ export async function osobaPrehled(owner, personId) {
   }
 }
 
+/* ── Zápis do Mapy přímo z karty člověka ─────────────────
+   Michal 23. 10.: „když kliknu na člověka, chci vidět jeho
+   poznámky, historii, kontakt, projekty atd., ale nevidím nic
+   a skoro nic nemohu upravit."
+
+   Karta dosud uměla záznamy jen číst — psaly se v Mapě, což je
+   jiné okno. Pravidlo, které z toho plyne: co na kartě vidíš,
+   to na kartě i vyplníš. Žádná sekce neposílá jinam. */
+
+// Štítky se píšou mřížkou přímo do věty, stejně jako v Mapě.
+export function vyzobejStitky(text) {
+  const stitky = [];
+  const zbytek = String(text || "").replace(
+    /(^|\s)#([\p{L}][\p{L}0-9._-]*)/gu,
+    (m, pre, tag) => { stitky.push(tag.toLowerCase()); return " "; });
+  return { text: zbytek.replace(/\s+/g, " ").trim(), stitky: [...new Set(stitky)] };
+}
+
+export async function zapisPoznamku(owner, d = {}) {
+  if (!owner) return { ok: false, chyba: "Chybí přihlášení." };
+  if (!d.personId) return { ok: false, chyba: "Poznámka musí patřit člověku." };
+  const { text, stitky } = vyzobejStitky(d.text);
+  if (!text) return { ok: false, chyba: "Napiš, co zaznělo." };
+  const telo = {
+    owner, person_id: d.personId, content: text, tags: stitky,
+    happened_at: d.kdy || new Date().toISOString(),
+  };
+  try {
+    let r = await supabase.from("map_facts")
+      .insert({ ...telo, trvale: !!d.trvale })
+      .select("id, owner, content, context, happened_at, tags, trvale").single();
+    /* Sloupec trvale nemusí existovat. Zápis samotný je důležitější
+       než příznak — jméno a věta se uloží tak jako tak. */
+    if (r.error && chybiSloupec(r.error)) {
+      r = await supabase.from("map_facts").insert(telo)
+        .select("id, owner, content, context, happened_at, tags").single();
+    }
+    if (r.error) throw r.error;
+    return { ok: true, zaznam: r.data };
+  } catch (e) {
+    return selhalo("zapisPoznamku", e);
+  }
+}
+
+export async function prepniTrvale(id, trvale) {
+  if (!id) return { ok: false, chyba: "Chybí záznam." };
+  try {
+    const { error } = await supabase
+      .from("map_facts").update({ trvale: !!trvale }).eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    if (chybiSloupec(e)) {
+      return { ok: false, chyba: "Trvalé záznamy zatím nemají v databázi sloupec. Pusť skript vse_261023_1700.sql." };
+    }
+    return selhalo("prepniTrvale", e);
+  }
+}
+
+export async function smazPoznamku(id) {
+  if (!id) return { ok: false, chyba: "Chybí záznam." };
+  try {
+    const { error } = await supabase.from("map_facts").delete().eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    return selhalo("smazPoznamku", e);
+  }
+}
+
 /* ── Témata k probrání ───────────────────────────────────
    Michal: „chtěl bych evidovat témata v hovoru, která jsme
    nedokončili, abych je mohl odškrtávat pro budoucí hovory."

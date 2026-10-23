@@ -14,10 +14,11 @@
 import { useState, useEffect } from "react";
 import {
   osobaPrehled, popis, nactiCiselniky, prehledPrilepenych, zakazkyProOsobu,
+  zapisPoznamku, prepniTrvale, smazPoznamku, nactiZakazky, ulozUcastnika, aktivni,
 } from "./api.js";
 import { KontaktEditor, KartaEditor } from "./Site.jsx";
 import {
-  card, btn, btnMain, label,
+  card, btn, btnMain, label, input,
   penizeKratce, datumKratce, jakDavno, kdyZadano,
 } from "./ui.js";
 import { Odznaky } from "./Prilepene.jsx";
@@ -60,6 +61,162 @@ export default function Osoba({ theme, owner, personId, ciselniky, onZpet, onOte
   );
 }
 
+/* Přidání člověka na zakázku rovnou z jeho karty.
+
+   Michal 23. 10.: „kde zde např. přidám projekt?" Dosud nikde —
+   účastník se přidával jen od zakázky, takže když jsi vyšel
+   od člověka, musel jsi ho opustit a hledat zakázku zvlášť.
+   Vazba je přitom symetrická; jen ji šlo zapsat z jedné strany. */
+function PridatNaZakazku({ theme, owner, personId, ciselniky, onHotovo, onZrus }) {
+  const [dotaz, setDotaz] = useState("");
+  const [nalezene, setNalezene] = useState([]);
+  const [vybrana, setVybrana] = useState(null);
+  const [role, setRole] = useState("prostrednik");
+  const [uklada, setUklada] = useState(false);
+  const [chyba, setChyba] = useState(null);
+
+  useEffect(() => {
+    if (!owner) return;
+    let zrus = false;
+    const id = setTimeout(() => {
+      nactiZakazky(owner, {}, 40).then(z => {
+        if (zrus) return;
+        const q = dotaz.trim().toLowerCase();
+        setNalezene(!q ? (z || []).slice(0, 8)
+          : (z || []).filter(x =>
+              String(x.nazev || "").toLowerCase().includes(q) ||
+              String(x.kod || "").toLowerCase().includes(q)).slice(0, 8));
+      });
+    }, 180);
+    return () => { zrus = true; clearTimeout(id); };
+  }, [owner, dotaz]);
+
+  const uloz = async () => {
+    if (!vybrana || uklada) return;
+    setUklada(true);
+    const res = await ulozUcastnika(owner, {
+      project_id: vybrana.id, person_id: personId, role,
+    });
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba || "Nepovedlo se přidat."); return; }
+    onHotovo?.();
+  };
+
+  return (
+    <div style={{ ...card(theme), padding: "9px 11px", marginTop: 6 }}>
+      {vybrana ? (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "12.5px", fontWeight: 700, color: theme.text, flex: "1 1 140px" }}>
+            {vybrana.kod ? `${vybrana.kod} · ` : ""}{vybrana.nazev}
+          </span>
+          <select value={role} onChange={e => setRole(e.target.value)}
+            aria-label="Role na zakázce"
+            style={{ ...input(theme), flex: "0 1 150px", minHeight: 34, fontSize: "12px", cursor: "pointer" }}>
+            {aktivni(ciselniky, "role").map(r => (
+              <option key={r.key} value={r.key}>{r.label}</option>
+            ))}
+          </select>
+          <button onClick={uloz} disabled={uklada}
+            style={{ ...btnMain(theme), minHeight: 34, padding: "0 13px", fontSize: "12px" }}>
+            {uklada ? "…" : "Přidat"}
+          </button>
+          <button onClick={() => { setVybrana(null); setChyba(null); }}
+            style={{ ...btn(), background: "transparent", color: theme.textSub, fontSize: "12px" }}>
+            zpět
+          </button>
+        </div>
+      ) : (
+        <>
+          <input value={dotaz} onChange={e => setDotaz(e.target.value)}
+            placeholder="Která zakázka? Název nebo kód"
+            aria-label="Hledat zakázku"
+            style={{ ...input(theme), fontSize: "12.5px" }} />
+          <div style={{ marginTop: 5, display: "flex", flexDirection: "column", gap: 2 }}>
+            {nalezene.map(z => (
+              <button key={z.id} onClick={() => setVybrana(z)}
+                style={{
+                  ...btn(), textAlign: "left", background: "transparent",
+                  padding: "5px 2px", fontSize: "12px", color: theme.text,
+                }}>
+                {z.kod && <span style={{ color: theme.accent }}>{z.kod} · </span>}
+                {z.nazev}
+              </button>
+            ))}
+            {nalezene.length === 0 && (
+              <span style={{ fontSize: "11.5px", color: theme.textSub }}>Nic se nenašlo.</span>
+            )}
+          </div>
+          <button onClick={onZrus}
+            style={{ ...btn(), background: "transparent", color: theme.textSub,
+                     fontSize: "11.5px", marginTop: 4 }}>zrušit</button>
+        </>
+      )}
+      {chyba && <div style={{ fontSize: "11px", color: theme.red, marginTop: 5 }}>{chyba}</div>}
+    </div>
+  );
+}
+
+/* Zápis poznámky přímo z karty. Dřív se psalo jen v Mapě, což
+   je jiné okno — a Michal: „nevidím nic a skoro nic nemohu
+   upravit." Tohle je ta oprava: co na kartě vidíš, to na kartě
+   i vyplníš.
+
+   `trvaleVychozi` rozhoduje, jestli se zápis rovnou připne.
+   V sekci „Co o něm vím" ano, v časové ose ne — v obou případech
+   se to dá přepnout. */
+function ZapisPoznamky({ theme, owner, personId, trvaleVychozi = false, onHotovo }) {
+  const [text, setText] = useState("");
+  const [trvale, setTrvale] = useState(trvaleVychozi);
+  const [uklada, setUklada] = useState(false);
+  const [chyba, setChyba] = useState(null);
+
+  const uloz = async () => {
+    if (!text.trim() || uklada) return;
+    setUklada(true);
+    const res = await zapisPoznamku(owner, { personId, text, trvale });
+    setUklada(false);
+    if (!res.ok) { setChyba(res.chyba || "Nepovedlo se zapsat."); return; }
+    setText(""); setChyba(null); setTrvale(trvaleVychozi);
+    onHotovo?.();
+  };
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <input value={text}
+          onChange={e => { setText(e.target.value); setChyba(null); }}
+          onKeyDown={e => { if (e.key === "Enter") uloz(); }}
+          placeholder={trvaleVychozi
+            ? "Co o něm platí? Např. má personální agenturu #personalistika"
+            : "Co zaznělo? Štítky piš mřížkou — #pozemky"}
+          aria-label={trvaleVychozi ? "Nová trvalá poznámka" : "Nový záznam do časové osy"}
+          style={{ ...input(theme), flex: "1 1 200px", fontSize: "12.5px" }} />
+        <button onClick={uloz} disabled={!text.trim() || uklada}
+          title={text.trim() ? "Zapsat" : "Nejdřív napiš, co zaznělo"}
+          style={{
+            ...btnMain(theme), minHeight: 36, padding: "0 13px", fontSize: "12px",
+            opacity: text.trim() && !uklada ? 1 : 0.5,
+          }}>{uklada ? "…" : "Zapsat"}</button>
+      </div>
+      <button onClick={() => setTrvale(v => !v)}
+        title={trvale
+          ? "Platí trvale — připne se nahoru, ne do časové osy"
+          : "Zaškrtni, pokud to o něm platí pořád"}
+        aria-pressed={trvale}
+        style={{
+          ...btn(), marginTop: 5, display: "inline-flex", alignItems: "center", gap: 5,
+          background: "transparent", border: "none", padding: 0,
+          fontSize: "11px", color: trvale ? theme.accent : theme.textMid,
+          fontWeight: trvale ? 700 : 500,
+        }}>
+        <span aria-hidden="true">{trvale ? "📌" : "○"}</span>
+        <span>platí trvale</span>
+      </button>
+      {chyba && <div style={{ fontSize: "11px", color: theme.red, marginTop: 4 }}>{chyba}</div>}
+    </div>
+  );
+}
+
 /* Obchodní část karty člověka, bez vlastní hlavičky.
 
    Schválně oddělená: stejný obsah se ukazuje jednak tady v Obchodu,
@@ -77,6 +234,9 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
   const [upravuji, setUpravuji] = useState(false);
   const [pocty, setPocty] = useState({});
   const [pridavamKartu, setPridavamKartu] = useState(false);
+  const [upravujiKartu, setUpravujiKartu] = useState(null);
+  const [vimOtevreno, setVimOtevreno] = useState(false);
+  const [pridavamZakazku, setPridavamZakazku] = useState(false);
   const [obnov, setObnov] = useState(0);
 
   // Počty úkolů a poznámek u zakázek, na kterých ten člověk je.
@@ -239,8 +399,14 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
         )}
       </div>
 
-      {ucast.length > 0 && (
-        <Sekce theme={theme} nadpis="Na kterých zakázkách je">
+      {/* Sekce je vždycky, i prázdná — jinak by se z karty nedalo
+          člověka na zakázku přidat a muselo by se chodit od ní. */}
+      <Sekce theme={theme} nadpis={`Na kterých zakázkách je${ucast.length ? ` (${ucast.length})` : ""}`}>
+          {ucast.length === 0 && !pridavamZakazku && (
+            <div style={{ fontSize: "12px", color: theme.textSub, marginBottom: 6 }}>
+              Zatím na žádné.
+            </div>
+          )}
           {ucast.map(u => (
             <Zakazka key={u.id} theme={theme} ciselniky={ciselniky} p={u.projekt}
               onOtevri={onOtevriZakazku} pocty={pocty[u.projekt?.id]}
@@ -251,8 +417,21 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
                 u.poznamka,
               ].filter(Boolean).join(" · ")} />
           ))}
+          {pridavamZakazku ? (
+            <PridatNaZakazku theme={theme} owner={owner} personId={personId}
+              ciselniky={ciselniky}
+              onHotovo={() => { setPridavamZakazku(false); setObnov(k => k + 1); }}
+              onZrus={() => setPridavamZakazku(false)} />
+          ) : (
+            <button onClick={() => setPridavamZakazku(true)}
+              title="Přidat tohohle člověka na zakázku"
+              style={{ ...btn(), background: "transparent", color: theme.accent,
+                       border: `1px dashed ${theme.accentBorder}`, borderRadius: 8,
+                       padding: "6px 12px", fontSize: "12px", marginTop: 4 }}>
+              + přidat na zakázku
+            </button>
+          )}
         </Sekce>
-      )}
 
       {osloveni.length > 0 && (
         <Sekce theme={theme} nadpis="Co jsem mu nabídl">
@@ -289,50 +468,59 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
           se tu neukazují. */}
       <CoProNej theme={theme} personId={d.osoba?.id} onOtevriZakazku={onOtevriZakazku} />
 
-      {/* Sekce se ukazovala jen tomu, kdo už kartu měl. Jenže nápověda
-          u Lidí posílala doplnit kartu právě sem — a kdo ji neměl,
-          nenašel tu nic. Chyba se tak projevila přesně u lidí, kterých
-          se týkala. Teď je sekce vždycky a prázdná nabídne založení. */}
-      {d.karty.length === 0 && !pridavamKartu && (
-        <Sekce theme={theme} nadpis="Co hledá a co má">
+      {/* ══ CO HLEDÁ A CO MÁ ═════════════════════════════════
+          Michal 23. 10.: „kde zde např. přidám projekt nebo co
+          hledá? to je zase někde jinde?"
+
+          Nebylo jinde, bylo to nedostupné: tlačítko PŘIDAT KARTU
+          se ukazovalo jen tomu, kdo ŽÁDNOU kartu neměl. Jakmile
+          člověk jednu měl, zmizelo — a druhou kartu ani opravu té
+          první už odtud nešlo udělat vůbec.
+
+          Teď je sekce vždycky, karty jdou upravit kliknutím
+          a přidat další jde pořád. */}
+      <Sekce theme={theme} nadpis="Co hledá a co má">
+        {d.karty.length === 0 && !pridavamKartu && (
           <div style={{ fontSize: "12px", color: theme.textSub, lineHeight: 1.6, marginBottom: 9 }}>
             Zatím nevyplněno. Jméno a telefon na párování nestačí —
             zakázka musí vědět, jaký typ, v jakém kraji a za kolik
             tenhle člověk hledá.
           </div>
-          <button
-            onClick={() => setPridavamKartu(true)}
-            title="Přidat kartu — co člověk hledá nebo nabízí"
-            aria-label="Přidat kartu — co člověk hledá nebo nabízí"
-            style={{ ...btnMain(theme), padding: "9px 16px", fontSize: "13px" }}>
-            PŘIDAT KARTU
-          </button>
-        </Sekce>
-      )}
+        )}
 
-      {pridavamKartu && (
-        <Sekce theme={theme} nadpis="Nová karta">
-          <KartaEditor
-            theme={theme} owner={owner} ciselniky={ciselniky}
-            karta={{ person_id: d.osoba?.id, osoba: d.osoba }}
-            onHotovo={() => { setPridavamKartu(false); setObnov(k => k + 1); }}
-            onZpet={() => setPridavamKartu(false)} />
-        </Sekce>
-      )}
-
-      {d.karty.length > 0 && (
-        <Sekce theme={theme} nadpis="Co hledá a co má">
-          {d.karty.map(k => (
-            <div key={k.id} style={{
-              ...card(theme), padding: "8px 11px", marginBottom: 6,
-              opacity: k.aktivni ? 1 : 0.5,
-            }}>
+        {d.karty.map(k => (
+          upravujiKartu === k.id ? (
+            <div key={k.id}>
+              {/* Nadpis tu musí být, jinak nepoznáš, jestli zakládáš,
+                  nebo opravuješ — editor sám o sobě vypadá stejně. */}
+              <div style={{
+                fontSize: "10px", fontWeight: 700, letterSpacing: "0.07em",
+                textTransform: "uppercase", color: theme.textSub, marginBottom: 4,
+              }}>Úprava karty</div>
+            <KartaEditor
+              theme={theme} owner={owner} ciselniky={ciselniky}
+              karta={{ ...k, osoba: d.osoba }}
+              onHotovo={() => { setUpravujiKartu(null); setObnov(x => x + 1); }}
+              onZpet={() => setUpravujiKartu(null)} />
+            </div>
+          ) : (
+            <button key={k.id} onClick={() => setUpravujiKartu(k.id)}
+              title="Upravit kartu"
+              style={{
+                ...card(theme), padding: "8px 11px", marginBottom: 6,
+                opacity: k.aktivni ? 1 : 0.5, display: "block",
+                width: "100%", textAlign: "left", cursor: "pointer",
+                border: `1px solid ${theme.cardBorder}`, font: "inherit",
+              }}>
               <div style={{ fontSize: "12px", fontWeight: 700, color: theme.text }}>
                 {k.smer === "poptavka" ? "Hledá" : "Má kolem sebe"}
                 {k.nazev && (
                   <span style={{ fontWeight: 400, color: theme.textSub, fontSize: "11px" }}>
                     {" "}· {k.nazev}
                   </span>
+                )}
+                {!k.aktivni && (
+                  <span style={{ fontWeight: 400, color: theme.textMid, fontSize: "11px" }}> · neaktivní</span>
                 )}
               </div>
               <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 2, lineHeight: 1.6 }}>
@@ -350,40 +538,102 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
               {k.poznamka && (
                 <div style={{ fontSize: "11px", color: theme.textMid, marginTop: 2 }}>{k.poznamka}</div>
               )}
-            </div>
-          ))}
-        </Sekce>
-      )}
+            </button>
+          )
+        ))}
 
-      {/* Trvalé nahoru, nad osu. Tohle je to, co chceš vidět
-          první — kdo ten člověk je, ne co říkal v úterý. */}
-      {trvale.length > 0 && (
-        <Sekce theme={theme} nadpis={`Co o něm vím (${trvale.length})`}>
-          {trvale.map(z => (
-            <div key={z.id} style={{
-              display: "flex", gap: 9, padding: "6px 2px",
-              borderBottom: `1px solid ${theme.cardBorder}55`,
-            }}>
-              <span aria-hidden="true" style={{ fontSize: "11px", paddingTop: 1 }}>📌</span>
-              <span style={{ flex: 1, fontSize: "12.5px", color: theme.text, lineHeight: 1.6 }}>
-                {z.content}
-                {(z.tags || []).length > 0 && (
-                  <span style={{ color: theme.accent, fontSize: "11px" }}>
-                    {" "}{z.tags.map(t => `#${t}`).join(" ")}
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
-          <div style={{ fontSize: "10.5px", color: theme.textMid, paddingTop: 5 }}>
-            Připíná se v Mapě. Štítky jdou prohledávat — „kdo dělá
-            s personalistikou?" je pak otázka na jedno hledání.
-          </div>
-        </Sekce>
-      )}
+        {pridavamKartu ? (
+          <>
+            <div style={{
+              fontSize: "10px", fontWeight: 700, letterSpacing: "0.07em",
+              textTransform: "uppercase", color: theme.textSub, marginBottom: 4,
+            }}>Nová karta</div>
+          <KartaEditor
+            theme={theme} owner={owner} ciselniky={ciselniky}
+            karta={{ person_id: d.osoba?.id, osoba: d.osoba }}
+            onHotovo={() => { setPridavamKartu(false); setObnov(k => k + 1); }}
+            onZpet={() => setPridavamKartu(false)} />
+          </>
+        ) : !upravujiKartu && (
+          <button
+            onClick={() => setPridavamKartu(true)}
+            title="Přidat kartu — co člověk hledá nebo nabízí"
+            aria-label="Přidat kartu — co člověk hledá nebo nabízí"
+            style={d.karty.length === 0
+              ? { ...btnMain(theme), padding: "9px 16px", fontSize: "13px" }
+              : { ...btn(), background: "transparent", color: theme.accent,
+                  border: `1px dashed ${theme.accentBorder}`, borderRadius: 8,
+                  padding: "6px 12px", fontSize: "12px", fontWeight: 500 }}>
+            {d.karty.length === 0 ? "PŘIDAT KARTU" : "+ další karta"}
+          </button>
+        )}
+      </Sekce>
 
-      {sOsou && osa.length > 0 && (
-        <Sekce theme={theme} nadpis={`Časová osa (${osa.length})`}>
+      {/* ══ CO O NĚM VÍM ═════════════════════════════════════
+          Michal 23. 10.: „když kliknu na člověka, nezajímá mě co
+          o něm vím, to budu řešit při zadání a v klidu, ale když
+          spěchám, chci vidět témata."
+
+          Proto je to až pod tématy a sbalené. Rozbalí se kliknutím
+          a zůstane rozbalené, dokud ho nezavřeš — kdo si sedne
+          doplňovat, nechce to otevírat u každého záznamu znovu. */}
+      <Sekce theme={theme} nadpis={`Co o něm vím${trvale.length ? ` (${trvale.length})` : ""}`}>
+        <button onClick={() => setVimOtevreno(v => !v)}
+          title={vimOtevreno ? "Sbalit" : "Rozbalit a doplnit, co o něm platí"}
+          style={{
+            ...btn(), background: "transparent", padding: "2px 0",
+            color: theme.textSub, fontSize: "12px", textAlign: "left",
+          }}>
+          {vimOtevreno ? "▾ " : "▸ "}
+          {trvale.length === 0
+            ? "Zatím nic — co dělá, čím se živí, co umí"
+            : trvale.map(z => z.content).join(" · ").slice(0, 70) + (trvale.length > 1 ? "…" : "")}
+        </button>
+
+        {vimOtevreno && (
+          <>
+            {trvale.map(z => (
+              <div key={z.id} style={{
+                display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 2px",
+                borderBottom: `1px solid ${theme.cardBorder}55`,
+              }}>
+                <span aria-hidden="true" style={{ fontSize: "11px", paddingTop: 2 }}>📌</span>
+                <span style={{ flex: 1, fontSize: "12.5px", color: theme.text, lineHeight: 1.6 }}>
+                  {z.content}
+                  {(z.tags || []).length > 0 && (
+                    <span style={{ color: theme.accent, fontSize: "11px" }}>
+                      {" "}{z.tags.map(t => `#${t}`).join(" ")}
+                    </span>
+                  )}
+                </span>
+                <button onClick={async () => { await prepniTrvale(z.id, false); setObnov(k => k + 1); }}
+                  title="Odepnout — vrátí se do časové osy"
+                  aria-label="Odepnout záznam"
+                  style={{ ...btn(), background: "transparent", color: theme.textDim,
+                           fontSize: "12px", padding: "0 4px" }}>📌</button>
+                <button onClick={async () => { await smazPoznamku(z.id); setObnov(k => k + 1); }}
+                  title="Smazat záznam" aria-label="Smazat záznam"
+                  style={{ ...btn(), background: "transparent", color: theme.textDim,
+                           fontSize: "13px", padding: "0 4px" }}>×</button>
+              </div>
+            ))}
+            <ZapisPoznamky theme={theme} owner={owner} personId={personId}
+              trvaleVychozi onHotovo={() => setObnov(k => k + 1)} />
+            <div style={{ fontSize: "10.5px", color: theme.textMid, marginTop: 6 }}>
+              Štítky jdou prohledávat — „kdo dělá s personalistikou?"
+              je pak otázka na jedno hledání.
+            </div>
+          </>
+        )}
+      </Sekce>
+
+      {sOsou && (
+        <Sekce theme={theme} nadpis={`Časová osa${osa.length ? ` (${osa.length})` : ""}`}>
+          {osa.length === 0 && (
+            <div style={{ fontSize: "12px", color: theme.textSub }}>
+              Zatím nic. Sem patří, co kdy zaznělo.
+            </div>
+          )}
           {osa.map(z => (
             <div key={z.id} style={{
               display: "flex", gap: 9, padding: "6px 2px",
@@ -412,8 +662,17 @@ export function ObchodUOsoby({ theme, owner, personId, ciselniky: ciselnikyProp,
                   <span style={{ color: theme.textMid, fontSize: "11px" }}> · {z.context}</span>
                 )}
               </span>
+              {/* Připnout zpětně. Trvalost se pozná často až potom,
+                  co to člověk napíše jako běžnou poznámku. */}
+              <button onClick={async () => { await prepniTrvale(z.id, true); setObnov(k => k + 1); }}
+                title="Připnout jako trvale platné — přesune se nahoru"
+                aria-label="Připnout jako trvale platné"
+                style={{ ...btn(), background: "transparent", color: theme.textDim,
+                         fontSize: "12px", padding: "0 4px", flexShrink: 0 }}>📌</button>
             </div>
           ))}
+          <ZapisPoznamky theme={theme} owner={owner} personId={personId}
+            onHotovo={() => setObnov(k => k + 1)} />
         </Sekce>
       )}
 
