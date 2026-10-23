@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261017_1020";
+const FILE_VERSION = "261023_1700";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -3503,7 +3503,7 @@ async function mapEnsurePerson(owner, name, knownPeople = []) {
   }
 }
 
-async function mapAddFact(owner, { personId, content, tags, context, happenedAt }) {
+async function mapAddFact(owner, { personId, content, tags, context, happenedAt, trvale }) {
   if (!owner || !content) return null;
   try {
     const { data, error } = await supabase
@@ -3515,8 +3515,9 @@ async function mapAddFact(owner, { personId, content, tags, context, happenedAt 
         tags: tags || [],
         context: context || null,
         happened_at: happenedAt || new Date().toISOString(),
+        trvale: !!trvale,
       })
-      .select("id, content, tags, happened_at, context, person_id")
+      .select("id, content, tags, happened_at, context, person_id, trvale")
       .single();
     if (error) throw error;
     reportSyncOk();
@@ -3587,6 +3588,50 @@ async function mapOrphanFacts(owner, limit = 100) {
   } catch (e) {
     if (!isNetworkError(e)) logServerError("mapOrphanFacts", e);
     return [];
+  }
+}
+
+/* ══ CO PLATÍ TRVALE ════════════════════════════════════════
+   Michal 23. 10.: „vím, že Jonáš má personální agenturu
+   a obchoduje s lístky, aby se to párovalo k tomu, co o něm vím
+   i k tomu, co jsme mluvili."
+
+   Mapa je časová osa — řadí podle data. Jenže „má personální
+   agenturu" není událost, to platí pořád, a v ose to po půl roce
+   sjede pod dvacet drobností. Jeden příznak to rozdělí: trvalé
+   se připne nahoru na kartu člověka, zbytek zůstane osou.
+
+   Schválně jen příznak, ne nová tabulka. Je to pořád tentýž
+   záznam se stejnými štítky — jen jiná police. */
+async function mapSetTrvale(id, trvale) {
+  try {
+    const { error } = await supabase
+      .from("map_facts").update({ trvale: !!trvale }).eq("id", id);
+    if (error) throw error;
+    reportSyncOk();
+    return true;
+  } catch (e) {
+    logServerError("mapSetTrvale", e, { id, trvale });
+    return false;
+  }
+}
+
+/* Hledání v Mapě běží serverovou funkcí map_search, jejíž návratový
+   tvar odsud měnit nebudu — je to funkce, kterou používá víc míst.
+   Příznak se proto dočte zvlášť, jedním dotazem na nalezená id.
+   Když sloupec ještě není, vrátí se prázdno a Mapa se chová
+   přesně jako dřív. */
+async function mapTrvaleFlags(ids) {
+  if (!ids || ids.length === 0) return {};
+  try {
+    const { data, error } = await supabase
+      .from("map_facts").select("id, trvale").in("id", ids.slice(0, 200));
+    if (error) throw error;
+    const out = {};
+    for (const r of data || []) out[r.id] = !!r.trvale;
+    return out;
+  } catch (e) {
+    return {};
   }
 }
 
@@ -17773,6 +17818,9 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
 
   const [draft, setDraft] = useState(slashParts.sentence);
   const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  /* Platí trvale? U zápisu se nedrží mezi záznamy — trvalých věcí
+     je pár a nechtěl bych, aby se omylem označila celá série. */
+  const [draftTrvale, setDraftTrvale] = useState(false);
   const [query, setQuery] = useState(initialQuery);
   const [tab, setTab] = useState("vse");
   const [facts, setFacts] = useState([]);
@@ -17827,6 +17875,14 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
         mapOrphanFacts(owner, 200),
       ]);
       if (!cancelled) { setFacts(f); setPeopleHits(p); setOrphanCount(o.length); setBusy(false); }
+      /* map_search příznak trvale nevrací — dočte se zvlášť a připne
+         se k řádkům. Když sloupec ještě není, přijde prázdno a Mapa
+         vypadá přesně jako dřív. */
+      mapTrvaleFlags((f || []).map(x => x.id)).then(m => {
+        if (!cancelled && Object.keys(m).length) {
+          setFacts(prev => prev.map(x => x.id in m ? { ...x, trvale: m[x.id] } : x));
+        }
+      });
       mapFindDuplicates(owner).then(d => { if (!cancelled) setDupes(d || []); });
     }, query ? 280 : 0);
     return () => { cancelled = true; clearTimeout(id); };
@@ -17856,10 +17912,11 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
       const happenedAt = draftDate === todayIso
         ? new Date().toISOString()
         : new Date(draftDate + "T12:00:00").toISOString();
-      const row = await mapAddFact(owner, { personId: pid, content, tags, happenedAt });
+      const row = await mapAddFact(owner, { personId: pid, content, tags, happenedAt, trvale: draftTrvale });
       if (row) {
         setDraft("");
         setDraftDate(todayIso);
+        setDraftTrvale(false);
         setReloadKey(k => k + 1);
       }
     } finally {
@@ -17949,8 +18006,24 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
             padding: "1px 7px", borderRadius: "10px", cursor: "pointer",
           }}>#{t}</span>
         ))}
-        <span>{fmtDate(r.happened_at)}</span>
+        <span>{r.trvale ? "platí trvale" : fmtDate(r.happened_at)}</span>
         <span style={{ flex: 1 }} />
+        {/* Připnutí jde přepnout i zpětně — trvalost se pozná často
+            až potom, co to člověk napíše jako běžnou poznámku. */}
+        <button onClick={async () => {
+            const nove = !r.trvale;
+            setFacts(prev => prev.map(x => x.id === r.id ? { ...x, trvale: nove } : x));
+            const ok = await mapSetTrvale(r.id, nove);
+            if (!ok) setFacts(prev => prev.map(x => x.id === r.id ? { ...x, trvale: !nove } : x));
+          }}
+          title={r.trvale ? "Odepnout — vrátí se do časové osy" : "Připnout jako trvale platné"}
+          aria-label={r.trvale ? "Odepnout záznam" : "Připnout jako trvale platné"}
+          aria-pressed={!!r.trvale}
+          style={{
+            ...buttonStyle(), background: "transparent",
+            color: r.trvale ? theme.accent : theme.textDim,
+            fontSize: "12px", padding: "0 4px",
+          }}>📌</button>
         <button onClick={() => setEditingFact(editingFact === r.id ? null : r.id)}
           title="Upravit záznam" aria-label="Upravit záznam" style={{
             ...buttonStyle(), background: "transparent", color: theme.textDim,
@@ -18090,6 +18163,33 @@ function MapaSheet({ currentUser, theme, onClose, initialDraft = "", initialQuer
                       opacity: (saving || !parsed.content) ? 0.5 : 1, flex: "0 0 auto",
                     }}>{saving ? "…" : "+"}</button>
                   </div>
+                  {/* ══ PLATÍ TRVALE ══
+                      Michal: „vím, že Jonáš má personální agenturu
+                      a obchoduje s lístky."
+
+                      To není událost, to o něm platí pořád. Takový
+                      záznam nepatří do časové osy, kde za půl roku
+                      sjede pod dvacet drobností — připne se nahoru
+                      na kartu člověka. Je to pořád tentýž záznam se
+                      stejnými štítky, jen na jiné polici. */}
+                  <button onClick={() => setDraftTrvale(v => !v)}
+                    title={draftTrvale
+                      ? "Platí trvale — připne se nahoru na kartu člověka, ne do časové osy"
+                      : "Zaškrtni, pokud to o něm platí pořád (obor, firma, čím se živí)"}
+                    aria-pressed={draftTrvale}
+                    style={{
+                      ...buttonStyle(), marginTop: 7,
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      background: draftTrvale ? theme.accentSoft : "transparent",
+                      border: `1px solid ${draftTrvale ? theme.accentBorder : theme.cardBorder}`,
+                      color: draftTrvale ? theme.accent : theme.textSub,
+                      borderRadius: 8, padding: "4px 10px",
+                      fontSize: "11.5px", fontWeight: draftTrvale ? 700 : 500,
+                      fontFamily: FONT,
+                    }}>
+                    <span aria-hidden="true">{draftTrvale ? "📌" : "○"}</span>
+                    <span>Tohle o něm platí trvale</span>
+                  </button>
                 </>
               )}
             </div>
@@ -18295,6 +18395,14 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
       mapIntroducedBy(owner, person.id),
     ]).then(([r, i]) => {
       if (!cancelled) { setRows(r); setIntro(i); setBusy(false); }
+      /* Stejně jako u hledání: serverová funkce příznak trvale
+         nevrací, dočte se zvlášť. Bez toho by se tady připnuté
+         záznamy nepoznaly od ostatních. */
+      mapTrvaleFlags((r || []).map(x => x.id)).then(m => {
+        if (!cancelled && Object.keys(m).length) {
+          setRows(prev => prev.map(x => x.id in m ? { ...x, trvale: m[x.id] } : x));
+        }
+      });
     });
     return () => { cancelled = true; };
   }, [owner, person.id, asc, reloadKey]);
@@ -18640,8 +18748,29 @@ function PersonView({ person, owner, theme, onBack, onClose, onPersonChanged, on
                   <div style={{ flex: 1, width: 1, background: theme.cardBorder, marginTop: 2 }} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: 2 }}>
-                    {fmtFull(r.happened_at)}
+                  <div style={{ fontSize: "11px", color: theme.textMid, marginBottom: 2,
+                                display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{fmtFull(r.happened_at)}</span>
+                    {/* Připnuté se pozná i tady, ne jen na kartě
+                        člověka — jinak bys v Mapě nevěděl, co už
+                        je trvalé a co ještě ne. */}
+                    <button onClick={async () => {
+                        const novy = !r.trvale;
+                        setRows(prev => prev.map(x => x.id === r.id ? { ...x, trvale: novy } : x));
+                        const ok = await mapSetTrvale(r.id, novy);
+                        if (!ok) setRows(prev => prev.map(x => x.id === r.id ? { ...x, trvale: !novy } : x));
+                      }}
+                      title={r.trvale ? "Platí trvale — odepnout zpět do osy" : "Připnout jako trvale platné"}
+                      aria-label={r.trvale ? "Odepnout záznam" : "Připnout jako trvale platné"}
+                      aria-pressed={!!r.trvale}
+                      style={{
+                        ...buttonStyle(), background: "transparent", padding: 0,
+                        fontSize: "11px", color: r.trvale ? theme.accent : theme.textDim,
+                        display: "inline-flex", alignItems: "center", gap: 3,
+                      }}>
+                      <span aria-hidden="true">📌</span>
+                      {r.trvale && <span style={{ fontWeight: 700 }}>platí trvale</span>}
+                    </button>
                   </div>
                   <div style={{ fontSize: "13.5px", color: theme.text, lineHeight: 1.5 }}>
                     {r.content}
@@ -31319,6 +31448,43 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
             initialOsoba={obchodOsoba}
             initialZakazka={obchodZakazka}
             initialZalozka={obchodZalozka}
+            /* ══ Z TÉMATU ÚKOL ══
+               Michal 23. 10.: téma hovoru, ze kterého se stal
+               závazek, musí dál hlídat úkol — ne dva seznamy
+               zároveň. Zakládá se tady, protože obchod nezná
+               uživatele, přiřazení ani frontu pro offline.
+
+               Vrací id, které si téma uloží; podle něj se pozná,
+               že už ho hlídá někdo jiný. */
+            onNovyUkol={async ({ text, poznamka, personId, osobaJmeno }) => {
+              if (!currentUser?.name) return null;
+              const id = generateId();
+              await addTask({
+                id,
+                title: text,
+                note: poznamka || "",
+                createdBy: currentUser.name,
+                assignedTo: [currentUser.name],
+                category: "other",
+                priority: "low",
+                status: "active",
+                createdAt: new Date().toISOString(),
+              });
+              /* Vazba na člověka jde přímo do sloupce — taskToDb
+                 o osoba_id neví a tiše by ho zahodil. Stejná
+                 pojistka proti ozvěně z realtime jako u oblasti. */
+              if (personId) {
+                localEditsRef.current[id] = Date.now();
+                setTasks(prev => prev.map(t => t.id === id
+                  ? { ...t, osobaId: personId, osoba: osobaJmeno || null } : t));
+                supabase.from("tasks").update({ osoba_id: personId }).eq("id", id)
+                  .then(({ error }) => {
+                    localEditsRef.current[id] = Date.now();
+                    if (error) console.warn("[tema→úkol] osoba nezapsána:", error.message);
+                  });
+              }
+              return String(id);
+            }}
             onDataZmena={obnovZObchodu}
             onClose={async () => {
               setShowObchodSheet(false); setObchodDraft("");
