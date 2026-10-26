@@ -57,6 +57,8 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
   const [berDuplicity, setBerDuplicity] = useState(false);
   // Kolik právě spadlo do čekárny — podklad pro nabídku „protřídit teď".
   const [doCekarnySlo, setDoCekarnySlo] = useState(0);
+  // Kolik se přeskočilo, protože už v čekárně byly.
+  const [preskoceno, setPreskoceno] = useState(0);
   const souborRef = useRef(null);
 
   const rozbor = useMemo(
@@ -158,6 +160,7 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
     if (!res.ok) { setChyba(res.chyba || "Import se nepovedl."); return; }
     setNahled(null);
     setDoCekarnySlo(res.pocet);
+    setPreskoceno(res.preskoceno || 0);
     onHotovo?.();
   };
 
@@ -295,11 +298,18 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
       )}
       {/* Import nekončí založením člověka, ale uložením do čekárny —
           a musí být hned vidět, co dělat dál. */}
-      {doCekarnySlo > 0 && (
+      {(doCekarnySlo > 0 || preskoceno > 0) && (
         <div style={{ marginTop: 6, fontSize: 12, color: theme.green, lineHeight: 1.6 }}>
           <strong style={{ fontWeight: 500 }}>{doCekarnySlo}</strong>{" "}
           {doCekarnySlo === 1 ? "kontakt čeká" : doCekarnySlo < 5 ? "kontakty čekají" : "kontaktů čeká"}
           {" "}v čekárně. Protřídíš je tlačítkem nahoře — mezi Lidi se dostanou až odtud.
+          {preskoceno > 0 && (
+            <span style={{ color: theme.textSub }}>
+              {" "}({preskoceno}{" "}
+              {preskoceno === 1 ? "už tam byl" : preskoceno < 5 ? "už tam byly" : "už tam bylo"},
+              {" "}přeskočeno.)
+            </span>
+          )}
         </div>
       )}
     </div>

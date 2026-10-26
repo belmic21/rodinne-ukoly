@@ -177,10 +177,22 @@ export async function cekarnaPocty() {
 
 /* Uložení celého importu. Jedna dávka = jeden soubor, ať se dá
    později poznat, co přišlo odkud. */
+/* Klíč pro poznání téhož kontaktu: jméno bez diakritiky a bez
+   ohledu na velikost písmen, plus posledních devět číslic
+   telefonu. Stejné pravidlo, jaké používá oznacDuplicity proti
+   Lidem — ať se to chová předvídatelně. */
+function klicKontaktu(name, contact) {
+  const jm = String(name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/\s+/g, " ").trim();
+  const tel = (String(contact || "").match(/\+?\d[\d\s]{7,}\d/g) || [])
+    .map(c => c.replace(/[^\d]/g, "").slice(-9));
+  return { jm, tel };
+}
+
 export async function doCekarny(owner, lide, zdroj = "") {
   if (!owner || !lide?.length) return { ok: false, chyba: "Není co importovat.", pocet: 0 };
   const davka = (globalThis.crypto?.randomUUID?.() || String(Date.now()));
-  const radky = lide
+  let radky = lide
     .map(x => ({
       owner, davka,
       name: String(x.name || "").trim().slice(0, 200),
@@ -190,6 +202,42 @@ export async function doCekarny(owner, lide, zdroj = "") {
     }))
     .filter(x => x.name);
   if (!radky.length) return { ok: false, chyba: "Žádný řádek neměl jméno.", pocet: 0 };
+
+  /* ══ CO UŽ V ČEKÁRNĚ JE, SE NEPŘIDÁVÁ PODRUHÉ ══
+     Kontrola duplicit v náhledu porovnává proti LIDEM, ne proti
+     čekárně. Kdo si nejdřív zkusí malý import a pak pustí celý
+     soubor — což je postup, který sám doporučuju — měl by těch
+     prvních pár v čekárně dvakrát a protřiďoval by je nadvakrát.
+
+     Zároveň se odfiltrují opakování uvnitř jednoho souboru;
+     exporty z telefonu je běžně obsahují. */
+  let preskoceno = 0;
+  try {
+    const { data } = await supabase.from("map_cekarna")
+      .select("name, contact").eq("owner", owner).limit(10000);
+    const jmena = new Set();
+    const tely = new Set();
+    for (const r of data || []) {
+      const k = klicKontaktu(r.name, r.contact);
+      if (k.jm) jmena.add(k.jm);
+      for (const t of k.tel) tely.add(t);
+    }
+    const pred = radky.length;
+    radky = radky.filter(r => {
+      const k = klicKontaktu(r.name, r.contact);
+      if (jmena.has(k.jm) || k.tel.some(t => tely.has(t))) return false;
+      if (k.jm) jmena.add(k.jm);
+      for (const t of k.tel) tely.add(t);
+      return true;
+    });
+    preskoceno = pred - radky.length;
+  } catch (e) {
+    // Když se nepovede přečíst, radši naimportujeme vše než nic.
+    preskoceno = 0;
+  }
+  if (!radky.length) {
+    return { ok: true, pocet: 0, preskoceno, davka };
+  }
   try {
     /* Po pěti stech se zápis dělí. Osm set kontaktů v jednom
        dotazu projde taky, ale na mobilní síti se to překlápí
@@ -201,7 +249,7 @@ export async function doCekarny(owner, lide, zdroj = "") {
       if (error) throw error;
       hotovo += Math.min(500, radky.length - i);
     }
-    return { ok: true, pocet: hotovo, davka };
+    return { ok: true, pocet: hotovo, preskoceno, davka };
   } catch (e) {
     if (chybiTabulka(e)) {
       return { ok: false, chyba: "Čekárna zatím v databázi není. Pusť skript cekarna_261026_0700.sql.", pocet: 0 };
