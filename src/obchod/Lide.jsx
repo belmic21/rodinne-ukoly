@@ -16,14 +16,17 @@
    i v detailu zakázky vychází stejně.
    ═══════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   prehledLidi, zanedbani, popis, aktivni,
-  rozeberOsobu, rozeberKontakty, oznacDuplicity, naimportujLidi,
+  rozeberOsobu, rozeberKontakty, oznacDuplicity, doCekarny, cekarnaPocty,
+  hromadnaRole, hromadnaOblast, nactiKarty, lideKDoplneni,
   zalozOsobu, prehledStavuLidi, hledejObce,
 } from "./api.js";
 import { KontaktEditor } from "./Site.jsx";
+import { VlnaCekarna, VlnaKriterii } from "./Vlny.jsx";
 import { card, input, btn, btnMain, btnGhost, label, zvyrazni, pocet } from "./ui.js";
+import { sesit, stahni } from "./xlsx.js";
 
 /* Řazení. Abeceda je na hledání konkrétního člověka, zbytek
    na otázku „s kým můžu dneska pracovat“. */
@@ -52,6 +55,8 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
   const [nahled, setNahled] = useState(null);   // import: co se našlo v souboru
   const [jmenoSouboru, setJmenoSouboru] = useState("");
   const [berDuplicity, setBerDuplicity] = useState(false);
+  // Kolik právě spadlo do čekárny — podklad pro nabídku „protřídit teď".
+  const [doCekarnySlo, setDoCekarnySlo] = useState(0);
   const souborRef = useRef(null);
 
   const rozbor = useMemo(
@@ -139,15 +144,21 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
   const kImportu = (nahled || []).filter(x => berDuplicity || !x.duplicita);
   const duplicit = (nahled || []).filter(x => x.duplicita).length;
 
+  /* ══ IMPORT JDE DO ČEKÁRNY, NE ROVNOU MEZI LIDI ══
+     Michal: „celá databáze obsahuje rodinu atd."
+
+     Osm set kontaktů z telefonu mezi obchodní kontakty nepatří
+     a ruční promazávání je práce na odpoledne, navíc nevratná.
+     Import proto spadne do čekárny a odtud si je protřídíš
+     vlnou — jedna klávesa na kontakt. */
   const importuj = async () => {
     setUklada(true); setChyba(null);
-    const res = await naimportujLidi(owner, kImportu);
+    const res = await doCekarny(owner, kImportu, jmenoSouboru);
     setUklada(false);
     if (!res.ok) { setChyba(res.chyba || "Import se nepovedl."); return; }
     setNahled(null);
-    setHlaska(`${res.pocet} ${res.pocet === 1 ? "člověk" : res.pocet < 5 ? "lidé" : "lidí"}`);
+    setDoCekarnySlo(res.pocet);
     onHotovo?.();
-    setTimeout(() => setHlaska(null), 5000);
   };
 
   const znacka = (co, hodnota) => (
@@ -254,20 +265,20 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
             }}>
               <input type="checkbox" checked={berDuplicity}
                 onChange={e => setBerDuplicity(e.target.checked)} />
-              Založit i ty, které už mám ({duplicit}) — vzniknou dvakrát
+              Vzít i ty, které už mám ({duplicit}) — v čekárně nevadí, rozhodneš u nich sám
             </label>
           )}
 
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button onClick={importuj} disabled={uklada || kImportu.length === 0}
-              title={`Založit ${kImportu.length} lidí najednou`}
-              aria-label="Naimportovat vybrané"
+              title={`Uložit ${kImportu.length} kontaktů do čekárny — mezi Lidi se dostanou až po protřídění`}
+              aria-label="Uložit do čekárny"
               style={{
                 ...btnMain(theme),
                 background: kImportu.length ? theme.accent : theme.inputBg,
                 color: kImportu.length ? "#fff" : theme.textSub,
               }}>
-              {uklada ? "IMPORTUJI…" : `NAIMPORTOVAT ${kImportu.length}`}</button>
+              {uklada ? "UKLÁDÁM…" : `DO ČEKÁRNY (${kImportu.length})`}</button>
             <button onClick={() => { setNahled(null); setBerDuplicity(false); }}
               title="Zahodit náhled — nic se nezaloží"
               aria-label="Zrušit import"
@@ -280,6 +291,15 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
       {hlaska && (
         <div style={{ marginTop: 6, fontSize: 12, color: theme.green }}>
           Založeno: <strong style={{ fontWeight: 500 }}>{hlaska}</strong>.
+        </div>
+      )}
+      {/* Import nekončí založením člověka, ale uložením do čekárny —
+          a musí být hned vidět, co dělat dál. */}
+      {doCekarnySlo > 0 && (
+        <div style={{ marginTop: 6, fontSize: 12, color: theme.green, lineHeight: 1.6 }}>
+          <strong style={{ fontWeight: 500 }}>{doCekarnySlo}</strong>{" "}
+          {doCekarnySlo === 1 ? "kontakt čeká" : doCekarnySlo < 5 ? "kontakty čekají" : "kontaktů čeká"}
+          {" "}v čekárně. Protřídíš je tlačítkem nahoře — mezi Lidi se dostanou až odtud.
         </div>
       )}
     </div>
@@ -300,6 +320,29 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
      nedal zeptat, protože odpověď leží ve třech tabulkách. */
   const [seznam, setSeznam] = useState("");
   const [stavy, setStavy] = useState({});
+  /* Čekárna. Počty se čtou jedním dotazem — stahovat kvůli
+     jednomu číslu osm set řádků by bylo zbytečné. */
+  const [cekarna, setCekarna] = useState({ ceka: 0, zarazeno: 0, osobni: 0, odlozeno: 0 });
+  const [vlna, setVlna] = useState(null);            // cekarna | developer | investor
+  /* Hromadný výběr. Michal: „mohu vyfiltrovat všechny kontakty
+     se jménem ENYX, abych jim přiřadil stejný znak?" */
+  const [vyber, setVyber] = useState(() => new Set());
+  const [hromadnaCo, setHromadnaCo] = useState("");
+  const [hromadnaHlaska, setHromadnaHlaska] = useState(null);
+  const [hromadneDelam, setHromadneDelam] = useState(false);
+
+  const [pocetKDoplneni, setPocetKDoplneni] = useState({ developer: 0, investor: 0 });
+
+  useEffect(() => {
+    if (!owner) return;
+    let zrus = false;
+    cekarnaPocty().then(c => { if (!zrus) setCekarna(c); });
+    /* Kolik lidí čeká na kritéria. Dvě čtení při otevření Lidí —
+       levnější než nechat Michala hádat, jestli má co doplňovat. */
+    Promise.all([lideKDoplneni(owner, "developer"), lideKDoplneni(owner, "investor")])
+      .then(([d, i]) => { if (!zrus) setPocetKDoplneni({ developer: d.length, investor: i.length }); });
+    return () => { zrus = true; };
+  }, [owner, obnov]);
 
   useEffect(() => {
     let zrus = false;
@@ -358,6 +401,49 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
       (b.karet || 0) - (a.karet || 0) ||
       (a.jmeno || "").localeCompare(b.jmeno || "", "cs"));
   }, [radky, hledat, jak, seznam, stavy]);
+
+  /* Export toho, co je zrovna vidět. Bere stejný filtr jako
+     seznam — co vidíš, to stáhneš. Kritéria se dotahují z karet,
+     aby v tabulce nebyla jen jména a telefony; podle nich se
+     přece rozhoduješ.
+
+     XLSX se skládá vlastním zapisovačem (xlsx.js), ne knihovnou.
+     SheetJS váží podle sestavení 100 až 900 kB a u PWA na mobilu
+     to není zadarmo. */
+  const exportuj = useCallback(async () => {
+    const karty = await nactiKarty(owner, {}, 2000);
+    const podleOsoby = {};
+    for (const k of karty || []) {
+      (podleOsoby[k.person_id] = podleOsoby[k.person_id] || []).push(k);
+    }
+    const hlavicka = ["Jméno", "Role", "Kontakt", "Firma", "Oblast",
+      "Směr", "Typy", "Kraje", "Cena od", "Cena do", "Velikost od", "Poznámka"];
+    const radkyVen = [hlavicka];
+    for (const r of videt) {
+      const role = (r.role_tagy || []).map(t => popis(ciselniky, "role", t)).join(", ");
+      const jeho = podleOsoby[r.person_id] || [];
+      if (jeho.length === 0) {
+        radkyVen.push([r.jmeno, role, r.kontakt || "", r.firma || "", r.oblast || "",
+          "", "", "", null, null, null, r.poznamka || ""]);
+        continue;
+      }
+      // Jedna karta = jeden řádek. Kdo má dvě, bude v tabulce dvakrát —
+      // jinak by se typy dvou různých karet slily do jedné buňky.
+      for (const k of jeho) {
+        radkyVen.push([
+          r.jmeno, role, r.kontakt || "", r.firma || "", r.oblast || "",
+          k.smer === "nabidka" ? "má kolem sebe" : "hledá",
+          (k.typy || []).map(t => popis(ciselniky, "typ", t)).join(", "),
+          (k.kraje || []).map(t => popis(ciselniky, "kraj", t)).join(", "),
+          k.cena_od ?? null, k.cena_do ?? null, k.velikost_od ?? null,
+          k.poznamka || "",
+        ]);
+      }
+    }
+    const den = new Date().toISOString().slice(0, 10);
+    stahni(sesit(radkyVen, "Lidé"), `lide-${den}.xlsx`);
+  }, [owner, videt, ciselniky]);
+
 
   const sKartou = radky.filter(r => r.karet > 0).length;
   const maCoNabidnout = radky.filter(r => r.sedi_zakazek > 0).length;
@@ -425,6 +511,75 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
             fontSize: "12px", fontWeight: 700, padding: "2px 4px",
           }}>ukázat je →</button>
         </div>
+      )}
+
+      {/* ══ ČEKÁRNA ══════════════════════════════════════════
+          Vidět jen tehdy, když je co třídit. Prázdný pruh „0 čeká"
+          by byl trvalá připomínka něčeho, co není. */}
+      {cekarna.ceka > 0 && (
+        <button onClick={() => setVlna("cekarna")}
+          title="Projít importované kontakty — jedna klávesa na kontakt"
+          style={{
+            ...btnMain(theme), width: "100%", textAlign: "left",
+            display: "flex", alignItems: "center", gap: 9,
+            padding: "10px 13px", marginBottom: 10,
+            background: theme.accentSoft, color: theme.text,
+            border: `1px solid ${theme.accentBorder}`,
+          }}>
+          <span aria-hidden="true" style={{ fontSize: "16px" }}>📥</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
+            V čekárně je <strong>{cekarna.ceka}</strong>{" "}
+            {cekarna.ceka === 1 ? "kontakt" : cekarna.ceka < 5 ? "kontakty" : "kontaktů"} k protřídění.
+            <span style={{ display: "block", fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
+              Mezi Lidi se dostanou až odtud. Nic se nemaže.
+            </span>
+          </span>
+          <span style={{ flexShrink: 0, fontWeight: 700, color: theme.accent, fontSize: "12.5px" }}>
+            Protřídit
+          </span>
+        </button>
+      )}
+
+      {/* ══ DRUHÁ KOLA ═══════════════════════════════════════
+          Michal 26. 10.: „vyfiltruju si developery a budu jim
+          přiřazovat, co staví za projekty a jaké velikosti. Pak
+          si vyfiltruju investory…"
+
+          Tytéž vlny, jiná otázka. Nabízí se jen tehdy, když je
+          koho doplňovat — tlačítko „0 developerů k doplnění" je
+          jen trvalá připomínka něčeho, co není. */}
+      {(pocetKDoplneni.developer > 0 || pocetKDoplneni.investor > 0) && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {pocetKDoplneni.developer > 0 && (
+            <button onClick={() => setVlna("developer")}
+              title="Projít developery a doplnit, co staví a jak velké projekty"
+              style={{ ...btn(), padding: "6px 11px", borderRadius: 8, fontSize: "12px",
+                       background: "transparent", color: theme.text,
+                       border: `1px dashed ${theme.cardBorder}` }}>
+              🏗 Doplnit developery ({pocetKDoplneni.developer})
+            </button>
+          )}
+          {pocetKDoplneni.investor > 0 && (
+            <button onClick={() => setVlna("investor")}
+              title="Projít investory a doplnit, co hledají a za kolik"
+              style={{ ...btn(), padding: "6px 11px", borderRadius: 8, fontSize: "12px",
+                       background: "transparent", color: theme.text,
+                       border: `1px dashed ${theme.cardBorder}` }}>
+              💰 Doplnit investory ({pocetKDoplneni.investor})
+            </button>
+          )}
+        </div>
+      )}
+
+      {vlna === "cekarna" && (
+        <VlnaCekarna theme={theme} owner={owner} ciselniky={ciselniky}
+          onClose={() => { setVlna(null); setObnov(k => k + 1); }}
+          onZmena={() => setObnov(k => k + 1)} />
+      )}
+      {(vlna === "developer" || vlna === "investor") && (
+        <VlnaKriterii theme={theme} owner={owner} ciselniky={ciselniky} role={vlna}
+          onClose={() => { setVlna(null); setObnov(k => k + 1); }}
+          onZmena={() => setObnov(k => k + 1)} />
       )}
 
       {/* Rychlé zadání a import. Jsou nahoře nad hledáním schválně:
@@ -566,15 +721,111 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
         }}>Nikdo takový tu není.</div>
       )}
 
+      {/* ══ HROMADNÁ ÚPRAVA ══════════════════════════════════
+          Michal 26. 10.: „mohu například vyfiltrovat všechny
+          kontakty se jménem ENYX, což je označení klubu, abych
+          jim přiřadil stejný znak?"
+
+          Vlna na tohle nestačí — u skupiny nerozhoduješ o každém
+          zvlášť. Výběr se drží přes filtr: vyhledáš ENYX, označíš
+          všechny nalezené, přiřadíš. Role se PŘIDÁVÁ, nepřepisuje:
+          kdo už nějakou má, o ni nepřijde. */}
+      {videt.length > 0 && (
+        <div style={{
+          display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center",
+          marginBottom: 8, fontSize: "12px", color: theme.textSub,
+        }}>
+          <button onClick={() => setVyber(v =>
+              v.size === videt.length ? new Set() : new Set(videt.map(r => r.person_id)))}
+            title={vyber.size === videt.length
+              ? "Zrušit výběr"
+              : `Označit všech ${videt.length} nalezených`}
+            style={{
+              ...btn(), padding: "4px 10px", borderRadius: 13, fontSize: "11.5px",
+              background: vyber.size ? theme.accentSoft : "transparent",
+              border: `1px solid ${vyber.size ? theme.accentBorder : theme.cardBorder}`,
+              color: vyber.size ? theme.accent : theme.textSub,
+              fontWeight: vyber.size ? 700 : 500,
+            }}>
+            {vyber.size === videt.length && videt.length > 0
+              ? `Zrušit výběr (${vyber.size})`
+              : `Označit všech ${videt.length}`}
+          </button>
+          {vyber.size > 0 && (
+            <>
+              <select value={hromadnaCo} onChange={e => setHromadnaCo(e.target.value)}
+                aria-label="Role k přidání"
+                style={{ ...input(theme), flex: "0 1 170px", minHeight: 30,
+                         fontSize: "11.5px", cursor: "pointer" }}>
+                <option value="">přidat roli…</option>
+                {aktivni(ciselniky, "role").map(r => (
+                  <option key={r.key} value={r.key}>{r.label}</option>
+                ))}
+              </select>
+              <button onClick={async () => {
+                  if (!hromadnaCo) return;
+                  setHromadneDelam(true);
+                  const res = await hromadnaRole([...vyber], hromadnaCo);
+                  setHromadneDelam(false);
+                  setHromadnaHlaska(res.ok
+                    ? `Role přidána ${res.pocet} ${res.pocet === 1 ? "člověku" : "lidem"}.`
+                    + (res.pocet < vyber.size ? ` Zbytek ji už měl.` : "")
+                    : (res.chyba || "Nepovedlo se."));
+                  if (res.ok) { setVyber(new Set()); setHromadnaCo(""); setObnov(k => k + 1); }
+                }}
+                disabled={!hromadnaCo || hromadneDelam}
+                title={hromadnaCo ? `Přidat roli ${vyber.size} označeným` : "Nejdřív vyber roli"}
+                style={{ ...btnMain(theme), minHeight: 30, padding: "0 11px",
+                         fontSize: "11.5px", opacity: hromadnaCo ? 1 : 0.5 }}>
+                {hromadneDelam ? "…" : `Přidat ${vyber.size}`}
+              </button>
+              {[["prace", "💼 pracovní"], ["osobni", "🏠 osobní"]].map(([k, l]) => (
+                <button key={k} onClick={async () => {
+                    setHromadneDelam(true);
+                    const res = await hromadnaOblast([...vyber], k);
+                    setHromadneDelam(false);
+                    setHromadnaHlaska(res.ok
+                      ? `Nastaveno ${res.pocet} ${res.pocet === 1 ? "člověku" : "lidem"}.`
+                      : (res.chyba || "Nepovedlo se."));
+                    if (res.ok) { setVyber(new Set()); setObnov(x => x + 1); }
+                  }}
+                  disabled={hromadneDelam}
+                  title={`Označit ${vyber.size} jako ${k === "prace" ? "pracovní" : "osobní"}`}
+                  style={{ ...btn(), padding: "4px 10px", borderRadius: 13, fontSize: "11.5px",
+                           background: "transparent", border: `1px solid ${theme.cardBorder}`,
+                           color: theme.text }}>{l}</button>
+              ))}
+            </>
+          )}
+          <span style={{ flex: 1 }} />
+          {/* Export bere to, co je zrovna vidět — stejný filtr,
+              stejný výsledek. Žádné druhé zadávání kritérií. */}
+          <button onClick={() => exportuj()}
+            title={`Stáhnout ${videt.length} nalezených i s kritérii do XLSX`}
+            style={{ ...btn(), padding: "4px 10px", borderRadius: 13, fontSize: "11.5px",
+                     background: "transparent", border: `1px solid ${theme.cardBorder}`,
+                     color: theme.textSub }}>⬇ XLSX</button>
+        </div>
+      )}
+      {hromadnaHlaska && (
+        <div style={{ fontSize: "11.5px", color: theme.green, marginBottom: 8 }}>{hromadnaHlaska}</div>
+      )}
+
       {videt.map(r => (
         <Radek key={r.person_id} r={r} theme={theme} ciselniky={ciselniky}
-          dotaz={hledat} onOtevri={() => onOtevriOsobu?.(r.person_id)} />
+          dotaz={hledat} onOtevri={() => onOtevriOsobu?.(r.person_id)}
+          vybrany={vyber.has(r.person_id)}
+          onVyber={() => setVyber(v => {
+            const n = new Set(v);
+            if (n.has(r.person_id)) n.delete(r.person_id); else n.add(r.person_id);
+            return n;
+          })} />
       ))}
     </div>
   );
 }
 
-function Radek({ r, theme, ciselniky, dotaz, onOtevri }) {
+function Radek({ r, theme, ciselniky, dotaz, onOtevri, vybrany = false, onVyber = null }) {
   const dni = r.posledni_osloveni
     ? Math.floor((Date.now() - new Date(r.posledni_osloveni).getTime()) / 86400000)
     : null;
@@ -595,10 +846,25 @@ function Radek({ r, theme, ciselniky, dotaz, onOtevri }) {
     <div onClick={onOtevri} style={{
       ...card(theme), padding: "9px 11px", marginBottom: 6, cursor: "pointer",
       display: "flex", alignItems: "center", gap: 10,
+      outline: vybrany ? `2px solid ${theme.accent}` : "none",
       // Zelený proužek u lidí, kterým teď něco sedí. V dlouhém
       // seznamu je to jediné, co se dá přelétnout očima.
       borderLeft: `3px solid ${r.sedi_zakazek > 0 ? theme.green : "transparent"}`,
     }}>
+      {/* Zaškrtávátko pro hromadnou úpravu. Klik na něj nesmí
+          otevřít člověka — proto stopPropagation. */}
+      {onVyber && (
+        <button onClick={(e) => { e.stopPropagation(); onVyber(); }}
+          title={vybrany ? "Odznačit" : "Označit pro hromadnou úpravu"}
+          aria-label={vybrany ? "Odznačit" : "Označit"}
+          aria-pressed={vybrany}
+          style={{
+            ...btn(), flexShrink: 0, width: 20, height: 20, padding: 0,
+            borderRadius: 5, fontSize: "12px", lineHeight: "18px",
+            border: `1.5px solid ${vybrany ? theme.accent : theme.inputBorder}`,
+            background: vybrany ? theme.accent : "transparent", color: "#fff",
+          }}>{vybrany ? "✓" : ""}</button>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "13px", fontWeight: 700, color: theme.text }}>
           {zvyrazni(r.jmeno, dotaz).map((k, i) =>

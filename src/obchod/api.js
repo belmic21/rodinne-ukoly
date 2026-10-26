@@ -135,6 +135,243 @@ export async function osobaPrehled(owner, personId) {
   }
 }
 
+/* ── Čekárna ─────────────────────────────────────────────
+   Michal: „napadá tě jiný způsob, jak pracovat s kontakty, než
+   že je nahraji do tabulky a tu postupně promažu? celá databáze
+   obsahuje rodinu atd."
+
+   Import nejde rovnou mezi lidi, ale sem. Vlna pak kontakty
+   probírá po jednom a do obchodní databáze pustí jen to, co tam
+   patří. Nic se nemaže — co nechceš, dostane stav „odlozeno"
+   a dá se kdykoli najít. */
+
+const CEKARNA = "id, name, contact, firma, zdroj, davka, stav, person_id, created_at";
+
+export async function nactiCekarnu(owner, filtr = {}, limit = 200) {
+  if (!owner) return [];
+  try {
+    let q = supabase.from("map_cekarna").select(CEKARNA).eq("owner", owner);
+    if (filtr.stav) q = q.eq("stav", filtr.stav);
+    const { data, error } = await q
+      .order("created_at", { ascending: true }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    selhalo("nactiCekarnu", e);
+    return [];
+  }
+}
+
+export async function cekarnaPocty() {
+  const prazdno = { ceka: 0, zarazeno: 0, osobni: 0, odlozeno: 0 };
+  try {
+    const { data, error } = await supabase.rpc("cekarna_pocty");
+    if (error) throw error;
+    const r = Array.isArray(data) ? data[0] : data;
+    return r ? { ...prazdno, ...r } : prazdno;
+  } catch (e) {
+    selhalo("cekarnaPocty", e);
+    return prazdno;
+  }
+}
+
+/* Uložení celého importu. Jedna dávka = jeden soubor, ať se dá
+   později poznat, co přišlo odkud. */
+export async function doCekarny(owner, lide, zdroj = "") {
+  if (!owner || !lide?.length) return { ok: false, chyba: "Není co importovat.", pocet: 0 };
+  const davka = (globalThis.crypto?.randomUUID?.() || String(Date.now()));
+  const radky = lide
+    .map(x => ({
+      owner, davka,
+      name: String(x.name || "").trim().slice(0, 200),
+      contact: String(x.contact || "").trim().slice(0, 500) || null,
+      firma: prazdnoNaNull(x.firma || x.note),
+      zdroj: zdroj ? String(zdroj).slice(0, 120) : null,
+    }))
+    .filter(x => x.name);
+  if (!radky.length) return { ok: false, chyba: "Žádný řádek neměl jméno.", pocet: 0 };
+  try {
+    /* Po pěti stech se zápis dělí. Osm set kontaktů v jednom
+       dotazu projde taky, ale na mobilní síti se to překlápí
+       v časový limit — a půlka v databázi, půlka ne je horší
+       než dvě čekání. */
+    let hotovo = 0;
+    for (let i = 0; i < radky.length; i += 500) {
+      const { error } = await supabase.from("map_cekarna").insert(radky.slice(i, i + 500));
+      if (error) throw error;
+      hotovo += Math.min(500, radky.length - i);
+    }
+    return { ok: true, pocet: hotovo, davka };
+  } catch (e) {
+    if (chybiTabulka(e)) {
+      return { ok: false, chyba: "Čekárna zatím v databázi není. Pusť skript cekarna_261026_0700.sql.", pocet: 0 };
+    }
+    return { ...selhalo("doCekarny", e), pocet: 0 };
+  }
+}
+
+/* Zařazení jedním klikem. Vznikne člověk a čekárna si na něj
+   drží odkaz — bez toho by nešlo vzít rozhodnutí zpět.
+
+   Databáze nemá transakci přes dva dotazy, takže když druhý
+   selže, první se vrací ručně. Jinak by po nepovedeném zařazení
+   zůstal v Lidech člověk, o kterém čekárna neví, a při druhém
+   pokusu by vznikl podruhé. */
+export async function zaradZCekarny(owner, radek, volby = {}) {
+  if (!owner || !radek?.id) return { ok: false, chyba: "Chybí kontakt." };
+  const oblast = volby.oblast === "osobni" ? "osobni" : "prace";
+  const telo = {
+    owner,
+    name: radek.name,
+    contact: radek.contact || null,
+    firma: radek.firma || null,
+    oblast,
+    role_tagy: Array.isArray(volby.role) ? volby.role : (volby.role ? [volby.role] : []),
+  };
+  let novyId = null;
+  try {
+    const { data, error } = await supabase
+      .from("map_people").insert(telo).select("id, name").single();
+    if (error) throw error;
+    novyId = data.id;
+    const { error: e2 } = await supabase.from("map_cekarna").update({
+      stav: oblast === "osobni" ? "osobni" : "zarazeno",
+      person_id: novyId,
+      zpracovano_at: new Date().toISOString(),
+    }).eq("id", radek.id);
+    if (e2) throw e2;
+    return { ok: true, osoba: data };
+  } catch (e) {
+    if (novyId) {
+      // Úklid po sobě — ať nezůstane člověk, o kterém čekárna neví.
+      await supabase.from("map_people").delete().eq("id", novyId);
+    }
+    if (String(e?.code) === "23505") {
+      return { ok: false, chyba: "Někdo s tímhle jménem už v Lidech je." };
+    }
+    return selhalo("zaradZCekarny", e);
+  }
+}
+
+// „Zatím ne." Nemaže se, jen přestane být ve frontě.
+export async function odlozZCekarny(id) {
+  if (!id) return { ok: false, chyba: "Chybí kontakt." };
+  try {
+    const { error } = await supabase.from("map_cekarna").update({
+      stav: "odlozeno", zpracovano_at: new Date().toISOString(),
+    }).eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    return selhalo("odlozZCekarny", e);
+  }
+}
+
+/* Zpět. Vrátí kontakt do fronty a smaže člověka, který z něj
+   vznikl — ale jen tehdy, když o něm od zařazení nikdo nic
+   nenapsal. Smazat člověka, na kterého už visí zakázka nebo
+   poznámka, by bylo horší než nechat ho být. */
+export async function vratZCekarny(radek) {
+  if (!radek?.id) return { ok: false, chyba: "Chybí kontakt." };
+  try {
+    let zustal = false;
+    if (radek.person_id) {
+      const [vazby, poznamky] = await Promise.all([
+        supabase.from("deal_participants").select("id").eq("person_id", radek.person_id).limit(1),
+        supabase.from("map_facts").select("id").eq("person_id", radek.person_id).limit(1),
+      ]);
+      const maStopu = (vazby.data || []).length > 0 || (poznamky.data || []).length > 0;
+      if (maStopu) zustal = true;
+      else {
+        const { error } = await supabase.from("map_people").delete().eq("id", radek.person_id);
+        if (error) throw error;
+      }
+    }
+    const { error: e2 } = await supabase.from("map_cekarna").update({
+      stav: "ceka", person_id: zustal ? radek.person_id : null, zpracovano_at: null,
+    }).eq("id", radek.id);
+    if (e2) throw e2;
+    return { ok: true, zustal };
+  } catch (e) {
+    return selhalo("vratZCekarny", e);
+  }
+}
+
+/* ── Fronta na doplnění kritérií ─────────────────────────
+   Michal 26. 10.: „vyfiltruju si developery a budu jim přiřazovat,
+   co staví za projekty a jaké velikosti. Pak si vyfiltruju
+   investory…"
+
+   Fronta = lidé s danou rolí, kteří ještě nemají aktivní kartu.
+   Kdo kartu má, do vlny nepatří — tam by se jen překlikával.
+
+   „Nemá kartu" se nedá zeptat jedním dotazem bez vnořeného
+   dotazu, který PostgREST neumí. Jsou to ale desítky lidí, ne
+   tisíce: stáhnou se obě strany a spojí se tady. */
+
+export async function lideKDoplneni(owner, role) {
+  if (!owner || !role) return [];
+  try {
+    const [lide, karty] = await Promise.all([
+      supabase.from("map_people")
+        .select("id, name, contact, firma, mesto, kraj, role_tagy")
+        .eq("owner", owner).contains("role_tagy", [role])
+        .order("name", { ascending: true }).limit(500),
+      supabase.from("deal_cards")
+        .select("person_id").eq("owner", owner).eq("aktivni", true).limit(2000),
+    ]);
+    if (lide.error) throw lide.error;
+    if (karty.error) throw karty.error;
+    const maKartu = new Set((karty.data || []).map(k => k.person_id));
+    return (lide.data || []).filter(p => !maKartu.has(p.id));
+  } catch (e) {
+    selhalo("lideKDoplneni", e);
+    return [];
+  }
+}
+
+/* ── Hromadná úprava ─────────────────────────────────────
+   Michal 26. 10.: „mohu například vyfiltrovat všechny kontakty
+   se jménem ENYX, což je označení klubu, abych jim přiřadil
+   stejný znak?"
+
+   Tohle vlna neumí a ani nemá — u skupiny nerozhoduješ o každém
+   zvlášť. Role se PŘIDÁVÁ, nepřepisuje: kdo už nějakou má,
+   o ni nepřijde. Dělá to funkce v databázi, protože přidání
+   do pole jde v SQL jedním tahem, zatímco odsud by to bylo
+   dvacet tři čtení a dvacet tři zápisů. */
+
+export async function hromadnaRole(ids, role) {
+  if (!ids?.length || !role) return { ok: false, chyba: "Chybí výběr nebo role.", pocet: 0 };
+  try {
+    const { data, error } = await supabase.rpc("lide_pridej_roli", {
+      p_ids: ids, p_role: role,
+    });
+    if (error) throw error;
+    return { ok: true, pocet: Number(data) || 0 };
+  } catch (e) {
+    if (chybiTabulka(e)) {
+      return { ok: false, chyba: "Hromadné úpravy nemají v databázi funkci. Pusť skript cekarna_261026_0700.sql.", pocet: 0 };
+    }
+    return { ...selhalo("hromadnaRole", e), pocet: 0 };
+  }
+}
+
+export async function hromadnaOblast(ids, oblast) {
+  if (!ids?.length) return { ok: false, chyba: "Chybí výběr.", pocet: 0 };
+  if (!["osobni", "prace"].includes(oblast)) {
+    return { ok: false, chyba: "Neznámá oblast.", pocet: 0 };
+  }
+  try {
+    const { data, error } = await supabase
+      .from("map_people").update({ oblast }).in("id", ids).select("id");
+    if (error) throw error;
+    return { ok: true, pocet: (data || []).length };
+  } catch (e) {
+    return { ...selhalo("hromadnaOblast", e), pocet: 0 };
+  }
+}
+
 /* ── Zápis do Mapy přímo z karty člověka ─────────────────
    Michal 23. 10.: „když kliknu na člověka, chci vidět jeho
    poznámky, historii, kontakt, projekty atd., ale nevidím nic
