@@ -232,7 +232,7 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
           </div>
           <div style={{ fontSize: 11.5, fontWeight: 400, color: theme.textSub, marginBottom: 8 }}>
             {duplicit > 0
-              ? `${duplicit} z nich už v Lidech ${duplicit === 1 ? "je" : "jsou"} — poznám je podle jména nebo telefonu.`
+              ? `${duplicit} z nich už v Lidech ${duplicit === 1 ? "je" : "jsou"} — shoduje se telefonní číslo. Jmenovce za duplicitu nepovažuju.`
               : "Žádný z nich u sebe zatím nemáš."}
           </div>
 

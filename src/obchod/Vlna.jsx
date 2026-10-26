@@ -52,6 +52,12 @@ export default function Vlna({
   onPotvrdit,            // (polozka, vyber) => { ok, chyba?, zpetnyKlic? }
   onZpet,                // (zaznam) => { ok, chyba?, hlaska? }
   onClose,
+  /* Jméno z telefonu bývá „Novák" nebo „Novák Pardubice" a teprve
+     ve vlně je ten pravý moment ho srovnat — tady ho má Michal
+     poprvé před očima a ví, o koho jde. Zapisuje se do Lidí;
+     v čekárně zůstane původní podoba, ať je vidět, co přišlo
+     ze souboru. */
+  upravitJmeno = false,
   patka = null,
 }) {
   useEscapeKey(onClose);
@@ -62,6 +68,7 @@ export default function Vlna({
   const [pracuji, setPracuji] = useState(false);
   const [chyba, setChyba] = useState(null);
   const [hlaska, setHlaska] = useState(null);
+  const [jmeno, setJmeno] = useState("");
   const pracujiRef = useRef(false);
 
   const ted = fronta[index] || null;
@@ -70,6 +77,9 @@ export default function Vlna({
 
   // Nová položka = čistý stůl.
   useEffect(() => { setKrok(0); setVyber({}); }, [index]);
+  /* Jméno se nastavuje ze položky, ne z kroku — jinak by se
+     přepsalo pokaždé, když se vrátíš o krok zpátky. */
+  useEffect(() => { setJmeno(String(fronta[index]?.name || "")); }, [fronta, index]);
 
   const prepni = useCallback((klicKroku, volba, vice) => {
     setChyba(null);
@@ -97,7 +107,12 @@ export default function Vlna({
     if (krok < kroky.length - 1) { setKrok(k => k + 1); return; }
 
     pracujiRef.current = true; setPracuji(true); setChyba(null);
-    const polozka = ted;
+    /* Prázdné jméno by položku shodilo na nevyplněném sloupci,
+       takže se bere původní. Smazat jméno nemá co znamenat. */
+    const srovnane = String(jmeno || "").trim();
+    const polozka = (upravitJmeno && srovnane && srovnane !== ted.name)
+      ? { ...ted, name: srovnane }
+      : ted;
     const co = vyber;
     setIndex(i => i + 1);
     const res = await onPotvrdit?.(polozka, co);
@@ -111,7 +126,7 @@ export default function Vlna({
       return;
     }
     setHistorie(h => [{ polozka, vyber: co, zpetnyKlic: res.zpetnyKlic ?? null }, ...h].slice(0, 50));
-  }, [ted, krok, kroky.length, vyber, onPotvrdit]);
+  }, [ted, krok, kroky.length, vyber, onPotvrdit, jmeno, upravitJmeno]);
 
   const zpet = useCallback(async () => {
     if (pracujiRef.current) return;
@@ -206,15 +221,50 @@ export default function Vlna({
       <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 10 }}>
         Čísla označují, <strong style={{ fontWeight: 700 }}>Enter</strong> potvrdí a jde dál.
         Bez označení Enter položku přeskočí.
+        {upravitJmeno && " Jméno jde přepsat kliknutím."}
       </div>
 
       <div style={{
         border: `1px solid ${theme.cardBorder}`, borderRadius: 10,
         padding: "12px 13px", marginBottom: 11, background: theme.inputBg,
       }}>
-        <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text, lineHeight: 1.35 }}>
-          {h.nazev}
-        </div>
+        {upravitJmeno ? (
+          /* Pole, ne text — ale bez rámečku a bez autofocusu.
+             Autofocus by vypnul číselné klávesy (obsluha kláves
+             ignoruje vstupní pole), a tím by zmizel celý smysl
+             vlny. Takhle je jméno vidět jako nadpis a sáhneš
+             na něj jen tehdy, když ho chceš srovnat. */
+          <input
+            value={jmeno}
+            onChange={(e) => setJmeno(e.target.value)}
+            disabled={pracuji}
+            title="Jméno do Lidí. Můžeš ho srovnat — v čekárně zůstane původní."
+            aria-label="Jméno kontaktu"
+            onKeyDown={(e) => {
+              // Enter potvrdí jméno a vrátí klávesy vlně.
+              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+              /* Escape vrátí původní jméno. Bez zastavení by
+                 probublal k obsluze a zavřel celou vlnu. */
+              if (e.key === "Escape") {
+                e.preventDefault(); e.stopPropagation();
+                setJmeno(String(ted?.name || ""));
+                e.currentTarget.blur();
+              }
+            }}
+            style={{
+              width: "100%", boxSizing: "border-box",
+              fontSize: "17px", fontWeight: 700, color: theme.text,
+              lineHeight: 1.35, fontFamily: "inherit",
+              background: "transparent", border: "none", outline: "none",
+              borderBottom: `1px dashed ${theme.cardBorder}`,
+              padding: "0 0 2px", margin: 0,
+            }}
+          />
+        ) : (
+          <div style={{ fontSize: "17px", fontWeight: 700, color: theme.text, lineHeight: 1.35 }}>
+            {h.nazev}
+          </div>
+        )}
         {h.podnadpis && (
           <div style={{ fontSize: "12.5px", color: theme.textSub, marginTop: 4, lineHeight: 1.6 }}>
             {h.podnadpis}

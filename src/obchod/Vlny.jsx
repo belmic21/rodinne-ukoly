@@ -115,10 +115,15 @@ export function VlnaCekarna({ theme, owner, ciselniky, onClose, onZmena }) {
       onPotvrdit={async (p, v) => { const r = await potvrdit(p, v); onZmena?.(); return r; }}
       onZpet={zpet}
       onClose={onClose}
+      upravitJmeno
       patka={<>
         Role se berou z tvého číselníku — přehodíš-li je v Nastavení →
         Seznamy, přehodí se i klávesy. Kritéria („co hledá") se tady
         nevyplňují schválně; na ně jsou vlny pro developery a investory.
+        <br />
+        Jméno se dá přepsat — jmenovci se v Lidech musí rozlišit,
+        proto „Novák Pardubice" a „Novák Brno". Do čekárny se zápis
+        nepropisuje, tam zůstane podoba ze souboru.
       </>} />
   );
 }

@@ -177,16 +177,30 @@ export async function cekarnaPocty() {
 
 /* Uložení celého importu. Jedna dávka = jeden soubor, ať se dá
    později poznat, co přišlo odkud. */
-/* Klíč pro poznání téhož kontaktu: jméno bez diakritiky a bez
-   ohledu na velikost písmen, plus posledních devět číslic
-   telefonu. Stejné pravidlo, jaké používá oznacDuplicity proti
-   Lidem — ať se to chová předvídatelně. */
+/* ══ POZNÁNÍ TÉHOŽ KONTAKTU: JEN TELEFON ══
+   Michal 26. 10.: „duplicity bych hledal pouze podle telefonu."
+
+   Mělo to původně i jméno a bylo to špatně. Jmenovci existují —
+   dva Nováci nemusí mít nic společného — a shoda jména by
+   druhého z nich zahodila, aniž by se o něm Michal dozvěděl.
+   Telefon je proti tomu skutečný identifikátor: kdo má stejné
+   číslo, je stejný člověk.
+
+   Dvě ceny, které za to platíme vědomě:
+     · Kontakt bez čísla nikdy nevyjde jako duplicita. To je
+       správně — radši dvakrát v čekárně, kde to vidíš, než
+       potichu zahozený.
+     · Firemní ústředna na třech lidech je stejné číslo. Vyjdou
+       jako duplicita a druzí dva se přeskočí. Proto importní
+       náhled duplicity jen ZNAČÍ a dá se přepnout, ne maže.
+
+   Posledních devět číslic: +420 777 123 456 a 777123456 je totéž
+   číslo zapsané dvěma způsoby a v exportu z telefonu se potkají
+   oba. */
 function klicKontaktu(name, contact) {
-  const jm = String(name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase().replace(/\s+/g, " ").trim();
   const tel = (String(contact || "").match(/\+?\d[\d\s]{7,}\d/g) || [])
     .map(c => c.replace(/[^\d]/g, "").slice(-9));
-  return { jm, tel };
+  return { tel };
 }
 
 export async function doCekarny(owner, lide, zdroj = "") {
@@ -210,23 +224,23 @@ export async function doCekarny(owner, lide, zdroj = "") {
      prvních pár v čekárně dvakrát a protřiďoval by je nadvakrát.
 
      Zároveň se odfiltrují opakování uvnitř jednoho souboru;
-     exporty z telefonu je běžně obsahují. */
+     exporty z telefonu je běžně obsahují.
+
+     Porovnává se jen telefon, viz klicKontaktu. Kontakt bez
+     čísla tedy projde vždy — i kdyby se jmenoval stejně jako
+     někdo v čekárně. To je úmysl: jmenovce nemáme právo spojit. */
   let preskoceno = 0;
   try {
     const { data } = await supabase.from("map_cekarna")
-      .select("name, contact").eq("owner", owner).limit(10000);
-    const jmena = new Set();
+      .select("contact").eq("owner", owner).limit(10000);
     const tely = new Set();
     for (const r of data || []) {
-      const k = klicKontaktu(r.name, r.contact);
-      if (k.jm) jmena.add(k.jm);
-      for (const t of k.tel) tely.add(t);
+      for (const t of klicKontaktu(null, r.contact).tel) tely.add(t);
     }
     const pred = radky.length;
     radky = radky.filter(r => {
-      const k = klicKontaktu(r.name, r.contact);
-      if (jmena.has(k.jm) || k.tel.some(t => tely.has(t))) return false;
-      if (k.jm) jmena.add(k.jm);
+      const k = klicKontaktu(null, r.contact);
+      if (k.tel.length && k.tel.some(t => tely.has(t))) return false;
       for (const t of k.tel) tely.add(t);
       return true;
     });
@@ -294,8 +308,16 @@ export async function zaradZCekarny(owner, radek, volby = {}) {
       // Úklid po sobě — ať nezůstane člověk, o kterém čekárna neví.
       await supabase.from("map_people").delete().eq("id", novyId);
     }
+    /* Jména v Lidech musí být různá (unikátní index na owner +
+       jméno bez diakritiky). Hláška proto musí říct, co s tím —
+       jméno se dá přepsat přímo v hlavičce vlny. */
     if (String(e?.code) === "23505") {
-      return { ok: false, chyba: "Někdo s tímhle jménem už v Lidech je." };
+      return {
+        ok: false,
+        chyba: `„${radek.name}" už v Lidech je. Pokud je to jiný člověk, `
+             + `uprav jméno v hlavičce — třeba „${radek.name} Pardubice". `
+             + `Pokud je to ten samý člověk, odznač roli a dej Enter — odloží se.`,
+      };
     }
     return selhalo("zaradZCekarny", e);
   }
@@ -2645,20 +2667,24 @@ export function rozeberKontakty(text, nazevSouboru = "") {
   return rozeberCSV(t);
 }
 
-/* Duplicita: stejné jméno, nebo stejné telefonní číslo. Jméno se
-   porovnává bez diakritiky a bez ohledu na velikost písmen, aby
-   „Ondřej Fer" a „ondrej fer" nebyli dva lidi. */
+/* Duplicita = stejné telefonní číslo. Nic jiného.
+
+   Jméno se tu dřív porovnávalo taky a byla to chyba: dva lidé
+   se stejným jménem jsou často dva lidé. Značka „duplicita" se
+   teď objeví jen tam, kde opravdu sedí číslo — už proto, že
+   přepínač „bere duplicity" je ve výchozím stavu vypnutý a
+   označené řádky se do čekárny nedostanou.
+
+   Kontakt bez čísla není nikdy duplicita — projde do čekárny
+   a rozhodneš o něm ve vlně. */
 export function oznacDuplicity(noviLide, stavajici) {
-  const bez = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
-    .toLowerCase().replace(/\s+/g, " ").trim();
   const cisla = (x) => (String(x || "").match(/\+?\d[\d\s]{7,}\d/g) || [])
     .map(c => c.replace(/[^\d]/g, "").slice(-9));
-  const jmena = new Set((stavajici || []).map(p => bez(p.name)));
   const tel = new Set((stavajici || []).flatMap(p => cisla(p.contact)));
-  return (noviLide || []).map(x => ({
-    ...x,
-    duplicita: jmena.has(bez(x.name)) || cisla(x.contact).some(c => tel.has(c)),
-  }));
+  return (noviLide || []).map(x => {
+    const c = cisla(x.contact);
+    return { ...x, duplicita: c.length > 0 && c.some(k => tel.has(k)) };
+  });
 }
 
 export async function naimportujLidi(owner, lide) {
