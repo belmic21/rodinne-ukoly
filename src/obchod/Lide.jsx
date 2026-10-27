@@ -21,6 +21,7 @@ import {
   prehledLidi, zanedbani, popis, aktivni,
   rozeberOsobu, rozeberKontakty, oznacDuplicity, doCekarny, cekarnaPocty,
   popisSloupcu,
+  vyprazdniCekarnu,
   hromadnaRole, hromadnaOblast, nactiKarty, lideKDoplneni,
   zalozOsobu, prehledStavuLidi, hledejObce,
 } from "./api.js";
@@ -359,7 +360,13 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
   /* Čekárna. Počty se čtou jedním dotazem — stahovat kvůli
      jednomu číslu osm set řádků by bylo zbytečné. */
   const [cekarna, setCekarna] = useState({ ceka: 0, zarazeno: 0, osobni: 0, odlozeno: 0 });
-  const [vlna, setVlna] = useState(null);            // cekarna | developer | investor
+  const [vlna, setVlna] = useState(null);
+  /* Potvrzení je dvoukrokové přímo v pruhu, ne systémové okno.
+     Okno prohlížeče se odklikne reflexivně a tady jde o to, aby
+     bylo vidět ČÍSLO — kolik se smaže a co zůstane. */
+  const [mazuCekarnu, setMazuCekarnu] = useState(false);
+  const [mazani, setMazani] = useState(false);
+  const [poMazani, setPoMazani] = useState(null);            // cekarna | developer | investor
   /* Hromadný výběr. Michal: „mohu vyfiltrovat všechny kontakty
      se jménem ENYX, abych jim přiřadil stejný znak?" */
   const [vyber, setVyber] = useState(() => new Set());
@@ -379,6 +386,16 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
       .then(([d, i]) => { if (!zrus) setPocetKDoplneni({ developer: d.length, investor: i.length }); });
     return () => { zrus = true; };
   }, [owner, obnov]);
+
+  const smazCekarnu = async () => {
+    setMazani(true);
+    const r = await vyprazdniCekarnu(owner);
+    setMazani(false);
+    setMazuCekarnu(false);
+    if (!r.ok) { setPoMazani({ chyba: r.chyba || "Nepovedlo se vyprázdnit." }); return; }
+    setPoMazani({ smazano: r.smazano, zustalo: r.zustalo });
+    setCekarna(await cekarnaPocty());
+  };
 
   useEffect(() => {
     let zrus = false;
@@ -553,27 +570,86 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
           Vidět jen tehdy, když je co třídit. Prázdný pruh „0 čeká"
           by byl trvalá připomínka něčeho, co není. */}
       {cekarna.ceka > 0 && (
-        <button onClick={() => setVlna("cekarna")}
-          title="Projít importované kontakty — jedna klávesa na kontakt"
-          style={{
-            ...btnMain(theme), width: "100%", textAlign: "left",
+        <div style={{ marginBottom: 10 }}>
+          <div style={{
             display: "flex", alignItems: "center", gap: 9,
-            padding: "10px 13px", marginBottom: 10,
-            background: theme.accentSoft, color: theme.text,
+            padding: "10px 13px", borderRadius: 10,
+            background: theme.accentSoft,
             border: `1px solid ${theme.accentBorder}`,
           }}>
-          <span aria-hidden="true" style={{ fontSize: "16px" }}>📥</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: "13px" }}>
-            V čekárně je <strong>{cekarna.ceka}</strong>{" "}
-            {cekarna.ceka === 1 ? "kontakt" : cekarna.ceka < 5 ? "kontakty" : "kontaktů"} k protřídění.
-            <span style={{ display: "block", fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
-              Mezi Lidi se dostanou až odtud. Nic se nemaže.
+            <span aria-hidden="true" style={{ fontSize: "16px" }}>📥</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: "13px", color: theme.text }}>
+              V čekárně je <strong>{cekarna.ceka}</strong>{" "}
+              {cekarna.ceka === 1 ? "kontakt" : cekarna.ceka < 5 ? "kontakty" : "kontaktů"} k protřídění.
+              <span style={{ display: "block", fontSize: "11px", color: theme.textSub, marginTop: 1 }}>
+                Mezi Lidi se dostanou až odtud. Nic se nemaže.
+              </span>
             </span>
-          </span>
-          <span style={{ flexShrink: 0, fontWeight: 700, color: theme.accent, fontSize: "12.5px" }}>
-            Protřídit
-          </span>
-        </button>
+            <button onClick={() => setVlna("cekarna")}
+              title="Projít importované kontakty — jedna klávesa na kontakt"
+              style={{
+                ...btn(), flexShrink: 0, background: "transparent",
+                color: theme.accent, fontWeight: 700, fontSize: "12.5px",
+                padding: "4px 6px",
+              }}>Protřídit</button>
+            {/* Vyprázdnění stojí stranou a je šedé — po špatném importu
+                ho potřebuješ, ale nemá se nabízet stejně hlasitě jako
+                to, kvůli čemu tu pruh je. */}
+            <button onClick={() => { setMazuCekarnu(true); setPoMazani(null); }}
+              title="Smazat nerozhodnuté kontakty z čekárny"
+              style={{
+                ...btn(), flexShrink: 0, background: "transparent",
+                color: theme.textSub, fontSize: "12px", padding: "4px 6px",
+              }}>Vyprázdnit</button>
+          </div>
+
+          {mazuCekarnu && (
+            <div role="alertdialog" aria-label="Opravdu vyprázdnit čekárnu?" style={{
+              marginTop: 6, padding: "10px 13px", borderRadius: 10,
+              background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+              fontSize: "12.5px", color: theme.text,
+            }}>
+              <div style={{ marginBottom: 2 }}>
+                Smazat <strong>{cekarna.ceka}</strong> nerozhodnutých z čekárny?
+              </div>
+              <div style={{ fontSize: "11.5px", color: theme.textSub, marginBottom: 8 }}>
+                {(cekarna.zarazeno + cekarna.osobni + cekarna.odlozeno) > 0
+                  ? `Těch ${cekarna.zarazeno + cekarna.osobni + cekarna.odlozeno}, o kterých jsi už rozhodl, zůstane — i lidé, kteří z nich vznikli.`
+                  : "Z Lidí se nesmaže nikdo."}
+                {" "}Vrátit to nejde, ale soubor se dá naimportovat znovu.
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={smazCekarnu} disabled={mazani} style={{
+                  ...btn(), padding: "6px 11px", fontSize: "12.5px", fontWeight: 700,
+                  background: theme.red, color: "#fff",
+                }}>{mazani ? "Mažu…" : "Ano, vyprázdnit"}</button>
+                <button onClick={() => setMazuCekarnu(false)} disabled={mazani} style={{
+                  ...btn(), padding: "6px 11px", fontSize: "12.5px",
+                  background: "transparent", color: theme.text,
+                  border: `1px solid ${theme.cardBorder}`,
+                }}>Zrušit</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {poMazani && (
+        <div style={{
+          marginBottom: 10, padding: "8px 12px", borderRadius: 9,
+          fontSize: "12.5px",
+          background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+          color: poMazani.chyba ? theme.red : theme.text,
+        }}>
+          {poMazani.chyba || (
+            <>Čekárna vyprázdněna — smazáno {poMazani.smazano}
+              {poMazani.zustalo > 0 && `, ${poMazani.zustalo} rozhodnutých zůstalo`}.</>
+          )}
+          <button onClick={() => setPoMazani(null)} style={{
+            ...btn(), background: "transparent", color: theme.textSub,
+            fontSize: "12px", padding: "2px 6px", marginLeft: 4,
+          }}>×</button>
+        </div>
       )}
 
       {/* ══ DRUHÁ KOLA ═══════════════════════════════════════

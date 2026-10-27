@@ -218,10 +218,19 @@ export async function cekarnaPocty() {
    Posledních devět číslic: +420 777 123 456 a 777123456 je totéž
    číslo zapsané dvěma způsoby a v exportu z telefonu se potkají
    oba. */
-function klicKontaktu(name, contact) {
+function klicKontaktu(name, contact, firma) {
   const tel = (String(contact || "").match(/\+?\d[\d\s]{7,}\d/g) || [])
     .map(c => c.replace(/[^\d]/g, "").slice(-9));
-  return { tel };
+  /* Kontakt bez čísla nemá podle čeho být duplicita — a přesto
+     se nesmí při druhém nahrání téhož souboru objevit podruhé.
+     Otisk je celý záznam: jméno, kontakt i firma. Dva Nováci bez
+     čísla z různých firem projdou oba, protože se otisk liší;
+     tentýž řádek nahraný dvakrát se liší přestane. */
+  const otisk = [name, contact, firma]
+    .map(x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/\s+/g, " ").trim())
+    .join("|");
+  return { tel, otisk };
 }
 
 export async function doCekarny(owner, lide, zdroj = "") {
@@ -253,16 +262,21 @@ export async function doCekarny(owner, lide, zdroj = "") {
   let preskoceno = 0;
   try {
     const { data } = await supabase.from("map_cekarna")
-      .select("contact").eq("owner", owner).limit(10000);
+      .select("name, contact, firma").eq("owner", owner).limit(10000);
     const tely = new Set();
+    const otisky = new Set();
     for (const r of data || []) {
-      for (const t of klicKontaktu(null, r.contact).tel) tely.add(t);
+      const k = klicKontaktu(r.name, r.contact, r.firma);
+      for (const t of k.tel) tely.add(t);
+      otisky.add(k.otisk);
     }
     const pred = radky.length;
     radky = radky.filter(r => {
-      const k = klicKontaktu(null, r.contact);
+      const k = klicKontaktu(r.name, r.contact, r.firma);
       if (k.tel.length && k.tel.some(t => tely.has(t))) return false;
+      if (otisky.has(k.otisk)) return false;
       for (const t of k.tel) tely.add(t);
+      otisky.add(k.otisk);
       return true;
     });
     preskoceno = pred - radky.length;
@@ -290,6 +304,37 @@ export async function doCekarny(owner, lide, zdroj = "") {
       return { ok: false, chyba: "Čekárna zatím v databázi není. Pusť skript cekarna_261026_0700.sql.", pocet: 0 };
     }
     return { ...selhalo("doCekarny", e), pocet: 0 };
+  }
+}
+
+/* ══ VYPRÁZDNĚNÍ ČEKÁRNY ══
+   Michal 27. 10.: „přidej mi tlačítko do aplikace pro vyprázdnění
+   čekárny s potvrzením."
+
+   Maže JEN nerozhodnuté. Co už prošlo tvým klikem — zařazené,
+   osobní, odložené — zůstává, protože na zařazené visí člověk
+   v Lidech a u odloženého je rozhodnutí, které jsi udělal.
+   Vracet se dá jen to, co je čím vrátit.
+
+   Vrací, kolik se smazalo a kolik zůstalo, ať se to dá říct
+   nahlas místo tichého „hotovo". */
+export async function vyprazdniCekarnu(owner) {
+  if (!owner) return { ok: false, chyba: "Chybí vlastník." };
+  try {
+    const { data, error } = await supabase
+      .from("map_cekarna").delete()
+      .eq("owner", owner).eq("stav", "ceka")
+      .select("id");
+    if (error) throw error;
+    const { count } = await supabase
+      .from("map_cekarna").select("id", { count: "exact", head: true })
+      .eq("owner", owner).neq("stav", "ceka");
+    return { ok: true, smazano: (data || []).length, zustalo: count || 0 };
+  } catch (e) {
+    if (chybiTabulka(e)) {
+      return { ok: false, chyba: "Čekárna zatím v databázi není." };
+    }
+    return selhalo("vyprazdniCekarnu", e);
   }
 }
 
