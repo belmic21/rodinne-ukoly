@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261023_1800";
+const FILE_VERSION = "261027_0130";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -336,17 +336,44 @@ function getUserLabel(name) {
   return normalized.slice(0, 2);
 }
 
+/* Rozdíl ve dnech proti dnešku. Chodí sem dvě různé věci a každá
+   se musí číst jinak:
+
+   · Termín a „ukaž od" jsou kalendářní datum, „2026-11-05". To
+     žádné časové pásmo nemá — pátého je pátého.
+
+   · slibenoAt, createdAt a completedAt jsou OKAMŽIKY, zapsané
+     přes toISOString(), tedy v UTC.
+
+   Dřív se z obojího brala prvních deset znaků. U okamžiku to ale
+   znamená UTC datum, a to se v Česku mezi půlnocí a jednou (v
+   létě druhou) liší od toho, který den to bylo tady. Slib daný
+   v 00:30 se tím zapsal jako včerejší a po celý život úkolu se
+   ukazoval o den starší, než byl. Michal pracuje po půlnoci
+   běžně, takže to není teoretický případ.
+
+   Okamžik se proto převede na MÍSTNÍ kalendářní den. */
 function daysDiff(dateStr) {
   if (!dateStr) return Infinity;
-  // Normalize to local-midnight date to avoid timezone issues.
-  // Input can be "YYYY-MM-DD" or full ISO string — strip the time portion.
-  const datePart = typeof dateStr === "string" ? dateStr.slice(0, 10) : dateStr;
-  const [y, m, d] = datePart.split("-").map(Number);
-  if (!y || !m || !d) return Infinity;
-  const target = new Date(y, m - 1, d); // local midnight of target date
+  let target;
+  if (typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) {
+    const [y, m, d] = dateStr.trim().split("-").map(Number);
+    if (!y || !m || !d) return Infinity;
+    target = new Date(y, m - 1, d);     // místní půlnoc toho data
+  } else {
+    const t = new Date(dateStr);
+    if (Number.isNaN(t.getTime())) return Infinity;
+    target = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  }
   const today = new Date();
-  today.setHours(0, 0, 0, 0);           // local midnight of today
+  today.setHours(0, 0, 0, 0);           // místní půlnoc dneška
   return Math.round((target - today) / 86400000);
+}
+
+/* Datum jako „YYYY-MM-DD" v místním čase. toISOString().slice(0,10)
+   by po půlnoci vrátilo včerejšek — viz daysDiff výše. */
+function mistniDatum(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function formatDate(iso) {
@@ -1096,7 +1123,7 @@ function processRecurring(tasks) {
           doneBy: [],
           completedAt: null,
           completedByUser: null,
-          dueDate: nextDue.toISOString().slice(0, 10),
+          dueDate: mistniDatum(nextDue),
           seenBy: [task.createdBy],
           checklist: task.checklist?.map(ci => ({
             ...ci, done: false, doneBy: null, doneAt: null

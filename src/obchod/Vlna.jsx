@@ -48,7 +48,19 @@ export default function Vlna({
   fronta,
   nacitam = false,
   hlavicka,              // (polozka) => { nazev, podnadpis, dodatek }
-  kroky,                 // [{ klic, otazka, volby:[{key,label,exkluzivni,klavesa}], vice }]
+  /* [{ klic, otazka, volby:[{key,label,exkluzivni,klavesa,postupDal}],
+        vice, platiKdyz }]
+
+     platiKdyz(vyber) => bool rozhoduje, jestli se krok vůbec
+     ukáže. Díky tomu má vlna větve: u obchodního kontaktu je
+     jeden krok, u osobního druhý s kategoriemi. Krok se nemaže,
+     jen se přeskočí — Backspace ho proto umí přeskočit zpátky
+     stejnou cestou.
+
+     postupDal u volby znamená „tahle volba je rozhodnutí, jdi
+     rovnou dál". Má ji „Osobní": je výlučná, takže čekat na Enter
+     by byl stisk navíc u každého druhého kontaktu. */
+  kroky,
   onPotvrdit,            // (polozka, vyber) => { ok, chyba?, zpetnyKlic? }
   onZpet,                // (zaznam) => { ok, chyba?, hlaska? }
   onClose,
@@ -81,22 +93,57 @@ export default function Vlna({
      přepsalo pokaždé, když se vrátíš o krok zpátky. */
   useEffect(() => { setJmeno(String(fronta[index]?.name || "")); }, [fronta, index]);
 
+  /* ── Které kroky teď platí ──
+     Krok bez platiKdyz platí vždy. Procházení tam i zpátky jde
+     jen přes tyhle tři funkce, ať se větvení nerozchází. */
+  const platny = useCallback((i, v) => {
+    const k = kroky[i];
+    if (!k) return false;
+    return typeof k.platiKdyz === "function" ? !!k.platiKdyz(v || {}) : true;
+  }, [kroky]);
+
+  const dalsiKrok = useCallback((od, v) => {
+    for (let i = od + 1; i < kroky.length; i++) if (platny(i, v)) return i;
+    return -1;
+  }, [kroky, platny]);
+
+  const predchoziKrok = useCallback((od, v) => {
+    for (let i = od - 1; i >= 0; i--) if (platny(i, v)) return i;
+    return -1;
+  }, [platny]);
+
+  /* Odznačení větvící volby může krok, na kterém zrovna stojíš,
+     zneplatnit. Pak se stojí na otázce, která se nemá ptát. */
+  useEffect(() => {
+    if (krok > 0 && !platny(krok, vyber)) {
+      const pred = predchoziKrok(krok, vyber);
+      setKrok(pred >= 0 ? pred : 0);
+    }
+  }, [krok, vyber, platny, predchoziKrok]);
+
   const prepni = useCallback((klicKroku, volba, vice) => {
     setChyba(null);
-    setVyber(v => {
-      const bylo = v[klicKroku] || [];
-      if (volba.exkluzivni) {
-        return { ...v, [klicKroku]: bylo.includes(volba.key) ? [] : [volba.key] };
-      }
+    const bylo = vyber[klicKroku] || [];
+    let nove;
+    if (volba.exkluzivni) {
+      nove = bylo.includes(volba.key) ? [] : [volba.key];
+    } else {
       // Exkluzivní volba (třeba „osobní") a běžné se vylučují navzájem.
       const bezExkluzivnich = bylo.filter(x =>
         !(kroky[krok]?.volby || []).some(o => o.key === x && o.exkluzivni));
-      if (bezExkluzivnich.includes(volba.key)) {
-        return { ...v, [klicKroku]: bezExkluzivnich.filter(x => x !== volba.key) };
-      }
-      return { ...v, [klicKroku]: vice ? [...bezExkluzivnich, volba.key] : [volba.key] };
-    });
-  }, [kroky, krok]);
+      nove = bezExkluzivnich.includes(volba.key)
+        ? bezExkluzivnich.filter(x => x !== volba.key)
+        : (vice ? [...bezExkluzivnich, volba.key] : [volba.key]);
+    }
+    const cely = { ...vyber, [klicKroku]: nove };
+    setVyber(cely);
+    /* Volba, která sama o sobě rozhoduje, nemá nutit k Enteru —
+       u každého druhého kontaktu by to byl stisk navíc. */
+    if (volba.postupDal && nove.includes(volba.key)) {
+      const pristi = dalsiKrok(krok, cely);
+      if (pristi >= 0) setKrok(pristi);
+    }
+  }, [vyber, kroky, krok, dalsiKrok]);
 
   /* Enter. Uvnitř položky posune na další krok, na posledním
      zapíše a jde na další položku. Obrazovka se posune hned,
@@ -104,7 +151,8 @@ export default function Vlna({
      je čekání u každé z nich znát. */
   const dal = useCallback(async () => {
     if (!ted || pracujiRef.current) return;
-    if (krok < kroky.length - 1) { setKrok(k => k + 1); return; }
+    const pristi = dalsiKrok(krok, vyber);
+    if (pristi >= 0) { setKrok(pristi); return; }
 
     pracujiRef.current = true; setPracuji(true); setChyba(null);
     /* Prázdné jméno by položku shodilo na nevyplněném sloupci,
@@ -121,18 +169,23 @@ export default function Vlna({
       // Zpátky na tutéž položku — jinak by tiše propadla.
       setIndex(i => Math.max(0, i - 1));
       setVyber(co);
-      setKrok(kroky.length - 1);
+      // Poslední krok, který při tomhle výběru platí.
+      setKrok(Math.max(0, predchoziKrok(kroky.length, co)));
       setChyba(res?.chyba || "Nepovedlo se uložit.");
       return;
     }
     setHistorie(h => [{ polozka, vyber: co, zpetnyKlic: res.zpetnyKlic ?? null }, ...h].slice(0, 50));
-  }, [ted, krok, kroky.length, vyber, onPotvrdit, jmeno, upravitJmeno]);
+  }, [ted, krok, kroky.length, vyber, onPotvrdit, jmeno, upravitJmeno, dalsiKrok, predchoziKrok]);
 
   const zpet = useCallback(async () => {
     if (pracujiRef.current) return;
     setChyba(null);
-    // Uvnitř položky se Backspace vrací po krocích.
-    if (krok > 0) { setKrok(k => k - 1); return; }
+    // Uvnitř položky se Backspace vrací po krocích — přes ty platné.
+    if (krok > 0) {
+      const pred = predchoziKrok(krok, vyber);
+      setKrok(pred >= 0 ? pred : 0);
+      return;
+    }
     const posledni = historie[0];
     if (!posledni) return;
     pracujiRef.current = true; setPracuji(true);
@@ -142,7 +195,7 @@ export default function Vlna({
     setHistorie(h => h.slice(1));
     setIndex(i => Math.max(0, i - 1));
     setHlaska(res.hlaska || null);
-  }, [krok, historie, onZpet]);
+  }, [krok, vyber, historie, onZpet, predchoziKrok]);
 
   // ── Klávesy ──
   useEffect(() => {
@@ -206,13 +259,19 @@ export default function Vlna({
   const vybrano = vyber[aktualni?.klic] || [];
   const bezZvlastnich = (aktualni?.volby || []).filter(o => !o.klavesa);
 
+  /* Kroků je proměnlivý počet — u obchodního kontaktu jeden,
+     u osobního dva. „Krok 2 ze 2" proto nejde brát z délky pole. */
+  const maDalsi = dalsiKrok(krok, vyber) >= 0;
+  const platnychKroku = kroky.reduce((n, _, i) => n + (platny(i, vyber) ? 1 : 0), 0);
+  const poradiKroku = kroky.reduce((n, _, i) => n + (i <= krok && platny(i, vyber) ? 1 : 0), 0);
+
   return obal(
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 3 }}>
         <span style={{ fontSize: "15px", fontWeight: 700, color: theme.text }}>{nazev}</span>
         <span style={{ fontSize: "11px", color: theme.textSub }}>
           zbývá {zbyva} z {fronta.length}
-          {kroky.length > 1 ? ` · krok ${krok + 1} ze ${kroky.length}` : ""}
+          {platnychKroku > 1 ? ` · krok ${poradiKroku} ze ${platnychKroku}` : ""}
         </span>
         <span style={{ flex: 1 }} />
         <button onClick={onClose} title="Zavřít — zbytek počká" aria-label="Zavřít"
@@ -315,13 +374,13 @@ export default function Vlna({
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={dal} disabled={pracuji}
-          title={krok < kroky.length - 1
+          title={maDalsi
             ? "Další krok (Enter)"
             : vybrano.length || Object.values(vyber).some(x => x?.length)
               ? "Potvrdit a jít na další (Enter)"
               : "Nic jsi neoznačil — Enter položku přeskočí"}
           style={{ ...btnMain(theme), minHeight: 38, padding: "0 16px" }}>
-          {krok < kroky.length - 1 ? "Dál ⏎" : "Potvrdit ⏎"}
+          {maDalsi ? "Dál ⏎" : "Potvrdit ⏎"}
         </button>
         <button onClick={zpet} disabled={pracuji || (krok === 0 && historie.length === 0)}
           title={krok > 0

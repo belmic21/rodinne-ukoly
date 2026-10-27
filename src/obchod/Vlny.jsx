@@ -18,6 +18,7 @@ import Vlna from "./Vlna.jsx";
 import {
   nactiCekarnu, zaradZCekarny, odlozZCekarny, vratZCekarny,
   lideKDoplneni, ulozKartu, smazKartu, aktivni, popis,
+  roleObchodni, roleOsobni,
 } from "./api.js";
 
 /* ── PÁSMA MÍSTO ČÍSEL ───────────────────────────────────
@@ -61,18 +62,38 @@ export function VlnaCekarna({ theme, owner, ciselniky, onClose, onZmena }) {
     return () => { zrus = true; };
   }, [owner]);
 
-  const kroky = useMemo(() => [{
-    klic: "role",
-    otazka: "Čím ti je?",
-    vice: true,
-    volby: [
-      ...aktivni(ciselniky, "role").slice(0, 9).map(r => ({ key: r.key, label: r.label })),
-      /* Osobní vylučuje role a role vylučují jeho — rodinu
-         nezařazuješ jako investora. Vlastní klávesa 0, ať se
-         nemíchá do číslování rolí. */
-      { key: "__osobni", label: "🏠 Osobní", exkluzivni: true, klavesa: "0" },
-    ],
-  }], [ciselniky]);
+  const kroky = useMemo(() => {
+  const osobniVolby = roleOsobni(ciselniky).slice(0, 9).map(r => ({ key: r.key, label: r.label }));
+  return [
+    {
+      klic: "role",
+      otazka: "Čím ti je?",
+      vice: true,
+      volby: [
+        ...roleObchodni(ciselniky).slice(0, 9).map(r => ({ key: r.key, label: r.label })),
+        /* Osobní vylučuje role a role vylučují jeho — rodinu
+           nezařazuješ jako investora. Vlastní klávesa 0, ať se
+           nemíchá do číslování rolí.
+
+           postupDal: je to výlučná volba, takže po ní není na co
+           čekat. Rovnou se otevře druhý krok s kategoriemi. */
+        { key: "__osobni", label: "🏠 Osobní", exkluzivni: true, klavesa: "0", postupDal: true },
+      ],
+    },
+    /* Druhý krok se ptá jen u osobních. Obchodní kontakt zůstává
+       na jednu klávesu — to je celý smysl vlny. */
+    {
+      klic: "osobni",
+      otazka: "Co je zač?",
+      vice: true,
+      /* Dokud osobní role v číselníku nejsou, krok se neukáže
+         vůbec. Prázdná otázka je horší než žádná — a vlna takhle
+         funguje i před migrací číselníku. */
+      platiKdyz: (v) => osobniVolby.length > 0 && (v.role || []).includes("__osobni"),
+      volby: osobniVolby,
+    },
+  ];
+  }, [ciselniky]);
 
   const potvrdit = useCallback(async (polozka, vyber) => {
     const vybrano = vyber.role || [];
@@ -81,7 +102,14 @@ export function VlnaCekarna({ theme, owner, ciselniky, onClose, onZmena }) {
       return { ok: r.ok, chyba: r.chyba, zpetnyKlic: null };
     }
     if (vybrano.includes("__osobni")) {
-      const r = await zaradZCekarny(owner, polozka, { oblast: "osobni", role: [] });
+      /* Osobní kategorie jsou obyčejné role, jen ze skupiny
+         osobni. Díky tomu na ně funguje filtr v Lidech i hromadná
+         změna role beze změny — „ukaž mi všechny řemeslníky"
+         jede stejnou cestou jako „ukaž mi investory". */
+      const r = await zaradZCekarny(owner, polozka, {
+        oblast: "osobni",
+        role: vyber.osobni || [],
+      });
       return { ok: r.ok, chyba: r.chyba, zpetnyKlic: r.osoba?.id || null };
     }
     const r = await zaradZCekarny(owner, polozka, { oblast: "prace", role: vybrano });
@@ -124,6 +152,10 @@ export function VlnaCekarna({ theme, owner, ciselniky, onClose, onZmena }) {
         Jméno se dá přepsat — jmenovci se v Lidech musí rozlišit,
         proto „Novák Pardubice" a „Novák Brno". Do čekárny se zápis
         nepropisuje, tam zůstane podoba ze souboru.
+        <br />
+        Klávesa <strong style={{ fontWeight: 700 }}>0</strong> otevře osobní
+        kategorie. Co nemá být ani v Lidech, ani smazané, nech bez označení —
+        Enter to odloží a zůstane to k dohledání v čekárně.
       </>} />
   );
 }

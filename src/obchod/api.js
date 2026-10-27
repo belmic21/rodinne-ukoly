@@ -49,6 +49,27 @@ export function aktivni(ciselniky, kind) {
   return (ciselniky?.[kind] || []).filter(x => x.active);
 }
 
+/* ── Role obchodní a osobní ──────────────────────────────
+   Michal 26. 10.: „osobní kontakty bych rozdělil na služby,
+   rodinu a přátele."
+
+   Je to táž věc jako obchodní role, ne nová osa: soused BÝVÁ
+   instalatér a nájemník bývá kamarád, takže jedna přihrádka na
+   osobu by nutila vybrat, co je „víc". Proto jeden číselník rolí
+   rozdělený sloupcem skupina, který v deal_enums dávno je.
+
+   Obchodní = všechno, co NENÍ osobní. Kdyby migrace číselníku
+   neproběhla, staré role zůstanou tam, kde byly. */
+export const SKUPINA_OSOBNI = "osobni";
+
+export function roleObchodni(ciselniky) {
+  return aktivni(ciselniky, "role").filter(r => r.skupina !== SKUPINA_OSOBNI);
+}
+
+export function roleOsobni(ciselniky) {
+  return aktivni(ciselniky, "role").filter(r => r.skupina === SKUPINA_OSOBNI);
+}
+
 /* ── Člověk ze všech stran ───────────────────────────────
    Davidovi volá klient. Potřebuje za pár vteřin vidět, co
    s ním běží, kdy naposledy a za kolik — nezávisle na tom,
