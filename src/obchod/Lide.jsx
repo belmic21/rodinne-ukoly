@@ -23,6 +23,7 @@ import {
   popisSloupcu,
   vyprazdniCekarnu,
   hromadnaRole, hromadnaOblast, nactiKarty, lideKDoplneni,
+  coViNaLidech, smazLidi,
   zalozOsobu, prehledStavuLidi, hledejObce,
 } from "./api.js";
 import { KontaktEditor } from "./Site.jsx";
@@ -373,6 +374,10 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
   const [hromadnaCo, setHromadnaCo] = useState("");
   const [hromadnaHlaska, setHromadnaHlaska] = useState(null);
   const [hromadneDelam, setHromadneDelam] = useState(false);
+  /* null = nikdo se na nic neptá. Jinak { prazdni, sObsahem },
+     kde sObsahem nese i to, CO na kom visí — bez toho by
+     potvrzení říkalo „něco tam je" a Michal by klikal naslepo. */
+  const [kSmazani, setKSmazani] = useState(null);
 
   const [pocetKDoplneni, setPocetKDoplneni] = useState({ developer: 0, investor: 0 });
 
@@ -395,6 +400,35 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
     if (!r.ok) { setPoMazani({ chyba: r.chyba || "Nepovedlo se vyprázdnit." }); return; }
     setPoMazani({ smazano: r.smazano, zustalo: r.zustalo });
     setCekarna(await cekarnaPocty());
+  };
+
+  /* Dva kroky schválně: nejdřív se zjistí, co se smazáním ztratí,
+     a teprve pak se maže. Jeden klik by u člověka s rozdělanou
+     zakázkou znamenal ztrátu, kterou nejde vrátit. */
+  const pripravSmazani = async () => {
+    setHromadneDelam(true);
+    const ids = [...vyber];
+    const r = await coViNaLidech(ids);
+    setHromadneDelam(false);
+    const jmena = new Map(videt.map(x => [x.person_id, x.name]));
+    const prazdni = [], sObsahem = [];
+    for (const id of ids) {
+      const co = r.obsah?.[id];
+      if (co && co.size) sObsahem.push({ id, name: jmena.get(id) || "?", co: [...co] });
+      else prazdni.push({ id, name: jmena.get(id) || "?" });
+    }
+    setKSmazani({ prazdni, sObsahem });
+  };
+
+  const provedSmazani = async (ids) => {
+    setHromadneDelam(true);
+    const res = await smazLidi(owner, ids);
+    setHromadneDelam(false);
+    setKSmazani(null);
+    setHromadnaHlaska(res.ok
+      ? `Smazáno ${res.pocet ?? res.smazano} ${(res.smazano === 1) ? "člověk" : "lidí"}.`
+      : (res.chyba || "Nepovedlo se smazat."));
+    if (res.ok) { setVyber(new Set()); setObnov(x => x + 1); }
   };
 
   useEffect(() => {
@@ -907,6 +941,13 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
                            background: "transparent", border: `1px solid ${theme.cardBorder}`,
                            color: theme.text }}>{l}</button>
               ))}
+              {/* Mazání stojí stranou a je šedé. Je to jediná
+                  hromadná volba, která nejde vzít zpět. */}
+              <button onClick={pripravSmazani} disabled={hromadneDelam}
+                title={`Smazat ${vyber.size} označených z Lidí`}
+                style={{ ...btn(), padding: "4px 10px", borderRadius: 13, fontSize: "11.5px",
+                         background: "transparent", border: `1px solid ${theme.cardBorder}`,
+                         color: theme.textSub }}>Smazat</button>
             </>
           )}
           <span style={{ flex: 1 }} />
@@ -919,6 +960,78 @@ export default function Lide({ theme, owner, ciselniky, onOtevriOsobu }) {
                      color: theme.textSub }}>⬇ XLSX</button>
         </div>
       )}
+      {kSmazani && (
+        <div role="alertdialog" aria-label="Opravdu smazat označené?" style={{
+          marginBottom: 9, padding: "11px 13px", borderRadius: 10,
+          background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+          fontSize: "12.5px", color: theme.text,
+        }}>
+          {kSmazani.prazdni.length > 0 && (
+            <div style={{ marginBottom: kSmazani.sObsahem.length ? 7 : 9 }}>
+              <strong>{kSmazani.prazdni.length}</strong>
+              {kSmazani.prazdni.length === 1 ? " člověk nemá" : " lidí nemá"}
+              {" "}u sebe nic — žádnou kartu, téma, zakázku ani poznámku.
+            </div>
+          )}
+
+          {/* Kdo něco má, je vypsaný jmenovitě i s tím, oč by
+              Michal přišel. „Něco tam je" by se odklikávalo
+              stejně rychle jako prázdná hláška. */}
+          {kSmazani.sObsahem.length > 0 && (
+            <div style={{
+              marginBottom: 9, padding: "8px 10px", borderRadius: 8,
+              background: theme.card, border: `1px solid ${theme.cardBorder}`,
+            }}>
+              <div style={{ color: theme.red, fontWeight: 700, marginBottom: 4 }}>
+                {kSmazani.sObsahem.length === 1
+                  ? "U jednoho něco je:"
+                  : `U ${kSmazani.sObsahem.length} něco je:`}
+              </div>
+              {kSmazani.sObsahem.slice(0, 12).map(x => (
+                <div key={x.id} style={{ fontSize: "11.5px", marginBottom: 1 }}>
+                  {x.name} <span style={{ color: theme.textSub }}>— {x.co.join(", ")}</span>
+                </div>
+              ))}
+              {kSmazani.sObsahem.length > 12 && (
+                <div style={{ fontSize: "11.5px", color: theme.textSub }}>
+                  …a další {kSmazani.sObsahem.length - 12}
+                </div>
+              )}
+              <div style={{ fontSize: "11px", color: theme.textSub, marginTop: 4 }}>
+                Smazáním zmizí i tohle. Poznámky ve znalostní bázi zůstanou,
+                ale přestanou mít člověka.
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {kSmazani.prazdni.length > 0 && (
+              <button onClick={() => provedSmazani(kSmazani.prazdni.map(x => x.id))}
+                disabled={hromadneDelam}
+                style={{ ...btn(), padding: "6px 11px", fontSize: "12.5px", fontWeight: 700,
+                         background: theme.red, color: "#fff" }}>
+                {hromadneDelam ? "Mažu…" : `Smazat ${kSmazani.prazdni.length} prázdných`}
+              </button>
+            )}
+            {kSmazani.sObsahem.length > 0 && (
+              <button onClick={() => provedSmazani(
+                  [...kSmazani.prazdni, ...kSmazani.sObsahem].map(x => x.id))}
+                disabled={hromadneDelam}
+                title="Smaže i ty, u kterých něco je"
+                style={{ ...btn(), padding: "6px 11px", fontSize: "12.5px",
+                         background: "transparent", color: theme.red,
+                         border: `1px solid ${theme.red}` }}>
+                Smazat všech {kSmazani.prazdni.length + kSmazani.sObsahem.length} včetně obsahu
+              </button>
+            )}
+            <button onClick={() => setKSmazani(null)} disabled={hromadneDelam}
+              style={{ ...btn(), padding: "6px 11px", fontSize: "12.5px",
+                       background: "transparent", color: theme.text,
+                       border: `1px solid ${theme.cardBorder}` }}>Zrušit</button>
+          </div>
+        </div>
+      )}
+
       {hromadnaHlaska && (
         <div style={{ fontSize: "11.5px", color: theme.green, marginBottom: 8 }}>{hromadnaHlaska}</div>
       )}

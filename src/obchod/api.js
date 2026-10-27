@@ -433,6 +433,66 @@ export async function vratZCekarny(radek) {
   }
 }
 
+/* ══ HROMADNÉ MAZÁNÍ LIDÍ ══
+   Michal 27. 10.: „ocenil bych tlačítko Vymazat. Nebo je to
+   hloupost a tlačítko Mazat tam dávat nemám?"
+
+   Není. Po špatném importu se bez něj neobejdeš. Ale smazat
+   člověka není totéž jako smazat řádek: databáze má na něm
+   kaskádu a vezme s sebou jeho karty, témata, účast v zakázkách
+   i záznam o tom, kdys ho oslovil. Poznámka ve znalostní bázi
+   přežije, jenže přijde o člověka — a osiřelá věta „říkal, že
+   má zájem" je skoro k ničemu.
+
+   Proto se nejdřív ptáme, co na kom visí. Prázdné řádky z
+   importu zmizí jedním klikem; u těch, na kterých něco je, musí
+   Michal potvrdit zvlášť a vidět, oč přijde.
+
+   Jedno čtení na tabulku pro celý výběr, ne jedno na člověka. */
+export async function coViNaLidech(ids) {
+  const seznam = (ids || []).filter(Boolean);
+  if (!seznam.length) return { ok: true, obsah: {} };
+  const tabulky = [
+    ["deal_cards", "karty"],
+    ["map_temata", "témata"],
+    ["deal_participants", "zakázky"],
+    ["deal_approaches", "oslovení"],
+    ["map_facts", "poznámky"],
+  ];
+  const obsah = {};
+  try {
+    const vysledky = await Promise.all(tabulky.map(([t]) =>
+      supabase.from(t).select("person_id").in("person_id", seznam).limit(5000)));
+    vysledky.forEach((r, i) => {
+      /* Chybějící tabulka neznamená, že je člověk prázdný —
+         znamená, že to nevíme. Mlčet by svádělo ke smazání. */
+      if (r.error) return;
+      for (const radek of r.data || []) {
+        if (!radek.person_id) continue;
+        (obsah[radek.person_id] = obsah[radek.person_id] || new Set()).add(tabulky[i][1]);
+      }
+    });
+    return { ok: true, obsah };
+  } catch (e) {
+    return { ...selhalo("coViNaLidech", e), obsah: {} };
+  }
+}
+
+export async function smazLidi(owner, ids) {
+  const seznam = (ids || []).filter(Boolean);
+  if (!owner || !seznam.length) return { ok: false, chyba: "Není koho smazat." };
+  try {
+    const { data, error } = await supabase
+      .from("map_people").delete()
+      .eq("owner", owner).in("id", seznam)
+      .select("id");
+    if (error) throw error;
+    return { ok: true, smazano: (data || []).length };
+  } catch (e) {
+    return selhalo("smazLidi", e);
+  }
+}
+
 /* ── Fronta na doplnění kritérií ─────────────────────────
    Michal 26. 10.: „vyfiltruju si developery a budu jim přiřazovat,
    co staví za projekty a jaké velikosti. Pak si vyfiltruju
