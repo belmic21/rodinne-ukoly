@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261027_0130";
+const FILE_VERSION = "261027_0730";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -29896,21 +29896,27 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
     return vse.filter(Boolean);
   }, [praceFilter, otevriObchod, tasks]);
 
-  /* Na telefonu se vejde pět záložek. Beru ty, kvůli kterým člověk
-     telefon vytahuje: co je dnes, co hoří, co je za úkoly, zakázky
-     a hledání. V režimu Osobní vypadnou zakázky a doplní se
-     poznámky — doma se hledá spíš poznámka než zakázka. */
   /* Spodní lišta má pět míst, aplikace jedenáct cílů. Čtyři
-     nejčastější zůstanou dole, zbytek je za „Víc" — dřív prostě
-     na telefonu nebyl. Michal: „na hlavní obrazovce nevidím Lidé." */
+     nejčastější zůstanou dole, zbytek je za „Víc".
+
+     Čtvrté místo patřilo Zakázkám a Michal 27. 10. ukázal, že je
+     to obráceně: „zakázky jsou u lidí a na ně budu klikat mnohem
+     častěji." Sedí to — zakázka se otevírá z karty člověka, kdežto
+     na člověka se kliká při každém hovoru. Zakázky se tím
+     nevytratí, jen se posunou pod „Víc"; ten seznam se skládá
+     z toho, co dole není, takže se přesunuly samy.
+
+     V režimu Osobní jsou Lidé i Zakázky schované tak jako tak,
+     a na čtvrté místo jdou poznámky — doma se hledá spíš
+     poznámka než zakázka. */
   const mobilCile = useMemo(() => {
     const prace = praceFilter !== "osobni";
     return [
       ...pruhCile.filter(c => ["dnes", "ukoly", "prosle"].includes(c.k)),
       prace
-        ? pruhCile.find(c => c.k === "zakazky")
+        ? pruhCile.find(c => c.k === "lide")
         : pruhCile.find(c => c.k === "poznamky"),
-      { k: "vic", popis: "Víc", ikona: "vic", napoveda: "Lidé, poznámky, zásobník a další",
+      { k: "vic", popis: "Víc", ikona: "vic", napoveda: "Zakázky, poznámky, zásobník a další",
         akce: () => setVicOtevreno(true) },
     ].filter(Boolean);
   }, [pruhCile, praceFilter]);
