@@ -2647,36 +2647,150 @@ function csvRozdel(radek, odd) {
   return ven.map(x => x.trim());
 }
 
-export function rozeberCSV(text) {
+/* ══ ČTENÍ CSV Z EXPORTU KONTAKTŮ ══
+   Michal 27. 10.: „kontakty se nahrály chybně, nenahrálo se
+   příjmení, zbytečně nahrály kategorie jako work."
+
+   První verze hledala sloupec tak, že vzala PRVNÍ, jehož název
+   obsahuje „phone" nebo „mail". Google jenže vyváží dvojice:
+
+     … , E-mail 1 - Label , E-mail 1 - Value , Phone 1 - Label , …
+
+   a popisek stojí před hodnotou. Takže se místo adresy načetlo
+   „Work" a místo čísla „Mobile", z něhož po odstranění nečíslic
+   nezbylo nic. Odtud ty kategorie v kontaktu i chybějící
+   telefony — a protože se podle čísel poznávají duplicity,
+   nehlásilo se ani jedno.
+
+   Druhá vada: když je sloupec Name prázdný (běžné u kontaktů ze
+   SIM nebo z Whatsappu), spadl celý řádek pod stůl, přestože
+   Given Name a Family Name vyplněné byly. Tiše zmizelý kontakt
+   je horší než špatně přečtený — ten je aspoň vidět.
+
+   Teď se sloupce vybírají ve dvou kolech: nejdřív se vyřadí ty,
+   které ze své podstaty nesou popis, ne hodnotu, a teprve ze
+   zbytku se hledá. */
+
+const bezDiakritiky = (x) =>
+  String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+/* Sloupce, které nikdy nenesou hodnotu, jen její druh. */
+const POPISNE_SLOUPCE = [
+  "label", "type", "typ", "stitek", "kategorie", "category",
+  "phonetic", "yomi", "prefix", "suffix", "photo", "fotka",
+];
+/* Firma není jméno, i když má v názvu „name". */
+const FIREMNI_SLOUPCE = ["organization", "organizace", "company", "firma", "spolecnost"];
+
+/* Rozpoznání sloupců je oddělené schválně. Potřebuje ho čtení
+   souboru i výpis „co kam přiřadím", který se ukazuje před
+   importem — a kdyby si to každé počítalo po svém, rozešlo by se
+   to přesně ve chvíli, kdy jedno z toho opravím. */
+export function urciSloupce(text) {
   const radky = String(text || "").replace(/\r\n/g, "\n").split("\n").filter(r => r.trim());
-  if (radky.length < 2) return [];
+  if (!radky.length) return null;
   const odd = [";", "\t", ","]
     .map(o => ({ o, n: csvRozdel(radky[0], o).length }))
     .sort((a, b) => b.n - a.n)[0].o;
 
-  const bez = (x) => x.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-  const hlavicka = csvRozdel(radky[0], odd).map(bez);
+  const puvodni = csvRozdel(radky[0], odd);
+  const hlavicka = puvodni.map(bezDiakritiky);
 
-  /* Jak se sloupce jmenují v praxi. Google, Outlook i ručně
-     psaná tabulka — každý si to pojmenuje po svém. */
-  const najdi = (varianty) => hlavicka.findIndex(h => varianty.some(v => h.includes(v)));
-  const iJmeno  = najdi(["jmeno a prijmeni", "cele jmeno", "jmeno", "name", "nazev", "kontakt"]);
-  const iPrijmeni = najdi(["prijmeni", "last name", "surname"]);
-  const iTel    = najdi(["telefon", "mobil", "phone", "tel", "cislo"]);
-  const iMail   = najdi(["mail", "e-mail"]);
-  const iPozn   = najdi(["poznamka", "note", "popis", "firma", "organizace", "company"]);
-  if (iJmeno < 0) return [];
+  const popisny = (h) => POPISNE_SLOUPCE.some(v => h.includes(v));
+  const firemni = (h) => FIREMNI_SLOUPCE.some(v => h.includes(v));
+
+  /* Vrátí VŠECHNY sloupce, které sedí — telefon i mail jich
+     mívá několik (Phone 1, Phone 2…) a zahodit druhý by znamenalo
+     zahodit číslo, podle kterého se pozná duplicita. */
+  const najdiVse = (varianty, krome = () => false) =>
+    hlavicka.map((h, k) => ({ h, k }))
+      .filter(({ h }) => h && !popisny(h) && !krome(h) && varianty.some(v => h.includes(v)))
+      .map(({ k }) => k);
+  const najdi = (varianty, krome) => { const v = najdiVse(varianty, krome); return v.length ? v[0] : -1; };
+
+  /* Jméno může přijít třemi způsoby: celé v jednom sloupci,
+     rozdělené na křestní a příjmení, nebo obojí zároveň —
+     Google vyváží Name i Given/Family vedle sebe. */
+  return {
+    odd, radky, puvodni,
+    iCele:  najdi(["jmeno a prijmeni", "cele jmeno", "full name", "display name", "file as"], firemni),
+    iKrest: najdi(["first name", "given name", "krestni"], firemni),
+    iPrijm: najdi(["last name", "family name", "surname", "prijmeni"], firemni),
+    iStred: najdi(["middle name", "additional name"], firemni),
+    /* Obecné „name" / „jméno" až nakonec — v ruční tabulce znamená
+       křestní, u Googlu celé jméno. Rozhodne se u každého řádku
+       podle toho, co v něm doopravdy je. */
+    iObecne: najdi(["name", "jmeno", "nazev", "kontakt"], firemni),
+    iTel:   najdiVse(["telefon", "mobil", "phone", "tel", "cislo"]),
+    iMail:  najdiVse(["mail"]),
+    iFirma: hlavicka.findIndex(h => h && !popisny(h) && firemni(h)),
+    iPozn:  najdi(["poznamka", "note", "popis"]),
+  };
+}
+
+/* Lidsky čitelně, co se z kterého sloupce vezme. Ukazuje se nad
+   náhledem importu — bez toho se špatně přečtený soubor pozná až
+   po třídění, a to je pozdě. */
+export function popisSloupcu(text) {
+  const s = urciSloupce(text);
+  if (!s) return [];
+  const jm = (k) => (k >= 0 ? (s.puvodni[k] || `sloupec ${k + 1}`) : null);
+  const jmena = [s.iCele, s.iObecne, s.iKrest, s.iStred, s.iPrijm]
+    .filter(k => k >= 0).map(jm);
+  return [
+    { co: "Jméno",   z: [...new Set(jmena)] },
+    { co: "Telefon", z: s.iTel.map(jm) },
+    { co: "E-mail",  z: s.iMail.map(jm) },
+    { co: "Firma",   z: [jm(s.iFirma)].filter(Boolean) },
+    { co: "Poznámka", z: [jm(s.iPozn)].filter(Boolean) },
+  ].filter(x => x.z.length);
+}
+
+export function rozeberCSV(text) {
+  const s = urciSloupce(text);
+  if (!s || s.radky.length < 2) return [];
+  const { odd, radky, iCele, iKrest, iPrijm, iStred, iObecne, iTel, iMail, iFirma, iPozn } = s;
+  const bez = bezDiakritiky;
+
+  if (iCele < 0 && iKrest < 0 && iObecne < 0) return [];
+
+  const hodnota = (c, k) => (k >= 0 ? String(c[k] || "").trim() : "");
 
   const ven = [];
   for (const r of radky.slice(1)) {
     const c = csvRozdel(r, odd);
-    const jmeno = [c[iJmeno], iPrijmeni >= 0 ? c[iPrijmeni] : ""].filter(Boolean).join(" ").trim();
-    if (!jmeno) continue;
+
+    const cele   = hodnota(c, iCele);
+    const krest  = hodnota(c, iKrest);
+    const stred  = hodnota(c, iStred);
+    const prijm  = hodnota(c, iPrijm);
+    const obecne = hodnota(c, iObecne);
+
+    /* Základ je celé jméno, když existuje; jinak obecný sloupec;
+       jinak se jméno poskládá. Prázdný sloupec Name tím přestal
+       znamenat ztracený kontakt. */
+    let jmeno = cele || obecne || [krest, stred, prijm].filter(Boolean).join(" ");
+    /* Příjmení se přidá jen tehdy, když v základu ještě není —
+       Google vyváží „Michal Novák" i „Novák" zvlášť a sečíst oboje
+       by udělalo „Michal Novák Novák". */
+    if (prijm && !bez(jmeno).split(/\s+/).includes(bez(prijm))) {
+      jmeno = [jmeno, prijm].filter(Boolean).join(" ");
+    }
+    jmeno = jmeno.replace(/\s+/g, " ").trim();
+
+    const telefony = iTel.map(k => hodnota(c, k).replace(/[^\d+]/g, "")).filter(x => x.length >= 6);
+    const maily = iMail.map(k => hodnota(c, k)).filter(x => x.includes("@"));
+    const firma = iFirma >= 0 ? hodnota(c, iFirma) : "";
+
+    /* Kontakt bez jména, ale s číslem, se nezahazuje — číslo je
+       to, podle čeho se pozná duplicita, a jméno dopíšeš ve vlně. */
+    if (!jmeno && !telefony.length) continue;
+
     ven.push({
-      name: jmeno,
-      contact: [iTel >= 0 ? (c[iTel] || "").replace(/[^\d+]/g, "") : "",
-                iMail >= 0 ? c[iMail] : ""].filter(Boolean).join(", "),
-      note: iPozn >= 0 ? (c[iPozn] || "") : "",
+      name: jmeno || telefony[0],
+      contact: [...telefony, ...maily].join(", "),
+      firma,
+      note: hodnota(c, iPozn),
     });
   }
   return ven;

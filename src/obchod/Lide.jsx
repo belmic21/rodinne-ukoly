@@ -20,6 +20,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   prehledLidi, zanedbani, popis, aktivni,
   rozeberOsobu, rozeberKontakty, oznacDuplicity, doCekarny, cekarnaPocty,
+  popisSloupcu,
   hromadnaRole, hromadnaOblast, nactiKarty, lideKDoplneni,
   zalozOsobu, prehledStavuLidi, hledejObce,
 } from "./api.js";
@@ -54,6 +55,7 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
   const [chyba, setChyba] = useState(null);
   const [nahled, setNahled] = useState(null);   // import: co se našlo v souboru
   const [jmenoSouboru, setJmenoSouboru] = useState("");
+  const [sloupce, setSloupce] = useState(null);
   const [berDuplicity, setBerDuplicity] = useState(false);
   // Kolik právě spadlo do čekárny — podklad pro nabídku „protřídit teď".
   const [doCekarnySlo, setDoCekarnySlo] = useState(0);
@@ -130,6 +132,11 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
     try {
       const obsah = await f.text();
       const nalezeni = rozeberKontakty(obsah, f.name);
+      /* U CSV ukazujeme, který sloupec se bere na co. Export
+         kontaktů má přes dvacet sloupců a z náhledu jmen není
+         poznat, že se telefon vzal ze špatného — to se pozná až
+         po protřídění, kdy je pozdě. vCard žádné sloupce nemá. */
+      setSloupce(/\.vcf$/i.test(f.name) ? null : popisSloupcu(obsah));
       if (!nalezeni.length) {
         setChyba("V souboru jsem nenašel žádné kontakty se jménem. Čtu vCard (.vcf) a CSV.");
         setNahled(null);
@@ -235,6 +242,25 @@ function RychlyClovek({ theme, owner, ciselniky, stavajici, onHotovo }) {
               ? `${duplicit} z nich už v Lidech ${duplicit === 1 ? "je" : "jsou"} — shoduje se telefonní číslo. Jmenovce za duplicitu nepovažuju.`
               : "Žádný z nich u sebe zatím nemáš."}
           </div>
+
+          {sloupce && sloupce.length > 0 && (
+            <div style={{
+              fontSize: 11, color: theme.textSub, marginBottom: 9,
+              padding: "7px 9px", borderRadius: 8,
+              background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+            }}>
+              <div style={{ marginBottom: 3, color: theme.textMid }}>Ze kterých sloupců to beru:</div>
+              {sloupce.map(x => (
+                <div key={x.co} style={{ display: "flex", gap: 6 }}>
+                  <span style={{ minWidth: 62, color: theme.textMid }}>{x.co}</span>
+                  <span style={{ color: theme.text }}>{x.z.join(" + ")}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 4, color: theme.textMid }}>
+                Sedí to? Když ne, napiš mi — soubor zatím nikam nejde.
+              </div>
+            </div>
+          )}
 
           <div style={{
             maxHeight: 190, overflowY: "auto", display: "flex",
