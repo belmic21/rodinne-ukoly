@@ -2631,20 +2631,61 @@ export function rozeberVCard(text) {
   })).filter(x => x.name);
 }
 
-/* CSV i TSV. Oddělovač se pozná z prvního řádku — kdo exportuje
-   z českého Excelu, dostane středníky, kdo odjinud čárky. */
-function csvRozdel(radek, odd) {
-  const ven = []; let akt = ""; let vUvozovkach = false;
-  for (let i = 0; i < radek.length; i++) {
-    const z = radek[i];
-    if (z === '"') {
-      if (vUvozovkach && radek[i + 1] === '"') { akt += '"'; i++; }
-      else vUvozovkach = !vUvozovkach;
-    } else if (z === odd && !vUvozovkach) { ven.push(akt); akt = ""; }
-    else akt += z;
+/* ══ CSV SE ČTE VCELKU, NE PO ŘÁDCÍCH ══
+   Michal 27. 10.: „vidím jméno, ale nevidím příjmení. Vidím
+   pouze část názvu."
+
+   Soubor se dřív rozsekal na řádky obyčejným split("\n") a každý
+   se rozebíral zvlášť. V uvozovkách ale konec řádku není konec
+   záznamu — a Google do poznámky i adresy běžně dá víceřádkový
+   text:
+
+     Michal,Novák,"byt 3203
+     nájem splatný k 15.",Mobile,+420777111222
+
+   Tohle se rozpadlo na tři „kontakty": Michala bez telefonu a
+   dva, jejichž jméno je kus poznámky. Odtud ta jména jako
+   „3203 Michal nájem" — není to jméno, je to řádek poznámky.
+   A protože se čísla rozešla po útržcích, nefungovaly ani
+   duplicity.
+
+   Čte se proto celý text najednou a konec řádku se bere jako
+   konec záznamu jen mimo uvozovky. */
+function csvTabulka(text, odd) {
+  const t = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const radky = [];
+  let radek = [], akt = "", vUvozovkach = false;
+  for (let i = 0; i < t.length; i++) {
+    const z = t[i];
+    if (vUvozovkach) {
+      if (z === '"') {
+        // Zdvojená uvozovka uvnitř pole znamená jednu doopravdy.
+        if (t[i + 1] === '"') { akt += '"'; i++; }
+        else vUvozovkach = false;
+      } else akt += z;
+    } else if (z === '"') {
+      vUvozovkach = true;
+    } else if (z === odd) {
+      radek.push(akt); akt = "";
+    } else if (z === "\n") {
+      radek.push(akt); akt = "";
+      radky.push(radek); radek = [];
+    } else akt += z;
   }
-  ven.push(akt);
-  return ven.map(x => x.trim());
+  radek.push(akt);
+  radky.push(radek);
+  return radky.map(r => r.map(x => x.trim())).filter(r => r.some(Boolean));
+}
+
+/* Oddělovač: kdo exportuje z českého Excelu, dostane středníky,
+   kdo odjinud čárky. Pozná se podle toho, který rozdělí hlavičku
+   na nejvíc sloupců — zkouší se na začátku souboru, celý se kvůli
+   tomu třikrát číst nemusí. */
+function csvOddelovac(text) {
+  const zacatek = String(text || "").slice(0, 20000);
+  return [";", "\t", ","]
+    .map(o => ({ o, n: (csvTabulka(zacatek, o)[0] || []).length }))
+    .sort((a, b) => b.n - a.n)[0].o;
 }
 
 /* ══ ČTENÍ CSV Z EXPORTU KONTAKTŮ ══
@@ -2687,13 +2728,11 @@ const FIREMNI_SLOUPCE = ["organization", "organizace", "company", "firma", "spol
    importem — a kdyby si to každé počítalo po svém, rozešlo by se
    to přesně ve chvíli, kdy jedno z toho opravím. */
 export function urciSloupce(text) {
-  const radky = String(text || "").replace(/\r\n/g, "\n").split("\n").filter(r => r.trim());
-  if (!radky.length) return null;
-  const odd = [";", "\t", ","]
-    .map(o => ({ o, n: csvRozdel(radky[0], o).length }))
-    .sort((a, b) => b.n - a.n)[0].o;
+  const odd = csvOddelovac(text);
+  const tabulka = csvTabulka(text, odd);
+  if (!tabulka.length) return null;
 
-  const puvodni = csvRozdel(radky[0], odd);
+  const puvodni = tabulka[0];
   const hlavicka = puvodni.map(bezDiakritiky);
 
   const popisny = (h) => POPISNE_SLOUPCE.some(v => h.includes(v));
@@ -2712,7 +2751,7 @@ export function urciSloupce(text) {
      rozdělené na křestní a příjmení, nebo obojí zároveň —
      Google vyváží Name i Given/Family vedle sebe. */
   return {
-    odd, radky, puvodni,
+    odd, tabulka, puvodni,
     iCele:  najdi(["jmeno a prijmeni", "cele jmeno", "full name", "display name", "file as"], firemni),
     iKrest: najdi(["first name", "given name", "krestni"], firemni),
     iPrijm: najdi(["last name", "family name", "surname", "prijmeni"], firemni),
@@ -2748,8 +2787,8 @@ export function popisSloupcu(text) {
 
 export function rozeberCSV(text) {
   const s = urciSloupce(text);
-  if (!s || s.radky.length < 2) return [];
-  const { odd, radky, iCele, iKrest, iPrijm, iStred, iObecne, iTel, iMail, iFirma, iPozn } = s;
+  if (!s || s.tabulka.length < 2) return [];
+  const { tabulka, iCele, iKrest, iPrijm, iStred, iObecne, iTel, iMail, iFirma, iPozn } = s;
   const bez = bezDiakritiky;
 
   if (iCele < 0 && iKrest < 0 && iObecne < 0) return [];
@@ -2757,8 +2796,7 @@ export function rozeberCSV(text) {
   const hodnota = (c, k) => (k >= 0 ? String(c[k] || "").trim() : "");
 
   const ven = [];
-  for (const r of radky.slice(1)) {
-    const c = csvRozdel(r, odd);
+  for (const c of tabulka.slice(1)) {
 
     const cele   = hodnota(c, iCele);
     const krest  = hodnota(c, iKrest);
