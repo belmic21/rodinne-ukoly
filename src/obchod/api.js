@@ -2855,16 +2855,26 @@ export function urciSloupce(text) {
   /* Jméno může přijít třemi způsoby: celé v jednom sloupci,
      rozdělené na křestní a příjmení, nebo obojí zároveň —
      Google vyváží Name i Given/Family vedle sebe. */
+  /* Jeden sloupec, jedna role. Sloupec „Jméno a příjmení"
+     vyhovuje hledání celého jména i hledání příjmení, a kdyby
+     sloužil obojímu, složilo by se z něj „Michal Novák Michal
+     Novák". Role se proto rozebírají od nejurčitější a každý
+     sloupec si vezme jen ta první. */
+  const zabrane = new Set();
+  const zaber = (k) => { if (k < 0 || zabrane.has(k)) return -1; zabrane.add(k); return k; };
+
+  const iCele  = zaber(najdi(["jmeno a prijmeni", "cele jmeno", "full name", "display name", "file as"], firemni));
+  const iKrest = zaber(najdi(["first name", "given name", "krestni"], firemni));
+  const iStred = zaber(najdi(["middle name", "additional name"], firemni));
+  const iPrijm = zaber(najdi(["last name", "family name", "surname", "prijmeni"], firemni));
+  /* Obecné „name" / „jméno" až nakonec — v ruční tabulce znamená
+     křestní, u Googlu „First Name". Co si vzala určitější role,
+     už tu nezbyde. */
+  const iObecne = zaber(najdi(["name", "jmeno", "nazev", "kontakt"], firemni));
+
   return {
     odd, tabulka, puvodni,
-    iCele:  najdi(["jmeno a prijmeni", "cele jmeno", "full name", "display name", "file as"], firemni),
-    iKrest: najdi(["first name", "given name", "krestni"], firemni),
-    iPrijm: najdi(["last name", "family name", "surname", "prijmeni"], firemni),
-    iStred: najdi(["middle name", "additional name"], firemni),
-    /* Obecné „name" / „jméno" až nakonec — v ruční tabulce znamená
-       křestní, u Googlu celé jméno. Rozhodne se u každého řádku
-       podle toho, co v něm doopravdy je. */
-    iObecne: najdi(["name", "jmeno", "nazev", "kontakt"], firemni),
+    iCele, iKrest, iStred, iPrijm, iObecne,
     iTel:   najdiVse(["telefon", "mobil", "phone", "tel", "cislo"]),
     iMail:  najdiVse(["mail"]),
     iFirma: hlavicka.findIndex(h => h && !popisny(h) && firemni(h)),
@@ -2909,16 +2919,28 @@ export function rozeberCSV(text) {
     const prijm  = hodnota(c, iPrijm);
     const obecne = hodnota(c, iObecne);
 
-    /* Základ je celé jméno, když existuje; jinak obecný sloupec;
-       jinak se jméno poskládá. Prázdný sloupec Name tím přestal
-       znamenat ztracený kontakt. */
-    let jmeno = cele || obecne || [krest, stred, prijm].filter(Boolean).join(" ");
-    /* Příjmení se přidá jen tehdy, když v základu ještě není —
-       Google vyváží „Michal Novák" i „Novák" zvlášť a sečíst oboje
-       by udělalo „Michal Novák Novák". */
-    if (prijm && !bez(jmeno).split(/\s+/).includes(bez(prijm))) {
-      jmeno = [jmeno, prijm].filter(Boolean).join(" ");
-    }
+    /* ── Složit jméno ──
+       Michal 27. 10.: „ve zdroji se jmenuje 3150126 Radek Červený
+       Nájem, to příjmení mi chybí pro přehlednost."
+
+       Jméno přichází až ze tří sloupců a žádný formát se
+       neshoduje na tom, které to jsou. Dřív se vzal obecný
+       sloupec a dolepilo se příjmení — jenže u Googlu je obecný
+       sloupec „First Name", takže se z „Radek + Červený + Nájem"
+       stal „Radek Nájem" a prostřední část tiše vypadla.
+
+       Teď se postaví dva kandidáti a vyhraje ten, kterému chybí
+       nejmíň. Zahodit část jména je ztráta, přebytečné slovo ne —
+       to Michal ve vlně přepíše. */
+    const zaklad = krest || (iKrest < 0 ? obecne : "");
+    const slozene = [zaklad, stred, prijm].filter(Boolean).join(" ");
+    /* U ručně psané tabulky se sloupec „Jméno" žádnému
+       „first name" nepodobá, a tehdy je obecný sloupec tím
+       křestním — proto ta podmínka iKrest < 0 výš. */
+    const slov = (x) => String(x || "").trim().split(/\s+/).filter(Boolean).length;
+    let jmeno = [slozene, cele, obecne]
+      .filter(Boolean)
+      .sort((a, b) => slov(b) - slov(a))[0] || "";
     jmeno = jmeno.replace(/\s+/g, " ").trim();
 
     const telefony = iTel.map(k => hodnota(c, k).replace(/[^\d+]/g, "")).filter(x => x.length >= 6);
