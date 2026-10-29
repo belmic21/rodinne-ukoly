@@ -140,14 +140,49 @@ export default function Temata({
     setRozbaleno(null);
   };
 
+  /* Dvojklik na tlačítku, které zakládá úkol, by založil úkoly
+     dva. Hlídá to ref, ne stav: stav se projeví až při dalším
+     vykreslení, takže druhý klik ve stejném tiku by viděl ještě
+     prázdno a prošel. Stav je vedle jen kvůli tomu, aby šlo
+     tlačítko zešednout. */
+  const delamRef = useRef(null);
+  const [delam, setDelam] = useState(null);
+
   const naUkol = async (t) => {
-    if (!onNovyUkol) return;
-    const taskId = await onNovyUkol({ text: t.text, poznamka: t.poznamka, personId, osobaJmeno });
-    if (!taskId) { setChyba("Úkol se nepodařilo založit."); return; }
-    const res = await stavTematu(t.id, "predane", taskId);
-    if (!hlas(res)) return;
-    setRadky(p => p.map(x => x.id === t.id ? res.tema : x));
-    setRozbaleno(null);
+    if (!onNovyUkol || delamRef.current) return;
+    delamRef.current = t.id;
+    setDelam(t.id);
+    try {
+      const taskId = await onNovyUkol({ text: t.text, poznamka: t.poznamka, personId, osobaJmeno });
+      if (!taskId) { setChyba("Úkol se nepodařilo založit."); return; }
+      const res = await stavTematu(t.id, "predane", taskId);
+      if (!hlas(res)) return;
+      setRadky(p => p.map(x => x.id === t.id ? res.tema : x));
+      setRozbaleno(null);
+    } finally {
+      delamRef.current = null;
+      setDelam(null);
+    }
+  };
+
+  /* Zpátky mezi otevřená. Předané téma nejde odškrtnout — hlídá
+     ho úkol — takže bez téhle cesty by jediný omylem trefený
+     klik nešel vzít zpět jinak než smazáním úkolu.
+
+     Úkol zůstává. Smazat ho odtud by znamenalo sáhnout do cizí
+     agendy; tohle jen vrátí téma tam, kde bylo. */
+  const zpetMeziOtevrena = async (t) => {
+    if (delamRef.current) return;
+    delamRef.current = t.id;
+    setDelam(t.id);
+    try {
+      const res = await stavTematu(t.id, "otevrene");
+      if (!hlas(res)) return;
+      setRadky(p => p.map(x => x.id === t.id ? res.tema : x));
+    } finally {
+      delamRef.current = null;
+      setDelam(null);
+    }
   };
 
   const radek = (t) => {
@@ -212,6 +247,45 @@ export default function Temata({
               </span>
             </div>
           </button>
+
+          {/* Michal 29. 10.: „co kdybych chtěl z poznámek k probrání
+              automaticky vytvořit úkol jedním kliknutím?"
+
+              Tlačítko existovalo, ale až po rozkliknutí tématu —
+              tedy dvě kliknutí a člověk musel vědět, že tam je.
+              Patří do řádku: povýšit téma na úkol je to druhé
+              nejčastější, co se s ním dělá, hned po odškrtnutí. */}
+          {onNovyUkol && !hotove && (
+            <button onClick={() => naUkol(t)}
+              disabled={delam === t.id}
+              title="Založí úkol s tímhle textem a připojí ho k člověku. Bez termínu — ten si dáš v úkolu."
+              aria-label="Udělat z tématu úkol"
+              style={{
+                ...btn(), flexShrink: 0, minHeight: 24, padding: "0 8px",
+                borderRadius: 7, fontSize: "11px", marginTop: 1,
+                background: "transparent", color: theme.accent,
+                border: `1px solid ${theme.cardBorder}`,
+                opacity: delam === t.id ? 0.5 : 1,
+              }}>{delam === t.id ? "…" : "→ úkol"}</button>
+          )}
+
+          {/* Předané téma nejde odškrtnout, takže bez téhle cesty
+              by omylem trefený klik nešel vzít zpět. */}
+          {predane && (
+            <button onClick={() => zpetMeziOtevrena(t)}
+              disabled={delam === t.id}
+              /* Ne „Vrátit mezi otevřená" — tak se jmenuje
+                 odškrtávátko u vyřízených a dva stejné popisky
+                 v jednom řádku se pletou. */
+              title="Zpátky mezi otevřená — úkol zůstane, smaž ho v úkolech, pokud ho nechceš."
+              aria-label="Zpátky mezi otevřená"
+              style={{
+                ...btn(), flexShrink: 0, minHeight: 24, padding: "0 8px",
+                borderRadius: 7, fontSize: "11px", marginTop: 1,
+                background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.cardBorder}`,
+              }}>↩</button>
+          )}
         </div>
 
         {vUprave && (
@@ -226,13 +300,9 @@ export default function Temata({
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               <Kategorie theme={theme} ciselniky={ciselniky} hodnota={t.tema} maleAno
                 onZmena={(v) => uprav(t.id, { tema: v })} />
-              {onNovyUkol && !predane && (
-                <button onClick={() => naUkol(t)}
-                  title="Založí úkol s termínem. Téma zůstane v historii jako předané."
-                  style={{ ...btnGhost(theme), minHeight: 32, fontSize: "12px" }}>
-                  Udělat z toho úkol
-                </button>
-              )}
+              {/* „Udělat z toho úkol" bývalo tady. Teď je v řádku,
+                  který je vidět i rozbalený — dvě tlačítka na tutéž
+                  věc by jen nutila vybírat. */}
               <span style={{ flex: 1 }} />
               <button onClick={() => smaz(t.id)}
                 title="Smazat téma úplně. Odškrtnutí je skoro vždycky to, co chceš."
