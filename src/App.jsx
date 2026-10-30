@@ -52,7 +52,7 @@ import { supabase, dbToTask, taskToDb, dbToUser, dbToComment, commentToDb } from
 import ObchodSheet from "./obchod/ObchodSheet.jsx";
 import { ObchodUOsoby } from "./obchod/Osoba.jsx";
 import { KontaktEditor } from "./obchod/Site.jsx";
-import { nactiZakazky as obchodHledejZakazky, nactiLidi } from "./obchod/api.js";
+import { nactiZakazky as obchodHledejZakazky, nactiLidi, pridejTema } from "./obchod/api.js";
 import { TerminyPanel } from "./obchod/Terminy.jsx";
 import { CoUvada, slibUvada } from "./obchod/Uvada.jsx";
 import { Uzivatele } from "./obchod/Sdileni.jsx";
@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261027_0730";
+const FILE_VERSION = "261030_1400";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -158,12 +158,17 @@ function parseQuickAdd(input, { users = [], categories = [], customLists = [] } 
   let title = input;
 
   // Helper: extract token regex z titlu
+  /* Když obsluha vrátí null, značka se neuzná a text zůstane,
+     jak byl. Je to kvůli prioritě: ta bere jakákoli písmena za
+     plusem, aby nezáleželo na diakritice — ale „cena +dph" není
+     priorita a nemá se z názvu ztratit. */
   const extract = (regex, type, processor) => {
     let m;
     while ((m = regex.exec(title)) !== null) {
       const raw = m[0];
       const arg = m[1] || m[0];
       const result = processor(arg, raw);
+      if (result === null) { regex.lastIndex = m.index + raw.length; continue; }
       tokens.push({ raw, type, ...result });
       // Odstranit z titlu
       title = title.slice(0, m.index) + " " + title.slice(m.index + raw.length);
@@ -184,19 +189,38 @@ function parseQuickAdd(input, { users = [], categories = [], customLists = [] } 
 
   // +urgent / +u / +low / +l / +medium / +m / +high / +h
   let priority = null;
-  extract(/\+(urgent|urgnt|u|high|h|medium|m|low|l)\b/gi, "priority", (p) => {
-    const k = p.toLowerCase();
+  /* Hodnoty musí být TY, kterým rozumí zbytek aplikace:
+     urgent / important / low. Dřív se tu vyráběly „high"
+     a „medium", které nezná nikdo — úkol označený +u se pak
+     neřadil nahoru, nepočítal se do „co hoří", nedostal červenou
+     a filtr na akutní ho nenašel. Mlčky, protože nic nespadne,
+     jen to nefunguje. Procházelo to jen u +l, protože „low"
+     je shodou okolností v obou sadách.
+
+     Anglická i česká slova vedou na totéž — psát si pamatovat,
+     že „high" neplatí a „urgent" ano, je přesně to zapamatování,
+     kterému se vyhýbáme. */
+  /* Slova se neberou výčtem v samotném vzoru, ale až v mapě níž.
+     Výčet se o diakritiku rozbíjel: JS hranice slova \b zná jen
+     anglickou abecedu, takže „+akutní" neprošlo vůbec a
+     „+důležité" prošlo omylem — chytlo se z něj jen „d". Tohle
+     vezme písmena jakákoli a teprve pak se rozhodne. */
+  extract(/\+(\p{L}+)/gu, "priority", (p) => {
+    const k = p.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const map = {
-      urgent: "high", urgnt: "high", u: "high", high: "high", h: "high",
-      medium: "medium", m: "medium",
-      low: "low", l: "low",
+      urgent: "urgent", urgnt: "urgent", u: "urgent", high: "urgent", h: "urgent",
+      akutni: "urgent", a: "urgent",
+      important: "important", medium: "important", m: "important",
+      dulezite: "important", d: "important",
+      low: "low", l: "low", nizka: "low", n: "low",
     };
     const val = map[k];
     if (val) {
       priority = val;
       return { value: val, ok: true };
     }
-    return { value: k, ok: false };
+    // Není to priorita — nech text být.
+    return null;
   });
 
   // #kategorie / #list
@@ -682,8 +706,9 @@ function getPredictions(tasks, currentUserName) {
 }
 
 // Smart search syntax:
-//   priority:urgent | high | important | low      (a synonyma: !, !!)
-//   due:today | tomorrow | week | month | overdue | none
+//   +u +m +l                                      priorita (stejně jako při zadávání)
+//   !dnes !zitra !tyden !mesic !prosle !zadny    termín (! znamená termín i při zadávání)
+//   priority: / due: ...                          delší zápis téhož, zůstává funkční
 //   assigned:<jméno>                              (kontrola assignTo + assignedTo, case-insensitive)
 //   status:active | done | deleted | parked
 //   list:<id|název>                               (custom list — porovnává s task.category)
@@ -700,10 +725,20 @@ function parseSearchQuery(query) {
     const m = part.match(/^([a-zA-Z]+):(.+)$/);
     if (m) {
       tokens.push({ key: m[1].toLowerCase(), value: m[2].toLowerCase() });
+    } else if (part.startsWith("+")) {
+      /* Priorita. Stejná značka jako při zadávání — dřív se tu
+         priorita psala vykřičníkem a při zadávání plusem, takže
+         tatáž klávesa znamenala v jednom poli prioritu a ve
+         druhém termín. */
+      const v = part.slice(1).toLowerCase();
+      if (v) tokens.push({ key: "priority", value: v });
     } else if (part.startsWith("!")) {
-      // Zkratka: !urgent => priority:urgent, !!:urgent
-      const v = part.replace(/^!+/, "");
-      tokens.push({ key: "priority", value: v ? v.toLowerCase() : "urgent" });
+      /* Termín. Při zadávání „!zítra" znamená termín, tak ať
+         znamená termín i tady. Hodnoty se liší smyslem věci:
+         zadává se konkrétní den, hledá se rozsah (dnes, týden,
+         prošlé). Obojí je v nápovědě. */
+      const v = part.replace(/^!+/, "").toLowerCase();
+      if (v) tokens.push({ key: "due", value: v });
     } else if (part.startsWith("@")) {
       tokens.push({ key: "assigned", value: part.slice(1).toLowerCase() });
     } else if (part.startsWith("#")) {
@@ -715,13 +750,20 @@ function parseSearchQuery(query) {
   return { tokens, plainText: plainParts.join(" ").toLowerCase() };
 }
 
+/* Tytéž zkratky jako při zadávání (+u, +m, +l a jejich slova).
+   Dvě různé sady synonym pro jednu věc znamenají, že si člověk
+   musí pamatovat, ve kterém poli zrovna je. */
 function matchesPriorityToken(taskPriority, value) {
   const p = (taskPriority || "").toLowerCase();
-  // Synonyma
-  if (value === "urgent" || value === "high" || value === "akutní" || value === "akutni") return p === "urgent";
-  if (value === "important" || value === "med" || value === "důležité" || value === "dulezite") return p === "important";
-  if (value === "low" || value === "nedůležité" || value === "nedulezite") return p === "low";
-  return p === value;
+  const v = (value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const map = {
+    urgent: "urgent", urgnt: "urgent", u: "urgent", high: "urgent", h: "urgent",
+    akutni: "urgent", a: "urgent",
+    important: "important", medium: "important", m: "important", med: "important",
+    dulezite: "important", d: "important",
+    low: "low", l: "low", nizka: "low", n: "low", nedulezite: "low",
+  };
+  return p === (map[v] || v);
 }
 
 function matchesDueToken(task, value, todayStr) {
@@ -14311,7 +14353,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
      nenapíšeš, chová se všechno přesně jako dřív. */
   const SLASH_CMDS = [
     { key: "u", dest: "task",  icon: "✅", label: "Úkol",         hint: "běžný úkol (výchozí i bez lomítka)" },
-    { key: "m", dest: "mapa",  icon: "🗺️", label: "Mapa",         hint: "jméno, nebo jméno: co řekl" },
+    { key: "m", dest: "mapa",  icon: "🗺️", label: "Co o něm vím", hint: "jméno, nebo jméno: co řekl — zůstane natrvalo" },
+    { key: "t", dest: "tema",  icon: "💬", label: "Téma k probrání", hint: "jméno: co jste nedořešili — odškrtne se po hovoru" },
     { key: "p", dest: "note",  icon: "📝", label: "Poznámka",     hint: "volný text, bez termínu" },
     { key: "d", dest: "story", icon: "📔", label: "Denní příběh", hint: "zápis do deníku" },
     { key: "z", dest: "obchod", icon: "💼", label: "Zakázka",      hint: "rodinný dům Beroun 3,5 mil" },
@@ -14341,7 +14384,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   // /k hledá ve stejném seznamu lidí jako /m, jen místo zápisu
   // otevře přehled toho člověka v Obchodu.
   const kdoCmd  = !!slash && cilCmd === "kdo";
-  const lidiCmd = mapaCmd || kdoCmd;
+  /* Téma jede stejným výběrem člověka jako mapa — jméno vlevo
+     od dvojtečky, text vpravo. Dvě různé cesty k témuž výběru
+     by se rozešly. */
+  const temaCmd = !!slash && cilCmd === "tema";
+  const lidiCmd = mapaCmd || kdoCmd || temaCmd;
   const mapaParts = useMemo(() => {
     if (!slash || !lidiCmd) return null;
     const raw = slash.rest || "";
@@ -14351,6 +14398,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       : { name: raw.trim(), sentence: "" };
   }, [slash, lidiCmd]);
 
+  /* Potvrzení zápisu, který neotevře žádné okno. Lomítkové
+     zkratky většinou otevřou kartu a tím je vidět, že se něco
+     stalo; téma se zapisuje a zůstáváš na Dnešku, takže bez
+     hlášky bys nevěděl, jestli to prošlo. */
+  const [hlaska, setHlaska] = useState(null);
+  /* Jestli je pole právě aktivní. Nabídka toho, co pole umí, se
+     musí ukázat DŘÍV, než člověk napíše lomítko — kdo musí napsat
+     lomítko, aby zjistil, že lomítko existuje, to nezjistí nikdy. */
+  const [fokus, setFokus] = useState(false);
   const [mapaHits, setMapaHits] = useState([]);
   const [mapaBusy, setMapaBusy] = useState(false);
   const mapaName = mapaParts?.name || "";
@@ -14371,7 +14427,10 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
   // Kolik položek má nabídka právě teď — podle toho se pohybují šipky.
   const slashRows = !slash ? 0
     : (mapaCmd && mapaName) ? mapaHits.length + 1      // lidé + "nový člověk"
-    : (kdoCmd && mapaName)  ? mapaHits.length          // jen existující lidé
+    /* U tématu i u „kdo" se nový člověk nenabízí: téma bez
+       člověka nemá kde viset a zakládat ho poslepu z jednoho
+       řádku by znamenalo tiše vyrobit duplicitu. */
+    : ((kdoCmd || temaCmd) && mapaName) ? mapaHits.length
     : slash.hits.length;
 
   const pickMapaPerson = (person) => {
@@ -14379,6 +14438,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     setIsTypingPersist(false);
     if (onTypingChange) onTypingChange(false);
     if (kdoCmd) { onRoute?.("kdo", "", { person }); return; }
+    if (temaCmd) {
+      Promise.resolve(onRoute?.("tema", mapaParts?.sentence || "", { person }))
+        .then(odpoved => {
+          if (typeof odpoved !== "string" || !odpoved) return;
+          setHlaska(odpoved);
+          setTimeout(() => setHlaska(null), 4000);
+        });
+      return;
+    }
     onRoute?.("mapa", mapaParts?.sentence || "", { person, newName: person ? null : mapaName });
   };
 
@@ -14394,8 +14462,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
       pickMapaPerson(slashIdx < mapaHits.length ? mapaHits[slashIdx] : null);
       return;
     }
-    if (cmd.dest === "kdo" && mapaName) {
-      // Neexistujícího člověka nemá smysl otevírat — ten se zakládá v Mapě.
+    if ((cmd.dest === "kdo" || cmd.dest === "tema") && mapaName) {
+      /* Neexistujícího člověka nemá smysl otevírat ani mu věšet
+         téma — ten se zakládá v Mapě nebo v Lidech. */
       if (mapaHits.length === 0) return;
       pickMapaPerson(mapaHits[Math.min(slashIdx, mapaHits.length - 1)]);
       return;
@@ -14547,7 +14616,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         <input
           ref={inputRef}
           type="text"
-          placeholder={(showFull && type === "complex") ? "↓ Zadej název dole" : "Napiš úkol a stiskni Enter…  nebo / pro jinam"}
+          /* Dřív tu stálo „nebo / pro jinam". „Jinam" neslibuje nic
+             konkrétního, takže to nikdo nezmáčkl. */
+          placeholder={(showFull && type === "complex")
+            ? "↓ Zadej název dole"
+            : "Napiš úkol a Enter — nebo / na téma, poznámku, hledání…"}
           value={text}
           onChange={e => {
             setText(e.target.value);
@@ -14555,6 +14628,7 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             if (onTypingChange) onTypingChange(true);
           }}
           onFocus={() => {
+            setFokus(true);
             // Klik do inputu = typing mode (i když je prázdné, klávesnice se otevře)
             setIsTypingPersist(true);
             if (onTypingChange) onTypingChange(true);
@@ -14572,14 +14646,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           }}
           // onBlur záměrně neukončuje typing mode — uživatel může klikat na ikony popoverů.
           // Zavře se jen vědomě (✕ tlačítko), nebo po vytvoření úkolu.
+          // Tohle skrývá jen nabídku možností, ne psaní samotné.
+          onBlur={() => setFokus(false)}
           onKeyDown={e => {
             if (slash) {
               if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx(i => Math.min(i + 1, Math.max(0, slashRows - 1))); return; }
               if (e.key === "ArrowUp")   { e.preventDefault(); setSlashIdx(i => Math.max(i - 1, 0)); return; }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
+                /* Cíl se odvozuje z toho, co je napsané. Dokud tu
+                   stálo jen „kdo nebo mapa", skončilo by téma
+                   zapsané do Mapy — tiše v jiné tabulce, než kam
+                   mířilo. Je to na dvou místech, Enter a klik. */
                 runSlash((lidiCmd && mapaName)
-                  ? { dest: kdoCmd ? "kdo" : "mapa" }
+                  ? { dest: temaCmd ? "tema" : kdoCmd ? "kdo" : "mapa" }
                   : (slash.hits[slashIdx] || slash.hits[0]));
                 return;
               }
@@ -14648,8 +14728,12 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               // Zelená fajfka musí poslouchat lomítko stejně jako Enter.
               // Dřív ne — a "/? dav" se uložilo jako úkol s tím názvem.
               if (slash) {
+                /* Cíl se odvozuje z toho, co je napsané. Dokud tu
+                   stálo jen „kdo nebo mapa", skončilo by téma
+                   zapsané do Mapy — tiše v jiné tabulce, než kam
+                   mířilo. Je to na dvou místech, Enter a klik. */
                 runSlash((lidiCmd && mapaName)
-                  ? { dest: kdoCmd ? "kdo" : "mapa" }
+                  ? { dest: temaCmd ? "tema" : kdoCmd ? "kdo" : "mapa" }
                   : (slash.hits[slashIdx] || slash.hits[0]));
                 return;
               }
@@ -14716,6 +14800,57 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </button>
       </div>
 
+      {/* ══ CO TOHLE POLE UMÍ ══
+          Michal 30. 10.: „celé to musí být intuitivní, pokud
+          někde máme něco k zapamatování bez nápovědy, tak to
+          oprav."
+
+          Nabídka se dosud ukázala až po napsání lomítka. Jenže
+          kdo musí napsat lomítko, aby zjistil, že lomítko
+          existuje, to nezjistí nikdy. Teď je vidět, jakmile do
+          pole kliknete — a než začnete psát, takže nepřekáží.
+
+          Jedna řádka, ne celá nabídka: psaní úkolu je nejčastější
+          a rozbalený seznam při každém ťuknutí by překážel. Kdo
+          chce všech osm, napíše lomítko. */}
+      {fokus && !text.trim() && !showFull && (
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: 5,
+          padding: "6px 10px 0", fontSize: "11px", fontFamily: FONT,
+        }}>
+          <span style={{ color: theme.textMid, alignSelf: "center" }}>umí taky:</span>
+          {SLASH_CMDS.filter(c => ["tema", "mapa", "kdo", "hledat"].includes(c.dest)).map(c => (
+            <button key={c.key} type="button"
+              /* Bez tohohle by kliknutí nejdřív sebralo poli
+                 zaměření, chipy by zmizely a klik by dopadl do
+                 prázdna. */
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setText(`/${c.key} `); inputRef.current?.focus(); }}
+              title={c.hint}
+              style={{
+                ...buttonStyle(), padding: "2px 8px", borderRadius: 11,
+                fontSize: "11px", fontFamily: FONT,
+                background: "transparent", color: theme.textSub,
+                border: `1px solid ${theme.cardBorder}`, cursor: "pointer",
+              }}>
+              <span aria-hidden="true">{c.icon}</span> {c.label}
+            </button>
+          ))}
+          <span style={{ color: theme.textMid, alignSelf: "center" }}>
+            — nebo <strong style={{ fontWeight: 700 }}>/</strong> na všechno
+          </span>
+        </div>
+      )}
+
+      {hlaska && (
+        <div role="status" style={{
+          margin: "4px 10px 0", padding: "6px 10px", borderRadius: 8,
+          fontSize: "11.5px", fontFamily: FONT,
+          background: `${theme.green}12`, border: `1px solid ${theme.green}40`,
+          color: theme.text,
+        }}>{hlaska}</div>
+      )}
+
       {/* ═══ QUICK-ADD SYNTAX PREVIEW — barevné chipy pro rozpoznané tokeny ═══ */}
       {text.trim() && parsed.tokens.length > 0 && (
         <div style={{
@@ -14752,8 +14887,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </div>
       )}
 
-      {/* Nápověda pro quick-add syntax — toggle pod inputem */}
-      {text.trim() && !showFull && (
+      {/* Nápověda pro quick-add syntax — toggle pod inputem.
+          Ukazuje se i při prázdném poli, jakmile do něj klikneš:
+          osm značek za jedním kliknutím, které nic nenaznačuje,
+          je totéž jako je nemít. */}
+      {(text.trim() || fokus) && !showFull && (
         <div style={{ padding: "0 10px", marginTop: "2px" }}>
           <button onClick={() => setShowQuickHelp(s => !s)} type="button" style={{
             ...buttonStyle(),
@@ -14779,14 +14917,19 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               whiteSpace: "nowrap",
             };
             const rows = [
+              /* Značky platí stejně při zadávání i při hledání —
+                 proto je u každé napsané obojí. Dokud `!` znamenalo
+                 při zadávání termín a při hledání prioritu, musel
+                 si člověk pamatovat, ve kterém poli zrovna je. */
               { code: "@jméno", desc: "Komu zadávám", example: "@Pavla" },
-              { code: "+u +urgent", desc: "Vysoká priorita", example: "" },
-              { code: "+m +medium", desc: "Střední priorita", example: "" },
-              { code: "+l +low", desc: "Nízká priorita", example: "" },
+              { code: "+u", desc: "Akutní", example: "+u, +akutní, +urgent" },
+              { code: "+m", desc: "Důležité", example: "+m, +důležité" },
+              { code: "+l", desc: "Nízká", example: "+l, +nízká" },
               { code: "#kategorie", desc: "Kategorie / složka", example: "#home, #auto" },
-              { code: "!datum", desc: "Termín", example: "!zítra, !pondělí, !15.5." },
+              { code: "!termín", desc: "Termín", example: "!zítra, !pondělí, !15.5." },
               { code: "~období", desc: "Opakování", example: "~den, ~tyden, ~mesic, ~14d" },
               { code: "*", desc: "Připnout nahoru (na konci)", example: "" },
+              { code: "/", desc: "Jinam než do úkolu", example: "/t téma, /m co vím, /k kdo" },
             ];
             return (
               <div style={{
@@ -20816,14 +20959,18 @@ function FaqPanel({ theme, onClose }) {
                 marginBottom: "10px",
               }}>
                 {[
+                  /* Druhá kopie legendy. Obě musí říkat totéž —
+                     dvě nápovědy, které se rozejdou, jsou horší
+                     než jedna. */
                   ["@jméno", "Komu zadávám (lze i víc)", "@Pavla @Petr"],
-                  ["+u, +urgent", "Vysoká priorita", ""],
-                  ["+m, +medium", "Střední priorita", ""],
-                  ["+l, +low", "Nízká priorita", ""],
+                  ["+u", "Akutní", "+u, +akutní, +urgent"],
+                  ["+m", "Důležité", "+m, +důležité"],
+                  ["+l", "Nízká", "+l, +nízká"],
                   ["#kategorie", "Kategorie / složka", "#home"],
-                  ["!datum", "Termín splnění", "!zítra, !pondělí, !15.5."],
+                  ["!termín", "Termín splnění", "!zítra, !pondělí, !15.5."],
                   ["~období", "Opakování", "~den, ~tyden, ~14d"],
                   ["*", "Připnout nahoru (na konci)", ""],
+                  ["/", "Jinam než do úkolu", "/t téma, /m co vím, /k kdo"],
                 ].flatMap((r, i) => [
                   <code key={`c-${i}`} style={codeStyle}>{r[0]}</code>,
                   <span key={`d-${i}`} style={{ color: theme.text }}>{r[1]}</span>,
@@ -31947,6 +32094,29 @@ const addComment = useCallback(async (taskId, content, checklistItemId = null) =
               else if (dest === "kdo") {
                 setObchodOsoba(extra?.person?.id || null);
                 setShowObchodSheet(true);
+              }
+              /* Téma k probrání. Michal 30. 10.: „pokud chci
+                 pravidelně přidávat poznámky k tématům u daného
+                 kontaktu, líbilo by se mi mít rychlou možnost
+                 přímo z hlavní obrazovky."
+
+                 Zapisuje se rovnou, karta člověka se neotevírá —
+                 smysl je položit telefon, napsat jednu větu
+                 a pokračovat v tom, co člověk dělal. Kdo si
+                 chce téma hned prohlédnout, otevře si ho z hlášky. */
+              else if (dest === "tema") {
+                const osoba = extra?.person;
+                const text = (body || "").trim();
+                if (!osoba?.id) return "Téma musí patřit člověku — vyber ho z nabídky.";
+                if (!text) {
+                  /* Bez textu nemá co vznikat; otevře se karta,
+                     ať se dá napsat v klidu. */
+                  setObchodOsoba(osoba.id); setShowObchodSheet(true); return null;
+                }
+                const r = await pridejTema(currentUser?.name, { personId: osoba.id, text });
+                return r?.ok
+                  ? `💬 Téma zapsáno k ${osoba.name}`
+                  : (r?.chyba || "Téma se nepodařilo uložit.");
               }
               else if (dest === "hledat") {
                 // /? otevře lupu rovnou s dotazem. Stejné hledání,
