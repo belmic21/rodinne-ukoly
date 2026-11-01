@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261030_1400";
+const FILE_VERSION = "261101_1200";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -548,7 +548,16 @@ async function resizeImage(file, maxWidth = 1200) {
   });
 }
 
-// Upload image to Supabase Storage 'task-images' bucket. Returns public URL or null on failure.
+/* ══ FOTKA K POZNÁMCE ══
+   Vrací CESTU v úložišti, ne veřejnou adresu.
+
+   Bucket task-images byl veřejný: kdo měl odkaz, viděl fotku bez
+   přihlášení — a odkaz byl jen název souboru. Vyfocená smlouva
+   nebo interiér tím ležely venku. Přílohy u úkolů to měly
+   správně od začátku, tohle byla jediná cesta ven.
+
+   Ukládá se cesta, adresa se podepisuje až při zobrazení, stejně
+   jako u příloh. Hodina platnosti, pak se podepíše znovu. */
 async function uploadTaskImage(file) {
   if (!file) return null;
   if (file.size > 5 * 1024 * 1024) {
@@ -562,8 +571,7 @@ async function uploadTaskImage(file) {
       .from("task-images")
       .upload(filename, resized, { contentType: "image/jpeg" });
     if (error) throw error;
-    const { data } = supabase.storage.from("task-images").getPublicUrl(filename);
-    return data.publicUrl;
+    return filename;
   } catch (e) {
     console.error("Upload failed:", e);
     alert("Nahrání fotky se nezdařilo.");
@@ -1930,7 +1938,7 @@ async function deleteAttachment(attachmentId) {
     }
 
     // Smaž z cache
-    _signedUrlCache.delete(row.file_path);
+    _signedUrlCache.delete(klicOdkazu(row.file_path));
 
     return { ok: true };
   } catch (err) {
@@ -2590,23 +2598,32 @@ async function loadAttachments(entityType, entityId) {
 /**
  * Získá signed URL (s cache, auto-refresh když vyprší za < 5 minut)
  */
-async function getSignedUrl(filePath) {
+/* Klíč cache podepsaných odkazů. Skládá se na jednom místě,
+   protože se musí shodovat při ukládání i při mazání — a to se
+   při přidání druhého bucketu rozešlo. */
+const klicOdkazu = (filePath, bucket = "attachments") => `${bucket}/${filePath}`;
+
+async function getSignedUrl(filePath, bucket = "attachments") {
   if (!filePath) return null;
   const now = Date.now();
-  const cached = _signedUrlCache.get(filePath);
+  /* Klíč nese i bucket. Dva soubory stejného jména ve dvou
+     koších jsou dva různé soubory a společná cache by jednomu
+     podstrčila odkaz na druhý. */
+  const klic = klicOdkazu(filePath, bucket);
+  const cached = _signedUrlCache.get(klic);
   // Pokud cache platná a expiruje za víc než 5 minut, použij
   if (cached && cached.expiresAt - now > 5 * 60 * 1000) {
     return cached.url;
   }
   try {
     const { data, error } = await supabase.storage
-      .from("attachments")
+      .from(bucket)
       .createSignedUrl(filePath, ATTACH_SIGNED_URL_TTL);
     if (error || !data?.signedUrl) {
-      console.error("[attachments] signed URL error:", error);
+      console.error(`[${bucket}] signed URL error:`, error);
       return null;
     }
-    _signedUrlCache.set(filePath, {
+    _signedUrlCache.set(klic, {
       url: data.signedUrl,
       expiresAt: now + ATTACH_SIGNED_URL_TTL * 1000,
     });
@@ -2637,7 +2654,7 @@ async function deleteAllAttachmentsForEntity(entityType, entityId) {
       console.error("[attachments] bulk DB delete error:", error);
       return { ok: false, error: error.message };
     }
-    paths.forEach(p => _signedUrlCache.delete(p));
+    paths.forEach(p => _signedUrlCache.delete(klicOdkazu(p)));
     return { ok: true, count: list.length };
   } catch (err) {
     console.error("[attachments] deleteAllAttachmentsForEntity exception:", err);
@@ -12479,6 +12496,57 @@ function TaskDetail({ task, currentUser, users, onUpdate, onStatusChange, onDele
    IMAGE LIGHTBOX — fullscreen view fotky
    ═══════════════════════════════════════════════════════ */
 
+/* ══ FOTKA V POZNÁMCE ══
+   V poznámce je uložená CESTA v úložišti, ne adresa — bucket je
+   soukromý. Adresa se podepisuje až tady a platí hodinu.
+
+   Starší poznámky mohou nést rovnou veřejnou adresu z doby, kdy
+   byl bucket otevřený. Ty se poznají podle „http" a použijí se,
+   jak jsou. Bez toho by po zasoukromění přestaly chodit. */
+function jeAdresa(x) {
+  return typeof x === "string" && /^https?:\/\//i.test(x);
+}
+
+function FotkaPoznamky({ cesta, theme, onOtevri }) {
+  const [url, setUrl] = useState(() => (jeAdresa(cesta) ? cesta : null));
+  const [selhalo, setSelhalo] = useState(false);
+
+  useEffect(() => {
+    if (!cesta || jeAdresa(cesta)) { setUrl(jeAdresa(cesta) ? cesta : null); return; }
+    let zruseno = false;
+    getSignedUrl(cesta, "task-images").then(u => {
+      if (zruseno) return;
+      if (u) setUrl(u); else setSelhalo(true);
+    });
+    return () => { zruseno = true; };
+  }, [cesta]);
+
+  if (selhalo) {
+    return (
+      <div style={{
+        fontSize: "11px", color: theme.textSub, padding: "6px 8px",
+        border: `1px dashed ${theme.cardBorder}`, borderRadius: 5,
+      }}>Fotku se nepodařilo načíst.</div>
+    );
+  }
+  if (!url) {
+    return (
+      <div style={{
+        height: 60, borderRadius: 5, background: theme.inputBg,
+        border: `1px solid ${theme.cardBorder}`,
+      }} aria-label="Načítám fotku" />
+    );
+  }
+  return (
+    <img src={url} alt="" onClick={() => onOtevri?.(url)}
+      onError={() => setSelhalo(true)}
+      style={{
+        maxWidth: "100%", maxHeight: "180px",
+        borderRadius: "5px", cursor: "pointer", objectFit: "cover",
+      }} />
+  );
+}
+
 function ImageLightbox({ url, onClose }) {
   if (!url) return null;
   return (
@@ -12700,16 +12768,8 @@ function ChecklistItemNotes({ item, currentUser, theme, onUpdateItem, defaultExp
                   <div style={{ fontSize: "12px", color: theme.text, lineHeight: 1.4 }}>{n.text}</div>
                 )}
                 {n.imageUrl && (
-                  <img
-                    src={n.imageUrl}
-                    alt=""
-                    onClick={() => setLightboxUrl(n.imageUrl)}
-                    style={{
-                      maxWidth: "100%", maxHeight: "180px",
-                      borderRadius: "5px", cursor: "pointer",
-                      objectFit: "cover",
-                    }}
-                  />
+                  <FotkaPoznamky cesta={n.imageUrl} theme={theme}
+                    onOtevri={(u) => setLightboxUrl(u)} />
                 )}
                 {/* Reactions */}
                 <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", alignItems: "center" }}>
