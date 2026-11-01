@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261101_1900";
+const FILE_VERSION = "261101_2030";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -15324,7 +15324,18 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                       : "!";
 
         // Helper button
-        const IconButton = ({ active, color, children, onClick, segmentKey, title, isOpen }) => {
+        /* ══ ZNAČKA NA TLAČÍTKU ══
+           Michal 1. 11.: „nic k zapamatování bez nápovědy."
+
+           Tahle čtyři tlačítka dělají přesně to, co značky
+           ! @ # + v textu. Dokud byly značky jen v legendě,
+           byla to druhá řeč, kterou se musí člověk naučit zvlášť.
+           Napsaná na tlačítku se naučí sama: klikáš to tak jako
+           tak a zkratka ti u toho leží před očima.
+
+           Šeptem, ne tučně — ikona je to hlavní, značka je
+           poznámka pod čarou. */
+        const IconButton = ({ active, color, children, onClick, segmentKey, title, isOpen, znacka }) => {
           // Priorita: otevřený popover = plný highlight (priorita = co user vidí).
           // Vybraná hodnota (bez open) = pohasnutý styling (jen ikona barevná, klidnější bg).
           // Žádné z toho = neutrální.
@@ -15345,8 +15356,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                 cursor: "pointer", fontFamily: FONT,
                 boxShadow: showOpen ? `0 2px 8px ${color}30` : "none",
                 transition: "all 0.15s",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
               }}>
               {children}
+              {znacka && (
+                <span aria-hidden="true" style={{
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
+                  fontSize: "11px", fontWeight: 400,
+                  color: theme.textMid, opacity: 0.75,
+                }}>{znacka}</span>
+              )}
             </button>
           </div>
           );
@@ -15372,7 +15391,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               <IconButton active={!!dueDate}
                 isOpen={openSegment === "t_date"}
                 color={theme.accent}
-                title={`Termín: ${dateLabel}`}
+                znacka="!"
+                title={`Termín: ${dateLabel} — v textu to samé napíšeš jako !zítra`}
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_date" ? null : "t_date"); }}>
                 <span>{dateIcon}</span>
               </IconButton>
@@ -15381,7 +15401,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               <IconButton active={!assigneesIsMe}
                 isOpen={openSegment === "t_who"}
                 color={theme.accent}
-                title="Komu úkol zadávám"
+                znacka="@"
+                title="Komu úkol zadávám — v textu to samé napíšeš jako @Petra"
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_who" ? null : "t_who"); }}>
                 {assigneesIsAll ? "👥" : assigneesIsMe ? "👤" : "👤"}
               </IconButton>
@@ -15390,7 +15411,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               <IconButton active={!!quickCategory}
                 isOpen={openSegment === "t_list"}
                 color={curList?.color || theme.accent}
-                title="Seznam"
+                znacka="#"
+                title="Seznam — v textu to samé napíšeš jako #home"
                 onClick={(e) => { e.stopPropagation(); setOpenSegment(openSegment === "t_list" ? null : "t_list"); }}>
                 <span>{listIcon}</span>
               </IconButton>
@@ -15398,7 +15420,8 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               {/* Priorita — přepínací */}
               <IconButton active={!!quickPriority && quickPriority !== "low"}
                 color={priColor}
-                title={`Priorita: ${quickPriority === "urgent" ? "Urgent" : quickPriority === "important" ? "Důležité" : "žádná"}`}
+                znacka="+"
+                title={`Priorita: ${quickPriority === "urgent" ? "akutní" : quickPriority === "important" ? "důležité" : "žádná"} — v textu to samé napíšeš jako +u`}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!quickPriority || quickPriority === "low") setQuickPriority("important");

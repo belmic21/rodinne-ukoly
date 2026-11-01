@@ -92,7 +92,23 @@ over("obě legendy mají prioritu jedním řádkem",
   && (app.match(/\["\+priorita", "Jak moc hoří"/g) || []).length === 1);
 over("a ani jedna nemluví o high", !/"Vysoká priorita"/.test(app));
 
-// ══ 6. TÉMA JE V NABÍDCE ══
+// ══ 6. ZNAČKA JE NAPSANÁ NA TLAČÍTKU ══
+/* Čtyři tlačítka pod polem dělají přesně to, co značky ! @ # +
+   v textu. Dokud byly značky jen v legendě, byla to druhá řeč
+   k naučení. Napsané na tlačítku se učí samy. */
+const radaTlacitek = app.slice(app.indexOf("const IconButton ="),
+                               app.indexOf("{/* Datum popover */}"));
+over("tlačítko umí nést značku",  /znacka &&/.test(app));
+for (const [znak, co] of [["!", "termín"], ["@", "osoba"], ["#", "seznam"], ["+", "priorita"]]) {
+  over(`${co} má na tlačítku ${znak}`, radaTlacitek.includes(`znacka="${znak}"`));
+}
+over("a popisek to říká slovy",
+  (app.match(/v textu to samé napíšeš jako/g) || []).length === 4);
+/* Značka je poznámka pod čarou, ne nadpis — ikona zůstává tím
+   hlavním. (Michal: nepřehánět to s tučným písmem.) */
+over("značka není tučná",         /fontSize: "11px", fontWeight: 400,/.test(app));
+
+// ══ 7. TÉMA JE V NABÍDCE ══
 over("téma je mezi lomítky",     /dest: "tema"/.test(app));
 over("Enter míří na téma",       (app.match(/dest: temaCmd \? "tema"/g) || []).length === 2);
 over("zapisuje do map_temata",   /pridejTema\(currentUser\?\.name, \{ personId/.test(app));
