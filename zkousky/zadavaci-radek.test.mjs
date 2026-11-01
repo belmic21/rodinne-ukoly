@@ -68,8 +68,8 @@ over("nabídka je vidět po kliknutí",
 /* Hledá se podmínka VYKRESLENÍ, ne jen ten výraz kdekoli —
    stejný výraz je i u šipky ▾/▸ a hrubé hledání by prošlo,
    i kdyby se nápověda zase schovala za rozklik. */
-over("zkratky jsou rovnou rozbalené",
-  /\{\(showQuickHelp \|\| \(fokus && !text\.trim\(\)\)\) && \(\(\) => \{/.test(app));
+over("zkratky jsou rovnou rozbalené (na širokém)",
+  /\{\(showQuickHelp \|\| \(!uzko && fokus && !text\.trim\(\)\)\) && \(\(\) => \{/.test(app));
 
 /* Tlačítko nápovědy stojí mimo pole. Bez tohohle kliknutí nejdřív
    sebere poli zaměření, celý blok zmizí — a nápověda se nestihne
@@ -108,7 +108,30 @@ over("a popisek to říká slovy",
    hlavním. (Michal: nepřehánět to s tučným písmem.) */
 over("značka není tučná",         /fontSize: "11px", fontWeight: 400,/.test(app));
 
-// ══ 7. TÉMA JE V NABÍDCE ══
+// ══ 7. NA TELEFONU SE TO MUSÍ VEJÍT ══
+/* Michal 1. 11. se snímkem z mobilu: „na mobilu se zobrazuje
+   takto, není vidět nic."
+
+   Nápověda otevřená natrvalo sežrala s klávesnicí celou
+   obrazovku a vytlačila pod okraj displeje i ta tlačítka, na
+   která jsem zrovna psal značky. Pořadí důležitosti na telefonu:
+   pole, pak tlačítka, teprve potom nápověda. */
+over("existuje rozlišení úzké obrazovky", /const uzko = sirka < 640;/.test(app));
+over("šipka ukazuje totéž",
+  /\(showQuickHelp \|\| \(!uzko && fokus && !text\.trim\(\)\)\) \? "▾" : "▸"/.test(app));
+
+/* Řádek možností se zalamoval na dva řádky a tím tlačítka
+   odsouval. Na úzké obrazovce je jednořádkový a odroluje se. */
+const chipy = app.slice(app.indexOf("══ CO TOHLE POLE UMÍ ══"), app.indexOf("{hlaska && ("));
+over("chipy se na úzké nezalamují",  /flexWrap: uzko \? "nowrap" : "wrap"/.test(chipy));
+over("a dají se odrolovat",          /overflowX: uzko \? "auto" : "visible"/.test(chipy));
+over("chip se nesmršťuje",           /flexShrink: 0, whiteSpace: "nowrap"/.test(chipy));
+over("na úzké odpadá i slovo navíc", /\{!uzko && <span/.test(chipy));
+
+/* Dlouhý placeholder se na telefonu ořízl uprostřed slova. */
+over("placeholder je na úzké kratší", /\? "Napiš úkol a Enter…"/.test(app));
+
+// ══ 8. TÉMA JE V NABÍDCE ══
 over("téma je mezi lomítky",     /dest: "tema"/.test(app));
 over("Enter míří na téma",       (app.match(/dest: temaCmd \? "tema"/g) || []).length === 2);
 over("zapisuje do map_temata",   /pridejTema\(currentUser\?\.name, \{ personId/.test(app));

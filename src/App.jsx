@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261101_2030";
+const FILE_VERSION = "261101_2200";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -14538,6 +14538,11 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
      musí ukázat DŘÍV, než člověk napíše lomítko — kdo musí napsat
      lomítko, aby zjistil, že lomítko existuje, to nezjistí nikdy. */
   const [fokus, setFokus] = useState(false);
+  /* Na telefonu s otevřenou klávesnicí zbývá pod polem pár
+     centimetrů. Rozdíl mezi „vejde se to" a „nevejde" rozhoduje
+     o tom, jestli je vidět to hlavní, nebo nápověda. */
+  const sirka = useWindowWidth();
+  const uzko = sirka < 640;
   const [mapaHits, setMapaHits] = useState([]);
   const [mapaBusy, setMapaBusy] = useState(false);
   const mapaName = mapaParts?.name || "";
@@ -14749,9 +14754,14 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           type="text"
           /* Dřív tu stálo „nebo / pro jinam". „Jinam" neslibuje nic
              konkrétního, takže to nikdo nezmáčkl. */
+          /* Na telefonu se dlouhý text ořízne uprostřed slova a
+             vypadá to jako chyba. Co umí lomítko, stejně říká
+             řádek s možnostmi hned pod polem. */
           placeholder={(showFull && type === "complex")
             ? "↓ Zadej název dole"
-            : "Napiš úkol a Enter — nebo / na téma, poznámku, hledání…"}
+            : uzko
+              ? "Napiš úkol a Enter…"
+              : "Napiš úkol a Enter — nebo / na téma, poznámku, hledání…"}
           value={text}
           onChange={e => {
             setText(e.target.value);
@@ -14946,10 +14956,16 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           chce všech osm, napíše lomítko. */}
       {fokus && !text.trim() && !showFull && (
         <div style={{
-          display: "flex", flexWrap: "wrap", gap: 5,
+          display: "flex", gap: 5, alignItems: "center",
+          /* Jeden řádek, co se nevejde, se odroluje. Zalamování
+             na dva řádky vytlačilo na telefonu tlačítka pod
+             okraj displeje. */
+          flexWrap: uzko ? "nowrap" : "wrap",
+          overflowX: uzko ? "auto" : "visible",
+          scrollbarWidth: "none",
           padding: "6px 10px 0", fontSize: "11px", fontFamily: FONT,
         }}>
-          <span style={{ color: theme.textMid, alignSelf: "center" }}>umí taky:</span>
+          {!uzko && <span style={{ color: theme.textMid, alignSelf: "center" }}>umí taky:</span>}
           {SLASH_CMDS.filter(c => ["tema", "mapa", "kdo", "hledat"].includes(c.dest)).map(c => (
             <button key={c.key} type="button"
               /* Bez tohohle by kliknutí nejdřív sebralo poli
@@ -14960,15 +14976,15 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
               title={c.hint}
               style={{
                 ...buttonStyle(), padding: "2px 8px", borderRadius: 11,
-                fontSize: "11px", fontFamily: FONT,
+                fontSize: "11px", fontFamily: FONT, flexShrink: 0, whiteSpace: "nowrap",
                 background: "transparent", color: theme.textSub,
                 border: `1px solid ${theme.cardBorder}`, cursor: "pointer",
               }}>
               <span aria-hidden="true">{c.icon}</span> {c.label}
             </button>
           ))}
-          <span style={{ color: theme.textMid, alignSelf: "center" }}>
-            — nebo <strong style={{ fontWeight: 700 }}>/</strong> na všechno
+          <span style={{ color: theme.textMid, alignSelf: "center", flexShrink: 0, whiteSpace: "nowrap" }}>
+            — nebo <span style={{ fontFamily: "ui-monospace, monospace" }}>/</span> na všechno
           </span>
         </div>
       )}
@@ -15048,9 +15064,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             cursor: "pointer",
             fontFamily: FONT,
           }}>
-            {(showQuickHelp || (fokus && !text.trim())) ? "▾" : "▸"} Nápověda zkratek
+            {(showQuickHelp || (!uzko && fokus && !text.trim())) ? "▾" : "▸"} Nápověda zkratek
           </button>
-          {(showQuickHelp || (fokus && !text.trim())) && (() => {
+          {(showQuickHelp || (!uzko && fokus && !text.trim())) && (() => {
             const codeStyle = {
               background: theme.inputBg,
               padding: "2px 6px",
