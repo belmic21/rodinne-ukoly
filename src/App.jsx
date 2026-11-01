@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261101_2200";
+const FILE_VERSION = "261101_2330";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -14421,9 +14421,13 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
     // recDays: parsed > inputRecurrence
     const effectiveRecDays = (useParsed && parsed.recDays) || recurrence;
 
-    // Pin: parsed.pin (= priority high + showFrom=today)
+    /* Připnutí hvězdičkou = akutní priorita a žádné odkládání.
+       Stálo tu "high", čemuž aplikace nerozumí — zná jen urgent /
+       important / low. Připnutý úkol se tedy nahoru nedostal,
+       protože neměl prioritu, která něco znamená. Táž chyba jako
+       u +u, jen na druhém místě. */
     const effectiveShowFrom = (useParsed && parsed.pin) ? null : (showFrom || null);
-    const pinnedPriority = (useParsed && parsed.pin) ? "high" : effectivePriority;
+    const pinnedPriority = (useParsed && parsed.pin) ? "urgent" : effectivePriority;
 
     return {
       id: generateId(),
@@ -15050,7 +15054,20 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
           Za druhé: u prázdného pole se zkratky ukazují rovnou,
           bez rozklikávání. Zabalené zůstanou jen ve chvíli, kdy
           se píše — tam už překážejí a člověk, co píše, je zná. */}
-      {(text.trim() || fokus) && !showFull && (
+      {/* Na telefonu nápověda není vůbec.
+          Michal 1. 11.: „ta nápověda je na mobilu příliš veliká"
+          a „opakování a připnout jsem ještě nevyužil a nevyužiji".
+
+          Sedmiřádková tabulka učila dvě věci. Zbylých pět bylo
+          opakování: ! @ # + jsou napsané na tlačítkách o dva
+          centimetry níž a / říká řádek možností nad ní. A ty dvě
+          zbývající — ~opakování a *připnout — Michal nepoužívá;
+          opakování se navíc nastavuje v kartě úkolu, kam patří.
+
+          Na širokém monitoru tabulka zůstává: je tam místo a navíc
+          ukazuje příklady (!zítra, !pondělí, !15.5.), které se do
+          tlačítka nevejdou. */}
+      {(text.trim() || fokus) && !showFull && !uzko && (
         <div style={{ padding: "0 10px", marginTop: "2px" }}>
           <button onClick={() => setShowQuickHelp(s => !s)} type="button"
             onMouseDown={(e) => e.preventDefault()}
@@ -15064,9 +15081,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             cursor: "pointer",
             fontFamily: FONT,
           }}>
-            {(showQuickHelp || (!uzko && fokus && !text.trim())) ? "▾" : "▸"} Nápověda zkratek
+            {(showQuickHelp || (fokus && !text.trim())) ? "▾" : "▸"} Nápověda zkratek
           </button>
-          {(showQuickHelp || (!uzko && fokus && !text.trim())) && (() => {
+          {(showQuickHelp || (fokus && !text.trim())) && (() => {
             const codeStyle = {
               background: theme.inputBg,
               padding: "2px 6px",

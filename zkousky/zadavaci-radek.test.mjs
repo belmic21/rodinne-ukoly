@@ -69,7 +69,7 @@ over("nabídka je vidět po kliknutí",
    stejný výraz je i u šipky ▾/▸ a hrubé hledání by prošlo,
    i kdyby se nápověda zase schovala za rozklik. */
 over("zkratky jsou rovnou rozbalené (na širokém)",
-  /\{\(showQuickHelp \|\| \(!uzko && fokus && !text\.trim\(\)\)\) && \(\(\) => \{/.test(app));
+  /\{\(showQuickHelp \|\| \(fokus && !text\.trim\(\)\)\) && \(\(\) => \{/.test(app));
 
 /* Tlačítko nápovědy stojí mimo pole. Bez tohohle kliknutí nejdřív
    sebere poli zaměření, celý blok zmizí — a nápověda se nestihne
@@ -117,8 +117,15 @@ over("značka není tučná",         /fontSize: "11px", fontWeight: 400,/.test(
    která jsem zrovna psal značky. Pořadí důležitosti na telefonu:
    pole, pak tlačítka, teprve potom nápověda. */
 over("existuje rozlišení úzké obrazovky", /const uzko = sirka < 640;/.test(app));
-over("šipka ukazuje totéž",
-  /\(showQuickHelp \|\| \(!uzko && fokus && !text\.trim\(\)\)\) \? "▾" : "▸"/.test(app));
+/* ══ Na telefonu nápověda není vůbec ══
+   Sedm řádků učilo dvě věci; zbylých pět bylo opakování toho, co
+   je na tlačítkách o dva centimetry níž. A ty dvě zbývající
+   (~opakování, *připnout) Michal nepoužívá — opakování se navíc
+   nastavuje v kartě úkolu, kam patří. */
+over("na úzké se nápověda nevykreslí",
+  /\{\(text\.trim\(\) \|\| fokus\) && !showFull && !uzko && \(/.test(app));
+over("opakování má vlastní místo v kartě úkolu",
+  /<div style=\{labelStyle\}>Opakování<\/div>/.test(app));
 
 /* Řádek možností se zalamoval na dva řádky a tím tlačítka
    odsouval. Na úzké obrazovce je jednořádkový a odroluje se. */
@@ -130,6 +137,12 @@ over("na úzké odpadá i slovo navíc", /\{!uzko && <span/.test(chipy));
 
 /* Dlouhý placeholder se na telefonu ořízl uprostřed slova. */
 over("placeholder je na úzké kratší", /\? "Napiš úkol a Enter…"/.test(app));
+
+/* Připnutí hvězdičkou nastavovalo prioritu "high", které
+   aplikace nerozumí — připnutý úkol se tedy nahoru nedostal.
+   Táž chyba jako u +u, jen na druhém místě. */
+over("připnutí dává akutní",     /parsed\.pin\) \? "urgent"/.test(app));
+over("a ne mrtvé high",          !/parsed\.pin\) \? "high"/.test(app));
 
 // ══ 8. TÉMA JE V NABÍDCE ══
 over("téma je mezi lomítky",     /dest: "tema"/.test(app));
