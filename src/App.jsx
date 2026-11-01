@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261101_1200";
+const FILE_VERSION = "261101_1600";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -4990,32 +4990,96 @@ async function apiRemoveStoryPeople(userName, date, names) {
   return apiPatchStoryDay(userName, date, { delPeople: Array.isArray(names) ? names : [names] });
 }
 
-// Nastavit / změnit hlášku dne. quote i person se ukládají SPOLU.
-// Zapisuje PŘÍMO do tabulky (ne přes RPC) — odolné vůči tomu, jaká verze
-// funkce story_patch_day je zrovna v databázi. Prázdný quote hlášku smaže.
-async function apiSetStoryQuote(userName, date, quote, person) {
-  if (!userName || !date) return { ok: false, error: "Chybí parametry" };
-  const q = (quote || "").trim();
-  const p = q ? ((person || "").trim() || null) : null; // bez textu nemá osoba smysl
+/* ══ HLÁŠKY ══
+   Michal 31. 10.: „denní omezení na 1 hlášku je hloupé
+   a zbytečné, některý den je 5 hlášek a pak nemám měsíc žádnou."
+
+   Hláška bývala dvojice sloupců na dni, a protože den je jeden
+   řádek, plynula z toho jedna hláška denně. Teď má vlastní
+   tabulku story_quotes a den jich může mít kolik chce.
+
+   Staré sloupce quote a quote_person v daily_stories zůstávají
+   jako záloha, dokud Michal neřekne, že je všechno v pořádku.
+   Aplikace z nich už nečte ani do nich nepíše. */
+
+const QUOTE_SELECT = "id, user_name, date, text, person, created_at";
+
+function quoteFromDb(r) {
+  return {
+    id: r.id,
+    date: r.date,
+    text: r.text || "",
+    person: r.person || "",
+    createdAt: r.created_at || null,
+  };
+}
+
+// Hlášky jednoho dne, od nejstarší — pořadí zápisu je pořadí dne.
+async function apiLoadDayQuotes(userName, date) {
+  if (!userName || !date) return { ok: false, quotes: [] };
   try {
     const { data, error } = await supabase
-      .from("daily_stories")
-      .upsert(
-        { user_name: userName, date, quote: q || null, quote_person: p },
-        { onConflict: "user_name,date" }
-      )
-      .select(STORY_SELECT)
-      .single();
+      .from("story_quotes").select(QUOTE_SELECT)
+      .eq("user_name", userName).eq("date", date)
+      .order("created_at", { ascending: true });
     if (error) throw error;
-
-    const story = storyFromDb(data);
-    // Pojistka: ověřit, že se text opravdu zapsal
-    if (q && (story.quote || "").trim() !== q) {
-      return { ok: false, error: "Hlášku se nepodařilo uložit.", story };
-    }
-    return { ok: true, story };
+    return { ok: true, quotes: (data || []).map(quoteFromDb) };
   } catch (e) {
-    logServerError("apiSetStoryQuote", e, { userName, date });
+    logServerError("apiLoadDayQuotes", e, { userName, date });
+    return { ok: false, quotes: [], error: e.message };
+  }
+}
+
+async function apiAddQuote(userName, date, text, person) {
+  const t = (text || "").trim();
+  if (!userName || !date) return { ok: false, error: "Chybí parametry" };
+  if (!t) return { ok: false, error: "Hláška nemá text." };
+  try {
+    const { data, error } = await supabase
+      .from("story_quotes")
+      .insert({ user_name: userName, date, text: t, person: (person || "").trim() || null })
+      .select(QUOTE_SELECT).single();
+    if (error) throw error;
+    return { ok: true, quote: quoteFromDb(data) };
+  } catch (e) {
+    logServerError("apiAddQuote", e, { userName, date });
+    return { ok: false, error: e.message };
+  }
+}
+
+/* Úprava podle id, ne podle data. Dokud byla hláška vlastností
+   dne, stačilo datum; teď jich den může mít pět a datum by
+   neřeklo kterou. */
+async function apiUpdateQuote(id, { text, person, date } = {}) {
+  if (!id) return { ok: false, error: "Chybí hláška" };
+  const telo = { updated_at: new Date().toISOString() };
+  if (text !== undefined) {
+    const t = (text || "").trim();
+    if (!t) return { ok: false, error: "Hláška nemá text." };
+    telo.text = t;
+  }
+  if (person !== undefined) telo.person = (person || "").trim() || null;
+  if (date !== undefined && date) telo.date = date;
+  try {
+    const { data, error } = await supabase
+      .from("story_quotes").update(telo).eq("id", id)
+      .select(QUOTE_SELECT).single();
+    if (error) throw error;
+    return { ok: true, quote: quoteFromDb(data) };
+  } catch (e) {
+    logServerError("apiUpdateQuote", e, { id });
+    return { ok: false, error: e.message };
+  }
+}
+
+async function apiDeleteQuote(id) {
+  if (!id) return { ok: false, error: "Chybí hláška" };
+  try {
+    const { error } = await supabase.from("story_quotes").delete().eq("id", id);
+    if (error) throw error;
+    return { ok: true };
+  } catch (e) {
+    logServerError("apiDeleteQuote", e, { id });
     return { ok: false, error: e.message };
   }
 }
@@ -5099,16 +5163,16 @@ async function apiLoadStoriesInRange(userName, fromDate, toDate) {
 /* ── Hlášky ──────────────────────────────────────────── */
 
 // Poskládá hlášky do čitelného textu pro schránku / sdílení.
-// stories = pole {quote, quotePerson, date}
-function formatQuotesForShare(stories, { person = null } = {}) {
+// quotes = pole {text, person, date} ze story_quotes
+function formatQuotesForShare(quotes, { person = null } = {}) {
   const title = person ? `💬 Hlášky — ${person}` : "💬 Hlášky";
-  const blocks = (stories || [])
-    .filter(s => s.quote)
-    .map(s => {
-      const lines = [`„${s.quote}"`];
+  const blocks = (quotes || [])
+    .filter(q => q.text)
+    .map(q => {
+      const lines = [`„${q.text}"`];
       const meta = [];
-      if (!person && s.quotePerson) meta.push(s.quotePerson);
-      meta.push(formatStoryDateHuman(s.date));
+      if (!person && q.person) meta.push(q.person);
+      meta.push(formatStoryDateHuman(q.date));
       lines.push(`   ${meta.join(" · ")}`);
       return lines.join("\n");
     });
@@ -5162,22 +5226,22 @@ async function shareText(text, title) {
 
 
 
-// Dny, které mají hlášku. Volitelně jen od jedné osoby.
-async function apiLoadQuotes(userName, { person = null, limit = 200 } = {}) {
+// Všechny hlášky, od nejnovějších. Volitelně jen od jedné osoby.
+// Dřív to vracelo DNY, které hlášku mají — teď vrací hlášky, protože
+// den jich může mít víc a „den s hláškou" přestal být jednotka.
+async function apiLoadQuotes(userName, { person = null, limit = 500 } = {}) {
   if (!userName) return { ok: false, quotes: [] };
   try {
     let q = supabase
-      .from("daily_stories")
-      .select(STORY_SELECT)
+      .from("story_quotes").select(QUOTE_SELECT)
       .eq("user_name", userName)
-      .not("quote", "is", null)
       .order("date", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(limit);
-    if (person) q = q.eq("quote_person", person);
-
+    if (person) q = q.eq("person", person);
     const { data, error } = await q;
     if (error) throw error;
-    return { ok: true, quotes: (data || []).map(storyFromDb) };
+    return { ok: true, quotes: (data || []).map(quoteFromDb) };
   } catch (e) {
     logServerError("apiLoadQuotes", e, { userName, person });
     return { ok: false, quotes: [], error: e.message };
@@ -5191,7 +5255,7 @@ async function apiRenameQuotePerson(userName, fromName, toName) {
   if (!userName || !fromName || !to) return { ok: false, error: "Chybí jméno" };
   if (fromName === to) return { ok: true, count: 0 };
   try {
-    const { data, error } = await supabase.rpc("story_rename_quote_person", {
+    const { data, error } = await supabase.rpc("story_quotes_rename_person", {
       p_user_name: userName, p_from: fromName, p_to: to,
     });
     if (error) throw error;
@@ -5206,7 +5270,7 @@ async function apiRenameQuotePerson(userName, fromName, toName) {
 async function apiQuotePeople(userName) {
   if (!userName) return { ok: false, people: [] };
   try {
-    const { data, error } = await supabase.rpc("story_quote_people", { p_user_name: userName });
+    const { data, error } = await supabase.rpc("story_quote_people2", { p_user_name: userName });
     if (error) throw error;
     return { ok: true, people: (data || []).map(r => ({ name: r.person, count: Number(r.cnt) })) };
   } catch (e) {
@@ -5280,25 +5344,32 @@ async function apiLoadMilestones(userName, { limit = 200 } = {}) {
 async function apiRecentStoryPeople(userName, { days = 60, max = 20 } = {}) {
   if (!userName) return { ok: false, people: [] };
   try {
-    // Jeden zdroj jmen pro celý deník: osoby dne (people) I autoři hlášek
-    // (quote_person). Díky tomu se jméno zadané u hlášky nabízí i u zápisku
-    // a naopak.
-    const { data, error } = await supabase
-      .from("daily_stories")
-      .select("people, quote_person, date")
-      .eq("user_name", userName)
-      .order("date", { ascending: false })
-      .limit(days);
-    if (error) throw error;
+    /* Jeden zdroj jmen pro celý deník: osoby dne i autoři hlášek.
+       Díky tomu se jméno zadané u hlášky nabízí i u zápisku
+       a naopak. Hlášky jsou od 261101 ve vlastní tabulce, takže
+       se čtou zvlášť — jinak by se nové jméno z hlášky přestalo
+       nabízet. */
+    const [dny, hlasky] = await Promise.all([
+      supabase.from("daily_stories")
+        .select("people, date").eq("user_name", userName)
+        .order("date", { ascending: false }).limit(days),
+      supabase.from("story_quotes")
+        .select("person, date").eq("user_name", userName)
+        .not("person", "is", null)
+        .order("date", { ascending: false }).limit(days * 3),
+    ]);
+    if (dny.error) throw dny.error;
 
     const counts = new Map();
-    for (const row of data || []) {
+    for (const row of dny.data || []) {
       for (const p of row.people || []) {
         if (p) counts.set(p, (counts.get(p) || 0) + 1);
       }
-      if (row.quote_person) {
-        counts.set(row.quote_person, (counts.get(row.quote_person) || 0) + 1);
-      }
+    }
+    /* Když tabulka hlášek ještě není (migrace neproběhla),
+       nabídka jmen se jen zúží. Padat kvůli tomu nemá. */
+    for (const row of hlasky.data || []) {
+      if (row.person) counts.set(row.person, (counts.get(row.person) || 0) + 1);
     }
     const people = [...counts.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "cs"))
@@ -24485,9 +24556,14 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
   const [moving, setMoving] = useState(false);
 
   // Hláška dne — draft, ukládá se tlačítkem (ne při každém písmenu)
+  /* Den může mít hlášek kolik chce, takže se drží seznam.
+     quoteText/quotePerson jsou políčka pro NOVOU hlášku, ne
+     obraz té uložené. */
+  const [dayQuotes, setDayQuotes] = useState([]);
   const [quoteText, setQuoteText] = useState("");
   const [quotePerson, setQuotePerson] = useState("");
   const [quoteSaving, setQuoteSaving] = useState(false);
+  const [quoteBusyId, setQuoteBusyId] = useState(null);
 
   useEscapeKey(onClose);
 
@@ -24495,16 +24571,18 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
     let alive = true;
     (async () => {
       setLoading(true);
-      const [s, t, p, n] = await Promise.all([
+      const [s, t, p, n, q] = await Promise.all([
         apiLoadStory(currentUser?.name, date),
         apiCompletedTasksForStoryDay(currentUser?.name, date),
         apiAdjacentStoryDate(currentUser?.name, date, -1),
         apiAdjacentStoryDate(currentUser?.name, date, 1),
+        apiLoadDayQuotes(currentUser?.name, date),
       ]);
       if (!alive) return;
       setStory(s.story);
-      setQuoteText(s.story?.quote || "");
-      setQuotePerson(s.story?.quotePerson || "");
+      setDayQuotes(q.quotes || []);
+      setQuoteText("");
+      setQuotePerson("");
       setDoneTasks(t.tasks || []);
       setPrevDate(p.date);
       setNextDate(n.date);
@@ -24560,17 +24638,33 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
     if (res.ok) { onDeleted?.(); onClose(); }
   };
 
+  /* Přidává, nepřepisuje. Tohle byl celý ten strop: dřív se
+     hláška ukládala na den, takže druhá přepsala první a muselo
+     se na to ptát oknem „Nová ji přepíše". */
   const saveQuote = async () => {
-    if (quoteSaving) return;
+    if (quoteSaving || !quoteText.trim()) return;
     setQuoteSaving(true);
-    const res = await apiSetStoryQuote(currentUser?.name, date, quoteText, quotePerson);
+    const res = await apiAddQuote(currentUser?.name, date, quoteText, quotePerson);
     setQuoteSaving(false);
-    if (res.ok) apply(res.story);
+    if (!res.ok) return;
+    setDayQuotes(prev => [...prev, res.quote]);
+    setQuoteText("");
+    setQuotePerson("");
+    onChanged?.();
   };
 
-  const quoteDirty =
-    (quoteText || "") !== (story?.quote || "") ||
-    (quotePerson || "") !== (story?.quotePerson || "");
+  const smazHlasku = async (id) => {
+    if (quoteBusyId) return;
+    setQuoteBusyId(id);
+    const res = await apiDeleteQuote(id);
+    setQuoteBusyId(null);
+    if (res.ok) {
+      setDayQuotes(prev => prev.filter(x => x.id !== id));
+      onChanged?.();
+    }
+  };
+
+  const quoteDirty = !!quoteText.trim();
 
   const doMove = async () => {
     if (!moveTo || moveTo === date || moving) return;
@@ -24673,27 +24767,30 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
           ) : mode === "view" ? (
             /* ═══════ PROHLÍŽENÍ — jen text, žádné ovládací prvky ═══════ */
             <>
-              {story?.quote && (
-                <div style={{
+              {/* Všechny hlášky dne pod sebou, v pořadí, v jakém
+                  přibyly. Dřív tu byla jedna, protože víc jich
+                  den mít nemohl. */}
+              {dayQuotes.map(q => (
+                <div key={q.id} style={{
                   background: `${theme.purple}10`,
                   border: `1px solid ${theme.purple}35`,
                   borderLeft: `3px solid ${theme.purple}`,
-                  borderRadius: 10, padding: "10px 12px",
+                  borderRadius: 10, padding: "10px 12px", marginBottom: 6,
                 }}>
                   <div style={{
                     fontSize: 14, color: theme.text, lineHeight: 1.55,
                     fontStyle: "italic", wordBreak: "break-word",
-                  }}>💬 „{story.quote}"</div>
-                  {story.quotePerson && (
+                  }}>💬 „{q.text}"</div>
+                  {q.person && (
                     <div style={{
                       fontSize: 12, color: theme.purple, fontWeight: 700,
                       marginTop: 4, textAlign: "right",
-                    }}>— {story.quotePerson}</div>
+                    }}>— {q.person}</div>
                   )}
                 </div>
-              )}
+              ))}
 
-              {entriesRead.length === 0 && !story?.quote ? (
+              {entriesRead.length === 0 && dayQuotes.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "30px 20px", color: theme.textSub, fontSize: 13 }}>
                   Na tenhle den zatím nic nemáš.
                   <div style={{ marginTop: 10 }}>
@@ -24937,11 +25034,40 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                 <div style={{
                   fontSize: 10, fontWeight: 700, color: theme.purple,
                   textTransform: "uppercase", letterSpacing: "0.5px",
-                }}>💬 Hláška dne</div>
+                }}>💬 {dayQuotes.length ? `Hlášky (${dayQuotes.length})` : "Hláška"}</div>
+
+                {/* Co už tenhle den má. Každá se dá smazat zvlášť —
+                    dokud byla jedna, stačilo přepsat políčko. */}
+                {dayQuotes.map(q => (
+                  <div key={q.id} style={{
+                    display: "flex", alignItems: "flex-start", gap: 8,
+                    background: theme.card, border: `1px solid ${theme.cardBorder}`,
+                    borderRadius: 8, padding: "7px 9px",
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 12.5, color: theme.text, fontStyle: "italic",
+                        lineHeight: 1.5, wordBreak: "break-word",
+                      }}>„{q.text}"</div>
+                      {q.person && (
+                        <div style={{ fontSize: 11, color: theme.purple, fontWeight: 700, marginTop: 2 }}>
+                          — {q.person}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={() => smazHlasku(q.id)} disabled={quoteBusyId === q.id}
+                      title="Smazat tuhle hlášku" aria-label="Smazat hlášku"
+                      style={{
+                        ...buttonStyle(), flexShrink: 0, background: "none", border: "none",
+                        color: theme.textSub, fontSize: 13, padding: "2px 4px",
+                      }}>{quoteBusyId === q.id ? "…" : "×"}</button>
+                  </div>
+                ))}
+
                 <textarea
                   value={quoteText}
                   onChange={e => setQuoteText(e.target.value)}
-                  placeholder="Co dnes někdo pronesl…"
+                  placeholder={dayQuotes.length ? "A co ještě…" : "Co dnes někdo pronesl…"}
                   rows={2}
                   style={{ ...inputStyle(theme), resize: "vertical", minHeight: 44, lineHeight: 1.5 }}
                 />
@@ -24954,7 +25080,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                 {quoteDirty && (
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
                     <button
-                      onClick={() => { setQuoteText(story?.quote || ""); setQuotePerson(story?.quotePerson || ""); }}
+                      onClick={() => { setQuoteText(""); setQuotePerson(""); }}
                       style={{
                         ...buttonStyle(), padding: "6px 12px", fontSize: 12,
                         background: theme.card, color: theme.textSub,
@@ -24968,7 +25094,7 @@ function StoryDayEditor({ date, currentUser, theme, categories, peopleSuggestion
                         ...buttonStyle(), padding: "6px 14px", fontSize: 12,
                         background: theme.purple, color: "#fff",
                       }}
-                    >{quoteSaving ? "Ukládám…" : (story?.quote ? "Uložit hlášku" : "Přidat hlášku")}</button>
+                    >{quoteSaving ? "Ukládám…" : "Přidat hlášku"}</button>
                   </div>
                 )}
               </div>
@@ -25044,7 +25170,11 @@ function StoryDayCard({ s, catByKey, theme, onOpen }) {
           <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 5 }}>
             {s.milestone && <span>⭐</span>}
             {formatStoryDateShort(s.date)}
-            {s.quote && <span title="Má hlášku dne">💬</span>}
+            {/* Odznáček „den má hlášku" se bral ze starého sloupce,
+                který se od 261101 už neplní — u nových hlášek by
+                tiše chyběl. Dny s hláškou se poznají v prohlížeči
+                hlášek; tady by to znamenalo dotaz navíc na každý
+                řádek seznamu. */}
           </div>
           <div style={{ fontSize: 10, color: theme.textSub, flexShrink: 0 }}>
             {s.entries.length}×
@@ -25097,7 +25227,6 @@ function StoryQuickQuote({ open, currentUser, theme, peopleSuggestions, onClose,
   const [showDetails, setShowDetails] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [confirmOverwrite, setConfirmOverwrite] = useState(null); // {existing}
   const inputRef = useRef(null);
 
   useEscapeKey(onClose, open);
@@ -25105,7 +25234,7 @@ function StoryQuickQuote({ open, currentUser, theme, peopleSuggestions, onClose,
   useEffect(() => {
     if (!open) return;
     setText(""); setPerson(""); setDate(todayStoryDate());
-    setShowDetails(false); setError(""); setConfirmOverwrite(null);
+    setShowDetails(false); setError("");
     const t = setTimeout(() => inputRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [open]);
@@ -25115,24 +25244,19 @@ function StoryQuickQuote({ open, currentUser, theme, peopleSuggestions, onClose,
     if (!clean || saving) return;
     setSaving(true);
     setError("");
-    const res = await apiSetStoryQuote(currentUser?.name, date, clean, person);
+    const res = await apiAddQuote(currentUser?.name, date, clean, person);
     setSaving(false);
     if (!res.ok) { setError(res.error || "Uložení selhalo"); return; }
-    onSaved?.(res.story);
+    onSaved?.(res.quote);
     onClose();
   };
 
-  const trySave = async () => {
-    const clean = text.trim();
-    if (!clean || saving) return;
-    // Nejdřív zjistit, jestli cílový den hlášku už má
-    const existing = await apiLoadStory(currentUser?.name, date);
-    if (existing.ok && existing.story?.quote) {
-      setConfirmOverwrite({ quote: existing.story.quote, person: existing.story.quotePerson });
-      return;
-    }
-    doSave();
-  };
+  /* Dřív se tu nejdřív koukalo, jestli den hlášku už má, a když
+     ano, vyskočilo okno „Nová ji přepíše. Na den připadá jedna
+     hláška." Michal 31. 10.: „některý den je 5 hlášek a pak
+     nemám měsíc žádnou." Hlášky mají vlastní tabulku, takže se
+     prostě přidá další. */
+  const trySave = doSave;
 
   if (!open) return null;
 
@@ -25169,34 +25293,7 @@ function StoryQuickQuote({ open, currentUser, theme, peopleSuggestions, onClose,
         </div>
 
         <div style={{ padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          {confirmOverwrite ? (
-            <>
-              <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>
-                {formatStoryDateLong(date)} už hlášku má:
-              </div>
-              <div style={{
-                fontSize: 12, fontStyle: "italic", color: theme.textSub,
-                background: theme.inputBg, border: `1px solid ${theme.inputBorder}`,
-                borderRadius: 8, padding: "7px 10px",
-              }}>
-                „{confirmOverwrite.quote}"{confirmOverwrite.person ? ` — ${confirmOverwrite.person}` : ""}
-              </div>
-              <div style={{ fontSize: 12, color: theme.textSub }}>
-                Nová ji přepíše. Na den připadá jedna hláška.
-              </div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button onClick={() => setConfirmOverwrite(null)} style={{
-                  ...buttonStyle(), padding: "8px 14px", fontSize: 13,
-                  background: theme.inputBg, color: theme.text,
-                  border: `1px solid ${theme.inputBorder}`,
-                }}>Zpět</button>
-                <button onClick={doSave} disabled={saving} style={{
-                  ...buttonStyle(), padding: "8px 14px", fontSize: 13,
-                  background: theme.red, color: "#fff",
-                }}>{saving ? "Ukládám…" : "Přepsat"}</button>
-              </div>
-            </>
-          ) : (
+          {(
             <>
               <textarea
                 ref={inputRef}
@@ -25403,11 +25500,14 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
   const [quotePersonQuery, setQuotePersonQuery] = useState(""); // hledání osoby ve filtru
   const [quotePersonOpen, setQuotePersonOpen] = useState(false); // rozbalený výběr osoby
   const [quoteTextQuery, setQuoteTextQuery] = useState("");      // hledání v textu hlášek
-  const [editingQuote, setEditingQuote] = useState(null);       // date rozeditované hlášky
+  /* Klíčem je id hlášky, ne datum. Dokud byla jedna na den,
+     datum stačilo; teď jich den může mít pět a datum by neřeklo
+     kterou upravuješ. */
+  const [editingQuote, setEditingQuote] = useState(null);
   const [eqText, setEqText] = useState("");
   const [eqPerson, setEqPerson] = useState("");
   const [eqBusy, setEqBusy] = useState(false);
-  const [confirmDeleteQuote, setConfirmDeleteQuote] = useState(null); // date
+  const [confirmDeleteQuote, setConfirmDeleteQuote] = useState(null);
 
   // Hledání
   const [qText, setQText] = useState("");
@@ -25564,7 +25664,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     if (!q) return quotes;
     return quotes.filter(s => {
       const hay = storyStripDiacritics(
-        ((s.quote || "") + " " + (s.quotePerson || "")).toLowerCase()
+        ((s.text || "") + " " + (s.person || "")).toLowerCase()
       );
       return hay.includes(q);
     });
@@ -25597,18 +25697,18 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     }
   };
 
-  const startEditQuote = (s) => {
-    setEditingQuote(s.date);
-    setEqText(s.quote || "");
-    setEqPerson(s.quotePerson || "");
+  const startEditQuote = (q) => {
+    setEditingQuote(q.id);
+    setEqText(q.text || "");
+    setEqPerson(q.person || "");
     setConfirmDeleteQuote(null);
   };
 
-  const saveEditQuote = async (dateStr) => {
+  const saveEditQuote = async (id) => {
     const t = eqText.trim();
     if (!t || eqBusy) return;
     setEqBusy(true);
-    const res = await apiSetStoryQuote(currentUser?.name, dateStr, t, eqPerson);
+    const res = await apiUpdateQuote(id, { text: t, person: eqPerson });
     setEqBusy(false);
     if (!res.ok) {
       setCopyToast(res.error || "Uložení selhalo");
@@ -25619,10 +25719,10 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
     reloadQuotesLocal();
   };
 
-  const deleteQuote = async (dateStr) => {
+  const deleteQuote = async (id) => {
     setEqBusy(true);
-    // smazat jen hlášku, den zůstane; apiSetStoryQuote s prázdným = clearQuote
-    const res = await apiSetStoryQuote(currentUser?.name, dateStr, "", "");
+    // Mizí jen hláška. Den si žije dál.
+    const res = await apiDeleteQuote(id);
     setEqBusy(false);
     setConfirmDeleteQuote(null);
     if (res.ok) reloadQuotesLocal();
@@ -26015,9 +26115,9 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                ) :
                visibleQuotes.length === 0 ? emptyBox(`Nic neodpovídá „${quoteTextQuery}".`) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {visibleQuotes.map((s, i) => (
+                  {visibleQuotes.map((q, i) => (
                     <div
-                      key={s.date}
+                      key={q.id}
                       style={{
                         background: `${theme.purple}0c`,
                         border: `1px solid ${theme.purple}30`,
@@ -26025,7 +26125,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                         borderRadius: 10, padding: "9px 11px",
                       }}
                     >
-                      {editingQuote === s.date ? (
+                      {editingQuote === q.id ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <textarea
                             value={eqText}
@@ -26046,13 +26146,13 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                               background: theme.card, color: theme.textSub,
                               border: `1px solid ${theme.inputBorder}`,
                             }}>Zrušit</button>
-                            <button onClick={() => saveEditQuote(s.date)} disabled={eqBusy || !eqText.trim()} style={{
+                            <button onClick={() => saveEditQuote(q.id)} disabled={eqBusy || !eqText.trim()} style={{
                               ...buttonStyle(), padding: "5px 12px", fontSize: 12,
                               background: theme.purple, color: "#fff",
                             }}>{eqBusy ? "…" : "Uložit"}</button>
                           </div>
                         </div>
-                      ) : confirmDeleteQuote === s.date ? (
+                      ) : confirmDeleteQuote === q.id ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ flex: 1, fontSize: 12, color: theme.red }}>Smazat tuhle hlášku?</span>
                           <button onClick={() => setConfirmDeleteQuote(null)} style={{
@@ -26060,7 +26160,7 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                             background: theme.card, color: theme.text,
                             border: `1px solid ${theme.inputBorder}`,
                           }}>Zrušit</button>
-                          <button onClick={() => deleteQuote(s.date)} disabled={eqBusy} style={{
+                          <button onClick={() => deleteQuote(q.id)} disabled={eqBusy} style={{
                             ...buttonStyle(), padding: "4px 10px", fontSize: 11,
                             background: theme.red, color: "#fff",
                           }}>Smazat</button>
@@ -26071,31 +26171,31 @@ function StorySheet({ currentUser, theme, categories, peopleSuggestions, onClose
                             onClick={() => setReaderIndex(i)}
                             title="Otevřít čtečku"
                             style={{
-                              fontSize: 13, color: s.quote ? theme.text : theme.textDim, lineHeight: 1.5,
+                              fontSize: 13, color: q.text ? theme.text : theme.textDim, lineHeight: 1.5,
                               fontStyle: "italic", wordBreak: "break-word", cursor: "pointer",
                               minHeight: 18,
                             }}
-                          >💬 {s.quote ? `„${s.quote}"` : "(prázdná — klikni na ✎ a doplň)"}</div>
+                          >💬 {q.text ? `„${q.text}"` : "(prázdná — klikni na ✎ a doplň)"}</div>
                           <div style={{
                             display: "flex", alignItems: "center", justifyContent: "space-between",
                             gap: 8, marginTop: 4,
                           }}>
-                            {s.quotePerson
-                              ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {s.quotePerson}</span>
+                            {q.person
+                              ? <span style={{ fontSize: 12, color: theme.purple, fontWeight: 700 }}>— {q.person}</span>
                               : <span style={{ fontSize: 11, color: theme.textDim }}>(bez autora)</span>}
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <button onClick={() => startEditQuote(s)} title="Upravit hlášku" aria-label="Upravit hlášku" style={{
+                              <button onClick={() => startEditQuote(q)} title="Upravit hlášku" aria-label="Upravit hlášku" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 12, color: theme.textSub, padding: "2px 4px",
                               }}>✎</button>
-                              <button onClick={() => setConfirmDeleteQuote(s.date)} title="Smazat hlášku" aria-label="Smazat hlášku" style={{
+                              <button onClick={() => setConfirmDeleteQuote(q.id)} title="Smazat hlášku" aria-label="Smazat hlášku" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 12, color: theme.textSub, padding: "2px 4px",
                               }}>🗑</button>
-                              <button onClick={() => onOpenDay(s.date)} title="Otevřít den" aria-label="Otevřít den" style={{
+                              <button onClick={() => onOpenDay(q.date)} title="Otevřít den" aria-label="Otevřít den" style={{
                                 background: "none", border: "none", cursor: "pointer",
                                 fontSize: 10, color: theme.textSub, padding: "2px 4px",
-                              }}>{formatStoryDateShort(s.date)} →</button>
+                              }}>{formatStoryDateShort(q.date)} →</button>
                             </div>
                           </div>
                         </>
