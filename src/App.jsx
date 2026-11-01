@@ -106,7 +106,7 @@ const APP_VERSION = getAppVersion();
 // provedl build — ten se nikdy nebude shodovat s názvem souboru. Tohle číslo
 // odpovídá názvu dodaného souboru (App_RRMMDD_HHMM.jsx), takže se dá na první
 // pohled ověřit, že běží opravdu ta verze, kterou jsi nahrál.
-const FILE_VERSION = "261101_1600";
+const FILE_VERSION = "261101_1900";
 
 const PRIORITIES = [
   { id: "urgent",    label: "Akutní",      sym: "‼",  weight: 0 },
@@ -15018,13 +15018,27 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
         </div>
       )}
 
-      {/* Nápověda pro quick-add syntax — toggle pod inputem.
-          Ukazuje se i při prázdném poli, jakmile do něj klikneš:
-          osm značek za jedním kliknutím, které nic nenaznačuje,
-          je totéž jako je nemít. */}
+      {/* ══ ZKRATKY ══
+          Michal 1. 11.: „u okna zadání je text nápověda zkratek,
+          ale když na něj kliknu, zavře se a nic se nezobrazí.
+          Asi bych raději přímo viděl dané zkratky při kliknutí
+          do pole."
+
+          Dvě věci najednou. Za prvé chyba, kterou jsem předtím
+          udělal: tlačítko stojí mimo pole, takže kliknutí nejdřív
+          sebralo poli zaměření — a protože se celý blok ukazoval
+          jen při zaměřeném poli, zmizel dřív, než stačil nápovědu
+          otevřít. Chipy nad tím mají onMouseDown preventDefault,
+          tohle tlačítko ne. Teď má.
+
+          Za druhé: u prázdného pole se zkratky ukazují rovnou,
+          bez rozklikávání. Zabalené zůstanou jen ve chvíli, kdy
+          se píše — tam už překážejí a člověk, co píše, je zná. */}
       {(text.trim() || fokus) && !showFull && (
         <div style={{ padding: "0 10px", marginTop: "2px" }}>
-          <button onClick={() => setShowQuickHelp(s => !s)} type="button" style={{
+          <button onClick={() => setShowQuickHelp(s => !s)} type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            style={{
             ...buttonStyle(),
             background: "transparent",
             border: "none",
@@ -15034,9 +15048,9 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
             cursor: "pointer",
             fontFamily: FONT,
           }}>
-            {showQuickHelp ? "▾" : "▸"} Nápověda zkratek
+            {(showQuickHelp || (fokus && !text.trim())) ? "▾" : "▸"} Nápověda zkratek
           </button>
-          {showQuickHelp && (() => {
+          {(showQuickHelp || (fokus && !text.trim())) && (() => {
             const codeStyle = {
               background: theme.inputBg,
               padding: "2px 6px",
@@ -15053,9 +15067,10 @@ function QuickAddBar({ currentUser, users, onAdd, theme, categoryFilter, onCateg
                  při zadávání termín a při hledání prioritu, musel
                  si člověk pamatovat, ve kterém poli zrovna je. */
               { code: "@jméno", desc: "Komu zadávám", example: "@Pavla" },
-              { code: "+u", desc: "Akutní", example: "+u, +akutní, +urgent" },
-              { code: "+m", desc: "Důležité", example: "+m, +důležité" },
-              { code: "+l", desc: "Nízká", example: "+l, +nízká" },
+              /* Priorita měla tři řádky, ale je to jedna značka.
+                 Když je nápověda otevřená pořád, každý řádek
+                 navíc odsouvá to ostatní z obrazovky. */
+              { code: "+priorita", desc: "Jak moc hoří", example: "+u akutní, +m důležité, +l nízká" },
               { code: "#kategorie", desc: "Kategorie / složka", example: "#home, #auto" },
               { code: "!termín", desc: "Termín", example: "!zítra, !pondělí, !15.5." },
               { code: "~období", desc: "Opakování", example: "~den, ~tyden, ~mesic, ~14d" },
@@ -21094,9 +21109,7 @@ function FaqPanel({ theme, onClose }) {
                      dvě nápovědy, které se rozejdou, jsou horší
                      než jedna. */
                   ["@jméno", "Komu zadávám (lze i víc)", "@Pavla @Petr"],
-                  ["+u", "Akutní", "+u, +akutní, +urgent"],
-                  ["+m", "Důležité", "+m, +důležité"],
-                  ["+l", "Nízká", "+l, +nízká"],
+                  ["+priorita", "Jak moc hoří", "+u akutní, +m důležité, +l nízká"],
                   ["#kategorie", "Kategorie / složka", "#home"],
                   ["!termín", "Termín splnění", "!zítra, !pondělí, !15.5."],
                   ["~období", "Opakování", "~den, ~tyden, ~14d"],
